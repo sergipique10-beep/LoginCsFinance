@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv venv)",
+      "Bash(venv/Scripts/pip install *)",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(curl -s http://localhost:8000/auth/steam)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //F //PID 15628 //PID 22592)",
+      "Bash(venv/Scripts/python.exe -m uvicorn main:app --reload --port 8000)",
+      "Bash(curl -s http://localhost:8000/openapi.json)",
+      "Bash(awk '{print $5}')",
+      "Bash(xargs -I{} taskkill //F //PID {})",
+      "Bash(venv/Scripts/python.exe -m uvicorn main:app --port 8000)",
+      "Bash(taskkill //F //PID 5596 //PID 15628 //PID 23716 //PID 22592)"
+    ]
+  }
+}
