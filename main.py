@@ -1,22 +1,22 @@
 import re
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
 
 import httpx
+import jwt
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from settings import BASE_URL, STEAM_API_KEY
+from settings import BASE_URL, FRONTEND_URL, JWT_SECRET
 
 app = FastAPI(title="Steam Login")
+
+STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
 
 
 @app.get("/")
 def root():
     return {"message": "Server running. Go to /auth/steam to login with Steam."}
-
-
-STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
-STEAM_API_URL = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/"
 
 
 @app.get("/auth/steam", summary="Redirect to Steam login")
@@ -36,7 +36,6 @@ def steam_login():
 async def steam_callback(request: Request):
     query_params = dict(request.query_params)
 
-    # Ask Steam to validate the response
     validation_params = {**query_params, "openid.mode": "check_authentication"}
     async with httpx.AsyncClient() as client:
         validation = await client.post(STEAM_OPENID_URL, data=validation_params)
@@ -44,7 +43,6 @@ async def steam_callback(request: Request):
     if "is_valid:true" not in validation.text:
         raise HTTPException(status_code=401, detail="Steam authentication failed")
 
-    # Extract 64-bit Steam ID from claimed_id
     claimed_id = query_params.get("openid.claimed_id", "")
     match = re.search(r"/openid/id/(\d+)$", claimed_id)
     if not match:
@@ -52,18 +50,16 @@ async def steam_callback(request: Request):
 
     steam_id = match.group(1)
 
-    # Optionally fetch the public profile if an API key is set
-    profile = {}
-    if STEAM_API_KEY:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                STEAM_API_URL,
-                params={"key": STEAM_API_KEY, "steamids": steam_id},
-            )
-        players = resp.json().get("response", {}).get("players", [])
-        profile = players[0] if players else {}
+    token = jwt.encode(
+        {
+            "steam_id": steam_id,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=24),
+        },
+        JWT_SECRET,
+        algorithm="HS256",
+    )
 
-    return {"steam_id": steam_id, "profile": profile}
+    return RedirectResponse(url=f"{FRONTEND_URL}/auth/callback?token={token}")
 
 
 if __name__ == "__main__":
