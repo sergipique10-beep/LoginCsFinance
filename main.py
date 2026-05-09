@@ -15,11 +15,12 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from settings import BASE_URL, FRONTEND_URL, JWT_SECRET, ALLOWED_REDIRECT_ORIGINS, STEAM_API_KEY
+from settings import BASE_URL, FRONTEND_URL, JWT_SECRET, ALLOWED_REDIRECT_ORIGINS, STEAM_API_KEY, STEAM_GAME
 
 logger = logging.getLogger("uvicorn.error")
 
 STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
+STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
 
 NONCE_TTL = 300              # segundos que un nonce permanece válido
 CODE_TTL = 30                # segundos que un auth code de un solo uso permanece válido
@@ -531,8 +532,7 @@ async def get_inventory(
         raise HTTPException(status_code=400, detail="Invalid Steam ID format")
 
     url = (
-        f"https://steamcommunity.com/inventory/{steam_id}"
-        f"/{CS2_APP_ID}/{CS2_CONTEXT_ID}"
+        f"{STEAM_WEB_API}/inventory/?steam_id={steam_id}&game={STEAM_GAME}&key={STEAM_API_KEY}"
     )
     headers = {
         "User-Agent": (
@@ -542,7 +542,7 @@ async def get_inventory(
         ),
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://steamcommunity.com/",
+        "Referer": "https://www.steamwebapi.com",
     }
 
     try:
