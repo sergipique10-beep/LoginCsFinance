@@ -77,6 +77,8 @@ Response `200`:
 ```json
 { "steam_id": "76561198XXXXXXXXX" }
 ```
+The `steam_id` value is read from `user["sub"]` — there is no separate `steam_id` claim in the JWT.
+
 Errors: `401 Token expired`, `401 Invalid token`
 
 ---

@@ -1,6 +1,4 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# CLAUDE.md — LoginCsFinance
 
 ## Commands
 
@@ -12,41 +10,82 @@ venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Start the server (auto-reload on file changes)
+# Start the server — HTTP, no TLS (dev only)
+python run_dev.py
+# or directly:
 uvicorn main:app --host 127.0.0.1 --port 8001 --reload
 
 # Health check
 curl http://localhost:8001/
 ```
 
-There are no test or lint commands configured. The project has no test suite.
+There are no test or lint commands configured.
 
 ## Architecture
 
-This is a **stateless Steam OpenID 2.0 authentication gateway** — a FastAPI microservice that bridges an Angular SPA (port 4200) and Steam login. The entire app logic lives in `main.py` (68 lines).
+FastAPI microservice that authenticates users via **Steam OpenID 2.0** and issues two JWTs: a short-lived access token and a long-lived refresh token stored in an `HttpOnly` cookie.
 
-**Authentication flow:**
-1. Angular redirects browser to `GET /auth/steam`
-2. Backend builds OpenID 2.0 params and redirects to `https://steamcommunity.com/openid/login`
-3. After Steam login, Steam redirects to `GET /auth/steam/callback?openid.*=...`
-4. Backend validates the response by POST-ing back to Steam (`check_authentication`)
-5. Backend extracts the 64-bit Steam ID from `openid.claimed_id` via regex
-6. Backend issues a 24-hour JWT and redirects to `FRONTEND_URL/auth/callback?token={JWT}`
-7. Angular stores the token in localStorage
+**Auth flow:**
+1. `GET /auth/steam` — rate-limited, issues a nonce, redirects to Steam OpenID
+2. `GET /auth/steam/callback` — validates nonce + Steam response, extracts SteamID, emits a one-time auth code (TTL 30 s), redirects to `FRONTEND_URL/auth/callback?code=<code>`
+3. `POST /auth/token` — consumes the one-time code, returns `{ access_token }` + sets `refresh_token` HttpOnly cookie
+4. `POST /auth/refresh` — validates + rotates refresh token (JTI revocation), returns new `{ access_token }`
+5. `POST /auth/logout` — revokes JTI, clears cookie
+6. `GET /me` — protected route; returns `{ "steam_id": user["sub"] }`
 
-**Key files:**
-- `main.py` — all three endpoints (`/`, `/auth/steam`, `/auth/steam/callback`)
-- `settings.py` — loads config from `.env` via `python-dotenv`
-- `.env` — local environment variables (not committed)
-- `docs/steam-auth-angular.md` — full walkthrough of the OpenID flow and Angular integration
+**Token claims:**
 
-## Environment Variables
+| Token | Claims | TTL |
+|-------|--------|-----|
+| Access | `sub` (SteamID), `type: "access"`, `aud: "cs-finance"`, `iat`, `exp` | 30 min |
+| Refresh | `sub`, `type: "refresh"`, `jti`, `aud: "cs-finance"`, `iat`, `exp` | 7 days |
 
-| Variable | Purpose | Notes |
+Both tokens are HS256. No separate `steam_id` claim — the SteamID is exclusively in `sub`.
+
+## Key files
+
+| File | Role |
+|------|------|
+| `main.py` | All app logic: endpoints, middleware, token helpers, in-memory stores |
+| `settings.py` | Loads env vars from `.env` via `python-dotenv` |
+| `run_dev.py` | Local dev launcher (uvicorn, HTTP only) |
+| `.env` | Local secrets — never committed |
+| `docs/` | Full technical documentation |
+
+## Environment variables
+
+| Variable | Default | Notes |
 |----------|---------|-------|
-| `BASE_URL` | Public URL of this backend | Steam must be able to reach the callback URL; use ngrok locally if needed |
-| `FRONTEND_URL` | Angular app URL | Backend redirects here after issuing JWT |
-| `STEAM_API_KEY` | Steam Web API key | Currently unused in code; reserved for profile fetching |
-| `JWT_SECRET` | Signing secret for JWTs | Must be kept secret; rotate in production |
+| `BASE_URL` | `http://localhost:8001` | Must be reachable by Steam for the OpenID callback (use ngrok in local dev) |
+| `FRONTEND_URL` | `http://localhost:4200` | CORS origin and post-login redirect target |
+| `JWT_SECRET` | `change-this-secret` | Signs all tokens. Startup warns if default or < 32 chars. Use `secrets.token_urlsafe(48)` to generate. |
+| `STEAM_API_KEY` | *(empty)* | Imported in `main.py`. Startup warns if empty. Required for all Steam Web API proxy endpoints. |
+| `ALLOWED_REDIRECT_ORIGINS` | *(value of FRONTEND_URL)* | Comma-separated whitelist of allowed post-login redirect origins (add `myapp://` scheme for Android) |
 
-Steam's OpenID requires `BASE_URL` to be reachable from the internet for the callback. Use [ngrok](https://ngrok.com/) (`ngrok http 8001`) for local development against the real Steam API.
+## In-memory stores (single-worker only)
+
+| Store | Key → Value | Purpose |
+|-------|------------|---------|
+| `_nonces` | nonce → (issued_at, redirect_origin) | CSRF protection for OpenID |
+| `_auth_codes` | code → (steam_id, expires_at) | One-time codes (TTL 30 s) |
+| `_refresh_store` | jti → expires_at | Refresh token revocation list |
+| `_rate_store` | ip → [timestamps] | Sliding-window rate limiter |
+
+**TODO:** Replace all four stores with Redis (TTL-native) before running multiple workers.
+
+## Startup validation
+
+On startup the lifespan hook warns if:
+- `JWT_SECRET` equals the default placeholder `"change-this-secret"`
+- `JWT_SECRET` is shorter than 32 characters
+- `STEAM_API_KEY` is empty
+
+The lifespan also creates a shared `httpx.AsyncClient` stored in `app.state.http_client` (closed on shutdown). All endpoints that call external services must use this client — do not create per-request clients.
+
+## Production checklist
+
+Before any production deployment, revert these dev shortcuts:
+
+- `main.py` `_set_refresh_cookie` and `logout`: `secure=False` → `secure=True`
+- `.env`: `BASE_URL` and `FRONTEND_URL` → `https://` URLs
+- `run_dev.py`: restore `ssl_certfile` / `ssl_keyfile` in uvicorn (or terminate TLS at a reverse proxy)

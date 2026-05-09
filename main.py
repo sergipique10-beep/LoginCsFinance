@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from settings import BASE_URL, FRONTEND_URL, JWT_SECRET, ALLOWED_REDIRECT_ORIGINS
+from settings import BASE_URL, FRONTEND_URL, JWT_SECRET, ALLOWED_REDIRECT_ORIGINS, STEAM_API_KEY
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -76,7 +76,19 @@ async def lifespan(app: FastAPI):
             "JWT_SECRET es el valor por defecto inseguro — "
             "define un secreto fuerte en .env"
         )
+    if len(JWT_SECRET) < 32:
+        logger.warning(
+            "JWT_SECRET tiene menos de 32 caracteres — "
+            "usa secrets.token_urlsafe(48) para generar un secreto seguro"
+        )
+    if not STEAM_API_KEY:
+        logger.warning(
+            "STEAM_API_KEY no está configurada — "
+            "los endpoints de Steam Web API no funcionarán"
+        )
+    app.state.http_client = httpx.AsyncClient(timeout=10.0)
     yield
+    await app.state.http_client.aclose()
 
 
 # ── App + middleware ───────────────────────────────────────────────────────────
@@ -149,7 +161,6 @@ def _issue_tokens(steam_id: str) -> tuple[str, str]:
     access_token = jwt.encode(
         {
             "sub": steam_id,
-            "steam_id": steam_id,
             "type": "access",
             "aud": TOKEN_AUDIENCE,
             "iat": now,
@@ -165,7 +176,6 @@ def _issue_tokens(steam_id: str) -> tuple[str, str]:
     refresh_token = jwt.encode(
         {
             "sub": steam_id,
-            "steam_id": steam_id,
             "type": "refresh",
             "aud": TOKEN_AUDIENCE,
             "jti": jti,
@@ -279,8 +289,7 @@ async def steam_callback(request: Request, nonce: str = ""):
     # 3. Verificar con Steam
     validation_params = {**query_params, "openid.mode": "check_authentication"}
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(STEAM_OPENID_URL, data=validation_params)
+        resp = await request.app.state.http_client.post(STEAM_OPENID_URL, data=validation_params)
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Steam validation timed out")
     except httpx.RequestError:
@@ -367,7 +376,7 @@ async def refresh_tokens(
         # El JTI no existe: nunca fue válido, ya fue rotado o fue revocado
         raise HTTPException(status_code=401, detail="Refresh token revoked or reused")
 
-    steam_id: str = payload["steam_id"]
+    steam_id: str = payload["sub"]
 
     # Revocar el JTI anterior (rotación: cada refresh_token es de un solo uso)
     del _refresh_store[jti]
@@ -411,7 +420,7 @@ async def logout(
 
 @app.get("/me", summary="Info del usuario autenticado")
 def get_me(user: dict = Depends(require_jwt)):
-    return {"steam_id": user["steam_id"]}
+    return {"steam_id": user["sub"]}
 
 
 if __name__ == "__main__":
