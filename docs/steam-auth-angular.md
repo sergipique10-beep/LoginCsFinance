@@ -4,7 +4,7 @@
 
 **Ruta del proyecto:** `C:\Users\Marc\Documents\CS-FINANCE\CS-FINANCE-ionic`
 
-### Versiones instaladas (package.json real)
+### Versiones instaladas (package.json)
 
 | Paquete | Versión |
 |---------|---------|
@@ -13,53 +13,16 @@
 | `@capacitor/core` | 8.3.1 |
 | `@capacitor/android` | 8.3.1 |
 | `@capacitor/app` | 8.1.0 |
-| `@angular/fire` | ^20.0.1 |
+| `@capacitor/browser` | installed — used for Steam login on Android |
 
-**No instalado:** `@capacitor/browser` — necesario para el flujo Steam en Android.
+Firebase/AngularFire has been removed. Authentication is exclusively Steam via the FastAPI backend.
 
-### Dependencias a eliminar
+### Implemented services
 
-`@angular/fire` está instalada pero **no se usa ni debe usarse** en este proyecto. La autenticación es exclusivamente Steam via el backend FastAPI.
-
-```bash
-cd C:\Users\Marc\Documents\CS-FINANCE\CS-FINANCE-ionic
-npm uninstall @angular/fire
-```
-
-> `firebase` es una dependencia transitiva de `@angular/fire`, no una dependencia directa. Al desinstalar `@angular/fire`, `firebase` se elimina automáticamente al no quedar dependientes directos.
-
-### Estado del login hoy vs. objetivo
-
-| | Hoy | Objetivo |
-|---|-----|----------|
-| **Componente login** | `login.html` con un `<button class="login-button">Login with Steam</button>` sin lógica | Mismo HTML; añadir `(click)="auth.loginWithSteam()"` |
-| **AuthService** | Clase vacía (`export class AuthService {}`) | Implementar con signals: `loginWithSteam()`, `exchangeCode()`, `refresh()`, `logout()` |
-| **main.ts** | Importa y registra `provideFirebaseApp` y `provideAuth` con config Firebase via `@ngx-env/builder` | Eliminar todos los imports de `@angular/fire`; añadir `provideHttpClient(withInterceptors([authInterceptor]))` |
-| **env.d.ts** | Declara 6 variables `NG_APP_FIREBASE_*` en `ImportMetaEnv` | Reemplazar por `NG_APP_API_URL` (o eliminar y usar `/api` hardcoded en dev) |
-| **environment.ts** | Solo `{ production: false }` — sin `apiUrl` | Añadir `apiUrl: '/api'` |
-| **environment.prod.ts** | Solo `{ production: true }` | Añadir `apiUrl: 'https://TBD'` (dominio de producción por definir) |
-
-### Archivos que necesitan modificación
-
-| Archivo | Qué cambia |
-|---------|------------|
-| `src/main.ts` | Eliminar `provideFirebaseApp`/`provideAuth`; añadir `provideHttpClient` con `authInterceptor` y `APP_INITIALIZER` para silent refresh |
-| `src/env.d.ts` | Eliminar declaraciones Firebase; añadir `NG_APP_API_URL` si se usa `@ngx-env/builder` para la URL del API |
-| `src/environments/environment.ts` | Añadir `apiUrl: '/api'` |
-| `src/environments/environment.prod.ts` | Añadir `apiUrl: 'https://TBD'` (dominio de producción por definir) |
-| `src/app/features/auth/services/auth.service.ts` | Implementar el servicio completo (ver skeleton más abajo) |
-| `src/app/features/auth/pages/login.ts` | Inyectar `AuthService`; vincular botón a `loginWithSteam()` |
-| `src/app/features/auth/pages/login.html` | Añadir `(click)="auth.loginWithSteam()"` al botón existente |
-| `src/app/app.routes.ts` | Añadir ruta `/auth/callback` → `AuthCallbackComponent` |
-
-### Archivos a crear
-
-| Archivo | Qué es |
-|---------|--------|
-| `src/app/features/auth/pages/auth-callback.ts` | Componente que lee `?code=` de la URL y llama `auth.exchangeCode()` |
-| `src/app/shared/interceptors/auth.interceptor.ts` | `HttpInterceptorFn` que añade el Bearer token y reintenta en 401 |
-| `src/app/shared/guards/auth.guard.ts` | `CanActivateFn` que redirige a `/login` si no autenticado |
-| `proxy.conf.json` | Proxy dev que reenvía `/api/*` a `https://localhost:8001` |
+| Service | Location | State |
+|---------|----------|-------|
+| `AuthService` | `src/app/features/auth/services/auth.service.ts` | Fully implemented: signals, `loginWithSteam()`, `exchangeCode()`, `refresh()`, `logout()`, `steamId` computed |
+| `UserService` | `src/app/features/user/services/user.service.ts` | Fully implemented: `getProfile()` calls `GET /api/me`, returns `Observable<{ steam_id: string }>` |
 
 ---
 
@@ -157,9 +120,11 @@ Errors: `401 Token expired` / `401 Invalid token`
 | Access token | JWT HS256 | 30 min | `Authorization: Bearer` header | Angular in-memory only |
 | Refresh token | JWT HS256 | 7 days | `refresh_token` cookie | `_refresh_store` (in-memory; TODO Redis) |
 
-**Access token claims:** `sub`, `steam_id`, `iat`, `exp`, `aud: "cs-finance"`, `type: "access"`
+**Access token claims:** `sub` (SteamID), `type: "access"`, `aud: "cs-finance"`, `iat`, `exp`
 
-**Refresh token claims:** `sub`, `jti` (UUID, for revocation), `iat`, `exp`, `aud: "cs-finance"`, `type: "refresh"`
+There is no separate `steam_id` claim — the SteamID is exclusively in `sub` (RFC 7519 standard).
+
+**Refresh token claims:** `sub`, `jti` (for revocation), `type: "refresh"`, `aud: "cs-finance"`, `iat`, `exp`
 
 **Refresh cookie flags:** `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`
 
@@ -184,62 +149,21 @@ Run with: `ng serve --proxy-config proxy.conf.json`
 
 All Angular HTTP calls use `/api/auth/...` — never hardcode `localhost:8001`.
 
-### AuthService (skeleton)
+### AuthService
 
-Uses Angular signals — no RxJS state management needed.
+Uses Angular signals — no RxJS state management needed. The access token lives only in memory; it is never written to `localStorage` or `sessionStorage`.
 
-```typescript
-@Injectable({ providedIn: 'root' })
-export class AuthService {
-  private readonly http = inject(HttpClient);
+Key signals and methods (see `src/app/features/auth/services/auth.service.ts`):
 
-  // in-memory only — never localStorage
-  private readonly _accessToken = signal<string | null>(null);
-
-  readonly isAuthenticated = computed(() => {
-    const token = this._accessToken();
-    if (!token) return false;
-    try {
-      const { exp } = JSON.parse(atob(token.split('.')[1]));
-      return exp * 1000 > Date.now();
-    } catch { return false; }
-  });
-
-  loginWithSteam(): void {
-    window.location.href = '/api/auth/steam';
-  }
-
-  async exchangeCode(code: string): Promise<void> {
-    const res = await firstValueFrom(
-      this.http.post<{ access_token: string }>('/api/auth/token', { code })
-    );
-    this._accessToken.set(res.access_token);
-  }
-
-  async refresh(): Promise<boolean> {
-    try {
-      const res = await firstValueFrom(
-        this.http.post<{ access_token: string }>(
-          '/api/auth/refresh', {}, { withCredentials: true }
-        )
-      );
-      this._accessToken.set(res.access_token);
-      return true;
-    } catch { return false; }
-  }
-
-  async logout(): Promise<void> {
-    await firstValueFrom(
-      this.http.post('/api/auth/logout', {}, { withCredentials: true })
-    );
-    this._accessToken.set(null);
-  }
-
-  getToken(): string | null { return this._accessToken(); }
-  setToken(token: string): void { this._accessToken.set(token); }
-  clearToken(): void { this._accessToken.set(null); }
-}
-```
+| Member | Type | Description |
+|--------|------|-------------|
+| `isAuthenticated` | `computed<boolean>` | `true` when token is present and not expired |
+| `steamId` | `computed<string \| null>` | Reads `payload['sub']` from the JWT — the SteamID |
+| `getToken()` | `string \| null` | Returns the raw JWT string |
+| `loginWithSteam()` | `void` | Web: `window.location.href`; Android: `Browser.open()` |
+| `exchangeCode(code)` | `Promise<void>` | POST `/auth/token`, stores returned access token |
+| `refresh()` | `Promise<boolean>` | POST `/auth/refresh`; serialises concurrent callers |
+| `logout()` | `Promise<void>` | POST `/auth/logout`, clears token, navigates to `/login` |
 
 ### `/auth/callback` component
 
