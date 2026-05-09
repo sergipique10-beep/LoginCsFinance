@@ -32,9 +32,6 @@ REFRESH_TOKEN_TTL = timedelta(days=7)
 
 TOKEN_AUDIENCE = "cs-finance"
 
-STEAM_CDN      = "https://community.cloudflare.steamstatic.com/economy/image/"
-CS2_APP_ID     = 730
-CS2_CONTEXT_ID = 2
 
 # ── Stores en memoria ──────────────────────────────────────────────────────────
 # ADVERTENCIA: estos stores son válidos únicamente para despliegues con un solo
@@ -243,96 +240,67 @@ def require_jwt(
 
 # ── Inventory mapper ──────────────────────────────────────────────────────────
 
-def _tag(tags: list[dict], category: str) -> dict | None:
-    """Devuelve el primer tag con la categoría indicada, o None."""
-    return next((t for t in tags if t.get("category") == category), None)
+def _safe_delta(new: float | None, old: float | None) -> float:
+    if not new or not old:
+        return 0.0
+    return round((new - old) / old * 100, 2)
 
 
-def _slugify(text: str) -> str:
-    """Convierte un string a slug kebab-case."""
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    return text.strip("-")
+def _resolve_phase(item: dict) -> str | None:
+    paint_index = item.get("paintindex")
+    variants = item.get("variants", [])
+    if paint_index is None or not variants:
+        return None
+    match = next((v for v in variants if v.get("paintindex") == paint_index), None)
+    return match.get("phase") if match else None
 
 
-def _map_desc(desc: dict) -> dict:
-    """Mapea una descripción de la API de Steam a los campos ISkinCard disponibles.
-
-    Solo incluye campos que Steam provee directamente. Los precios, float y
-    paint index quedan fuera — deben enriquecerse desde una fuente externa.
-    """
-    tags         = desc.get("tags", [])
-    rarity_tag   = _tag(tags, "Rarity")
-    weapon_tag   = _tag(tags, "Weapon")
-    quality_tag  = _tag(tags, "Quality")
-    exterior_tag = _tag(tags, "Exterior")
-    type_tag     = _tag(tags, "Type")
-
-    name: str             = desc.get("name", "")
-    market_hash_name: str = desc.get("market_hash_name", "")
-
-    icon  = desc.get("icon_url_large") or desc.get("icon_url", "")
-    image = f"{STEAM_CDN}{icon}" if icon else ""
-
-    rarity       = rarity_tag["localized_tag_name"] if rarity_tag else "Base Grade"
-    rarity_color = rarity_tag.get("color", "b0c3d9") if rarity_tag else "b0c3d9"
-
-    trade_lock = desc.get("market_tradable_restriction")
-
+def _map_item(item: dict) -> dict:
+    latest = item.get("pricelatestsell") or 0
     return {
-        "classId":       desc.get("classid"),
-        "instanceId":    desc.get("instanceid"),
-        "name":          name,
-        "slug":          _slugify(market_hash_name),
-        "weaponType":    weapon_tag["localized_tag_name"] if weapon_tag else None,
-        "itemName":      name.split(" | ")[0] if " | " in name else None,
-        "itemType":      type_tag["localized_tag_name"] if type_tag else None,
-        "image":         image,
-        "rarity":        rarity,
-        "rarityColor":   rarity_color,
-        "borderColor":   rarity_color,
-        "quality":       quality_tag["localized_tag_name"] if quality_tag else "Normal",
-        "isStatTrak":    "StatTrak™" in name,
-        "isSouvenir":    "Souvenir" in name,
-        "isStar":        "★" in name,
-        "exterior":      exterior_tag["localized_tag_name"] if exterior_tag else None,
-        "marketable":    bool(desc.get("marketable", 1)),
-        "tradable":      bool(desc.get("tradable", 1)),
-        "tradeLockDays": trade_lock if isinstance(trade_lock, int) else None,
-    }
-
-
-def _map_item(asset: dict, desc: dict) -> dict:
-    """Mapea un par (asset, description) al esquema ISkinCard completo.
-
-    Fusiona los campos de descripción con el assetid y los stubs de precio/float
-    que deberán enriquecerse desde una fuente externa (p.ej. csgotrader prices).
-    """
-    return {
-        "id": asset["assetid"],
-        **_map_desc(desc),
-        "floatMin":       None,
-        "floatMax":       None,
-        "paintIndex":     None,
-        "phase":          None,
-        "priceLatest":    0,
-        "priceSafe":      0,
-        "priceMin":       0,
-        "priceMax":       0,
-        "priceDelta24h":  0,
-        "priceDelta7d":   0,
-        "priceDelta30d":  0,
-        "priceReal":      None,
-        "externalPrices": [],
-        "sold24h":        0,
-        "sold7d":         0,
-        "sold30d":        0,
-        "soldTotal":      0,
-        "offerVolume":    0,
-        "buyOrderVolume": 0,
-        "buyOrderPrice":  0,
-        "hoursToSold":    0,
-        "steamUrl":       None,
+        "id":             item.get("assetid") or item.get("id", ""),
+        "name":           item.get("marketname", ""),
+        "slug":           item.get("slug", ""),
+        "weaponType":     item.get("weapontype"),
+        "itemName":       item.get("itemname"),
+        "itemType":       item.get("itemtype"),
+        "image":          item.get("image", ""),
+        "rarity":         item.get("rarity", "Base Grade"),
+        "rarityColor":    item.get("color", "b0c3d9"),
+        "borderColor":    item.get("bordercolor", "b0c3d9"),
+        "quality":        item.get("quality", "Normal"),
+        "isStatTrak":     bool(item.get("isstattrak", False)),
+        "isSouvenir":     bool(item.get("issouvenir", False)),
+        "isStar":         bool(item.get("isstar", False)),
+        "exterior":       item.get("tag5"),
+        "floatMin":       item.get("minfloat"),
+        "floatMax":       item.get("maxfloat"),
+        "paintIndex":     item.get("paintindex"),
+        "phase":          _resolve_phase(item),
+        "priceLatest":    latest,
+        "priceSafe":      item.get("pricesafe") or 0,
+        "priceMin":       item.get("pricemin") or 0,
+        "priceMax":       item.get("pricemax") or 0,
+        "priceDelta24h":  _safe_delta(latest, item.get("pricelatestsell24h")),
+        "priceDelta7d":   _safe_delta(latest, item.get("pricelatestsell7d")),
+        "priceDelta30d":  _safe_delta(latest, item.get("pricelatestsell30d")),
+        "priceReal":      item.get("pricereal"),
+        "externalPrices": [
+            {"market": p["market"], "price": p["price"], "quantity": p["quantity"]}
+            for p in item.get("prices", [])
+        ],
+        "sold24h":        item.get("sold24h") or 0,
+        "sold7d":         item.get("sold7d") or 0,
+        "sold30d":        item.get("sold30d") or 0,
+        "soldTotal":      item.get("soldtotal") or 0,
+        "offerVolume":    item.get("offervolume") or 0,
+        "buyOrderVolume": item.get("buyordervolume") or 0,
+        "buyOrderPrice":  item.get("buyorderprice") or 0,
+        "hoursToSold":    item.get("hourstosold") or 0,
+        "marketable":     bool(item.get("marketable", True)),
+        "tradable":       bool(item.get("tradable", True)),
+        "tradeLockDays":  item.get("markettradablerestriction"),
+        "steamUrl":       item.get("steamurl"),
     }
 
 
@@ -523,33 +491,24 @@ def get_me(user: dict = Depends(require_jwt)):
     return {"steam_id": user["sub"]}
 
 
-@app.get("/inventory/{steam_id}", summary="Inventario CS2 del usuario")
+@app.get("/inventory", summary="Inventario CS2 del usuario autenticado")
 async def get_inventory(
-    steam_id: str,
-    _: dict = Depends(require_jwt),
+    request: Request,
+    user: dict = Depends(require_jwt),
 ):
-    if not re.fullmatch(r"\d{17}", steam_id):
-        raise HTTPException(status_code=400, detail="Invalid Steam ID format")
-
-    url = (
-        f"{STEAM_WEB_API}/inventory/?steam_id={steam_id}&game={STEAM_GAME}&key={STEAM_API_KEY}"
-    )
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.steamwebapi.com",
-    }
+    steam_id: str = user["sub"]
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                url, params={"l": "english", "count": 5000}, headers=headers
-            )
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/inventory",
+            params={
+                "steam_id": steam_id,
+                "game": STEAM_GAME,
+                "key": STEAM_API_KEY,
+                "language": "english",
+                "limit": 5000,
+            },
+        )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Steam inventory request timed out")
     except httpx.RequestError as exc:
@@ -557,6 +516,10 @@ async def get_inventory(
 
     if resp.status_code == 403:
         raise HTTPException(status_code=403, detail="Inventory is private")
+    if resp.status_code == 410:
+        return []  # no items for this game
+    if resp.status_code == 411:
+        return []  # no tradeable items
     if resp.status_code == 429:
         raise HTTPException(status_code=429, detail="Steam rate limit — retry later")
     if resp.status_code != 200:
@@ -564,25 +527,10 @@ async def get_inventory(
 
     data = resp.json()
 
-    if not data.get("success"):
-        raise HTTPException(status_code=502, detail="Steam returned an unsuccessful response")
+    if not isinstance(data, list):
+        raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
-    assets       = data.get("assets", [])
-    descriptions = data.get("descriptions", [])
-
-    # Indexar descriptions por (classid, instanceid) para lookup O(1)
-    desc_index: dict[tuple[str, str], dict] = {
-        (d["classid"], d["instanceid"]): d
-        for d in descriptions
-    }
-
-    items = []
-    for asset in assets:
-        desc = desc_index.get((asset["classid"], asset["instanceid"]))
-        if desc:
-            items.append(_map_item(asset, desc))
-
-    return items
+    return [_map_item(item) for item in data]
 
 
 if __name__ == "__main__":
