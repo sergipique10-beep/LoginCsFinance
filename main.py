@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from settings import BASE_URL, FRONTEND_URL, JWT_SECRET, ALLOWED_REDIRECT_ORIGINS
+from settings import BASE_URL, FRONTEND_URL, JWT_SECRET, ALLOWED_REDIRECT_ORIGINS, STEAM_API_KEY
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -30,6 +30,10 @@ ACCESS_TOKEN_TTL = timedelta(minutes=30)
 REFRESH_TOKEN_TTL = timedelta(days=7)
 
 TOKEN_AUDIENCE = "cs-finance"
+
+STEAM_CDN      = "https://community.cloudflare.steamstatic.com/economy/image/"
+CS2_APP_ID     = 730
+CS2_CONTEXT_ID = 2
 
 # ── Stores en memoria ──────────────────────────────────────────────────────────
 # ADVERTENCIA: estos stores son válidos únicamente para despliegues con un solo
@@ -226,6 +230,101 @@ def require_jwt(
     return payload
 
 
+# ── Inventory mapper ──────────────────────────────────────────────────────────
+
+def _tag(tags: list[dict], category: str) -> dict | None:
+    """Devuelve el primer tag con la categoría indicada, o None."""
+    return next((t for t in tags if t.get("category") == category), None)
+
+
+def _slugify(text: str) -> str:
+    """Convierte un string a slug kebab-case."""
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-")
+
+
+def _map_desc(desc: dict) -> dict:
+    """Mapea una descripción de la API de Steam a los campos ISkinCard disponibles.
+
+    Solo incluye campos que Steam provee directamente. Los precios, float y
+    paint index quedan fuera — deben enriquecerse desde una fuente externa.
+    """
+    tags         = desc.get("tags", [])
+    rarity_tag   = _tag(tags, "Rarity")
+    weapon_tag   = _tag(tags, "Weapon")
+    quality_tag  = _tag(tags, "Quality")
+    exterior_tag = _tag(tags, "Exterior")
+    type_tag     = _tag(tags, "Type")
+
+    name: str             = desc.get("name", "")
+    market_hash_name: str = desc.get("market_hash_name", "")
+
+    icon  = desc.get("icon_url_large") or desc.get("icon_url", "")
+    image = f"{STEAM_CDN}{icon}" if icon else ""
+
+    rarity       = rarity_tag["localized_tag_name"] if rarity_tag else "Base Grade"
+    rarity_color = rarity_tag.get("color", "b0c3d9") if rarity_tag else "b0c3d9"
+
+    trade_lock = desc.get("market_tradable_restriction")
+
+    return {
+        "classId":       desc.get("classid"),
+        "instanceId":    desc.get("instanceid"),
+        "name":          name,
+        "slug":          _slugify(market_hash_name),
+        "weaponType":    weapon_tag["localized_tag_name"] if weapon_tag else None,
+        "itemName":      name.split(" | ")[0] if " | " in name else None,
+        "itemType":      type_tag["localized_tag_name"] if type_tag else None,
+        "image":         image,
+        "rarity":        rarity,
+        "rarityColor":   rarity_color,
+        "borderColor":   rarity_color,
+        "quality":       quality_tag["localized_tag_name"] if quality_tag else "Normal",
+        "isStatTrak":    "StatTrak™" in name,
+        "isSouvenir":    "Souvenir" in name,
+        "isStar":        "★" in name,
+        "exterior":      exterior_tag["localized_tag_name"] if exterior_tag else None,
+        "marketable":    bool(desc.get("marketable", 1)),
+        "tradable":      bool(desc.get("tradable", 1)),
+        "tradeLockDays": trade_lock if isinstance(trade_lock, int) else None,
+    }
+
+
+def _map_item(asset: dict, desc: dict) -> dict:
+    """Mapea un par (asset, description) al esquema ISkinCard completo.
+
+    Fusiona los campos de descripción con el assetid y los stubs de precio/float
+    que deberán enriquecerse desde una fuente externa (p.ej. csgotrader prices).
+    """
+    return {
+        "id": asset["assetid"],
+        **_map_desc(desc),
+        "floatMin":       None,
+        "floatMax":       None,
+        "paintIndex":     None,
+        "phase":          None,
+        "priceLatest":    0,
+        "priceSafe":      0,
+        "priceMin":       0,
+        "priceMax":       0,
+        "priceDelta24h":  0,
+        "priceDelta7d":   0,
+        "priceDelta30d":  0,
+        "priceReal":      None,
+        "externalPrices": [],
+        "sold24h":        0,
+        "sold7d":         0,
+        "sold30d":        0,
+        "soldTotal":      0,
+        "offerVolume":    0,
+        "buyOrderVolume": 0,
+        "buyOrderPrice":  0,
+        "hoursToSold":    0,
+        "steamUrl":       None,
+    }
+
+
 # ── Rutas ──────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -412,6 +511,69 @@ async def logout(
 @app.get("/me", summary="Info del usuario autenticado")
 def get_me(user: dict = Depends(require_jwt)):
     return {"steam_id": user["steam_id"]}
+
+
+@app.get("/inventory/{steam_id}", summary="Inventario CS2 del usuario")
+async def get_inventory(
+    steam_id: str,
+    _: dict = Depends(require_jwt),
+):
+    if not re.fullmatch(r"\d{17}", steam_id):
+        raise HTTPException(status_code=400, detail="Invalid Steam ID format")
+
+    url = (
+        f"https://steamcommunity.com/inventory/{steam_id}"
+        f"/{CS2_APP_ID}/{CS2_CONTEXT_ID}"
+    )
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://steamcommunity.com/",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                url, params={"l": "english", "count": 5000}, headers=headers
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Steam inventory request timed out")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code == 403:
+        raise HTTPException(status_code=403, detail="Inventory is private")
+    if resp.status_code == 429:
+        raise HTTPException(status_code=429, detail="Steam rate limit — retry later")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    data = resp.json()
+
+    if not data.get("success"):
+        raise HTTPException(status_code=502, detail="Steam returned an unsuccessful response")
+
+    assets       = data.get("assets", [])
+    descriptions = data.get("descriptions", [])
+
+    # Indexar descriptions por (classid, instanceid) para lookup O(1)
+    desc_index: dict[tuple[str, str], dict] = {
+        (d["classid"], d["instanceid"]): d
+        for d in descriptions
+    }
+
+    items = []
+    for asset in assets:
+        desc = desc_index.get((asset["classid"], asset["instanceid"]))
+        if desc:
+            items.append(_map_item(asset, desc))
+
+    return items
 
 
 if __name__ == "__main__":
