@@ -43,6 +43,13 @@ _rate_store: dict[str, list[float]] = defaultdict(list)
 _auth_codes: dict[str, tuple[str, float]] = {}   # code → (steam_id, expires_at)
 _refresh_store: dict[str, float] = {}             # jti → expires_at (monotonic)
 
+# Cache de perfiles Steam: evita llamar a steamwebapi.com en cada request.
+# steam_id → (profile_dict, cached_at_monotonic)
+PROFILE_CACHE_TTL = 600   # 10 minutos
+INVENTORY_CACHE_TTL = 300  # 5 minutos
+_profile_cache: dict[str, tuple[dict, float]] = {}
+_inventory_cache: dict[str, tuple[list, float]] = {}
+
 
 # ── Middleware: cabeceras de seguridad ─────────────────────────────────────────
 
@@ -487,8 +494,40 @@ async def logout(
 
 
 @app.get("/me", summary="Info del usuario autenticado")
-def get_me(user: dict = Depends(require_jwt)):
-    return {"steam_id": user["sub"]}
+async def get_me(request: Request, user: dict = Depends(require_jwt)):
+    steam_id: str = user["sub"]
+
+    now = time.monotonic()
+    cached = _profile_cache.get(steam_id)
+    if cached and now - cached[1] < PROFILE_CACHE_TTL:
+        return cached[0]
+
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/profile",
+            params={"id": steam_id, "key": STEAM_API_KEY},
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Steam profile request timed out")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    data = resp.json()
+    if isinstance(data, list):
+        data = data[0] if data else {}
+
+    profile = {
+        "userName":       data.get("personaname", ""),
+        "avatarUrl":      data.get("avatarfull", ""),
+        "avatarThumbUrl": data.get("avatarmedium") or data.get("avatarfull", ""),
+        "profileUrl":     data.get("profileurl", ""),
+        "isOnline":       data.get("personastate", 0) != 0,
+    }
+    _profile_cache[steam_id] = (profile, now)
+    return profile
 
 
 @app.get("/inventory", summary="Inventario CS2 del usuario autenticado")
@@ -497,6 +536,11 @@ async def get_inventory(
     user: dict = Depends(require_jwt),
 ):
     steam_id: str = user["sub"]
+
+    now = time.monotonic()
+    cached = _inventory_cache.get(steam_id)
+    if cached and now - cached[1] < INVENTORY_CACHE_TTL:
+        return cached[0]
 
     try:
         resp = await request.app.state.http_client.get(
@@ -530,7 +574,9 @@ async def get_inventory(
     if not isinstance(data, list):
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
-    return [_map_item(item) for item in data]
+    items = [_map_item(item) for item in data]
+    _inventory_cache[steam_id] = (items, now)
+    return items
 
 
 if __name__ == "__main__":
