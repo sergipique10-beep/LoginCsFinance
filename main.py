@@ -280,6 +280,7 @@ def _map_item(item: dict) -> dict:
         "isSouvenir":     bool(item.get("issouvenir", False)),
         "isStar":         bool(item.get("isstar", False)),
         "exterior":       item.get("tag5"),
+        "floatValue":     (item.get("float") or {}).get("floatvalue"),
         "floatMin":       item.get("minfloat"),
         "floatMax":       item.get("maxfloat"),
         "paintIndex":     item.get("paintindex"),
@@ -573,6 +574,12 @@ async def get_inventory(
 
     if not isinstance(data, list):
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+
+    if data:
+        first = data[0]
+        logger.info("[DEBUG inventory] keys del primer item: %s", list(first.keys()))
+        logger.info("[DEBUG inventory] float field: %s", first.get("float"))
+        logger.info("[DEBUG inventory] minfloat: %s | maxfloat: %s", first.get("minfloat"), first.get("maxfloat"))
 
     items = [_map_item(item) for item in data]
     _inventory_cache[steam_id] = (items, now)
