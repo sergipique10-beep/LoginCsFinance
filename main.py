@@ -45,10 +45,12 @@ _refresh_store: dict[str, float] = {}             # jti → expires_at (monotoni
 
 # Cache de perfiles Steam: evita llamar a steamwebapi.com en cada request.
 # steam_id → (profile_dict, cached_at_monotonic)
-PROFILE_CACHE_TTL = 600   # 10 minutos
-INVENTORY_CACHE_TTL = 300  # 5 minutos
+PROFILE_CACHE_TTL = 82800    # 23 horas — free plan: 5 req/día
+INVENTORY_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
+MARKET_INDEX_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
 _profile_cache: dict[str, tuple[dict, float]] = {}
 _inventory_cache: dict[str, tuple[list, float]] = {}
+_market_index_cache: dict[str, tuple[list, float]] = {}
 
 
 # ── Middleware: cabeceras de seguridad ─────────────────────────────────────────
@@ -514,6 +516,7 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
 
     if resp.status_code != 200:
+        logger.error("[me] steamwebapi returned %s | body: %s", resp.status_code, resp.text[:300])
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
@@ -584,6 +587,72 @@ async def get_inventory(
     items = [_map_item(item) for item in data]
     _inventory_cache[steam_id] = (items, now)
     return items
+
+
+# ── Market index mapper ───────────────────────────────────────────────────────
+
+def _map_market_index_point(point: dict) -> dict:
+    # steamwebapi may use different field names — try all known variants
+    date = (
+        point.get("segment") or point.get("date") or
+        point.get("time") or point.get("timestamp") or ""
+    )
+    price = float(
+        point.get("volume_usd") or point.get("value") or
+        point.get("price") or point.get("avg_price") or 0
+    )
+    volume = int(
+        point.get("volume") or point.get("count") or
+        point.get("transactions") or point.get("items") or 0
+    )
+    return {"date": date, "price": price, "volume": volume}
+
+
+# ── Market routes ─────────────────────────────────────────────────────────────
+
+@app.get("/market/index", summary="Índice de mercado CS2 por timeframe")
+async def get_market_index(
+    request: Request,
+    tf: str = "24h",
+    segment_type: str = "rarity",
+    segment_key: str = "Covert",
+    user: dict = Depends(require_jwt),
+):
+    cache_key = f"{segment_type}:{segment_key}"
+    now = time.monotonic()
+    cached = _market_index_cache.get(cache_key)
+    if cached and now - cached[1] < MARKET_INDEX_CACHE_TTL:
+        return cached[0]
+
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/market-index/cs2",
+            params={
+                "key": STEAM_API_KEY,
+                "segment_type": segment_type,
+                "segment_key": segment_key,
+                "format": "json",
+            },
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Market index request timed out")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code == 402:
+        logger.warning("[market-index] daily limit reached — returning empty")
+        return []
+
+    if resp.status_code != 200:
+        logger.error("[market-index] steamwebapi returned %s | body: %s", resp.status_code, resp.text[:500])
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    data = resp.json()
+    logger.info("[DEBUG market-index] %s:%s → type=%s | %s", segment_type, segment_key, type(data).__name__, str(data)[:1000])
+
+    points = [_map_market_index_point(p) for p in (data if isinstance(data, list) else [])]
+    _market_index_cache[cache_key] = (points, now)
+    return points
 
 
 if __name__ == "__main__":
