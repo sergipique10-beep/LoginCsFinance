@@ -12,6 +12,7 @@ All backend settings are loaded from `.env` via `python-dotenv` (`settings.py`).
 | `FRONTEND_URL` | Yes | `http://localhost:4200` | Angular app origin. Used for CORS and the post-login redirect. |
 | `JWT_SECRET` | Yes | `change-this-secret` | Signs both access and refresh tokens. Use a strong random string in production. A warning is logged on startup if the default is detected. |
 | `STEAM_API_KEY` | No | *(empty)* | Steam Web API key. Not required for login; reserved for future profile enrichment. Get one at https://steamcommunity.com/dev/apikey |
+| `STEAM_GAME` | No | `"cs2"` | Game identifier sent to steamwebapi.com for inventory requests. Verify the exact slug accepted by your API plan — steamwebapi.com may require the numeric AppID `"730"` instead of `"cs2"`. A wrong value here produces a `502` from `GET /inventory`. |
 
 Example `.env`:
 ```dotenv

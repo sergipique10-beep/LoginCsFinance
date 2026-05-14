@@ -83,6 +83,25 @@ Errors: `401 Token expired`, `401 Invalid token`
 
 ---
 
+### `GET /inventory`
+Fetches the authenticated user's CS2 inventory via steamwebapi.com. The game is controlled by the `STEAM_GAME` setting (default `"cs2"`).
+
+Response `200`: array of inventory item objects (structure defined by steamwebapi.com).
+
+**Error responses:**
+
+| Status | Detail | Cause |
+|--------|--------|-------|
+| `401` | `Token expired` / `Invalid token` | Missing or invalid Bearer token |
+| `403` | `Inventory is private` | User's Steam inventory is set to private |
+| `502` | `"Could not reach Steam: {exc}"` | `httpx.RequestError` — network failure contacting steamwebapi.com |
+| `502` | `"Steam returned {status_code}"` | steamwebapi.com returned a non-200 status (e.g. 401, 403, 429) |
+| `502` | `"Unexpected response format from Steam API"` | steamwebapi.com returned HTTP 200 but the body was not a JSON array (e.g. an error object) |
+
+> **Known gap:** upstream errors from steamwebapi.com are not logged before the `raise HTTPException(status_code=502)` calls (`main.py` lines ~572, ~594, ~596). The actual status code and body returned by steamwebapi.com are silently discarded, making 502 responses opaque. See [troubleshooting.md](./troubleshooting.md#get-inventory-returns-502) for the diagnostic workaround.
+
+---
+
 ## `GET /`
 Health check.
 ```json
