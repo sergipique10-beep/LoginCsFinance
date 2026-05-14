@@ -655,6 +655,60 @@ async def get_market_index(
     return points
 
 
+def _map_news_item(item: dict, index: int) -> dict:
+    feedname  = item.get("feedname", "").lower()
+    feedlabel = item.get("feedlabel", "NEWS")
+
+    if "blog" in feedname or "valve" in feedname:
+        category_color = "4a9eff"
+    elif any(x in feedname for x in ("hltv", "liquipedia", "esport")):
+        category_color = "8847ff"
+    else:
+        category_color = "f0c040"
+
+    try:
+        date_str = datetime.fromtimestamp(item["date"], tz=timezone.utc).strftime("%Y-%m-%d")
+    except (KeyError, ValueError, OSError):
+        date_str = ""
+
+    author = item.get("author", "").strip()
+
+    return {
+        "id":            str(item.get("gid", index)),
+        "category":      feedlabel.upper(),
+        "categoryColor": category_color,
+        "title":         item.get("title", ""),
+        "source":        author if author else feedlabel,
+        "date":          date_str,
+        "imageUrl":      "",
+        "featured":      index == 0,
+        "url":           item.get("url", ""),
+    }
+
+
+@app.get("/news/cs2", summary="Últimas noticias de CS2 vía Steam News API")
+async def get_cs2_news(request: Request, count: int = 5):
+    _rate_limit(_get_client_ip(request))
+
+    try:
+        resp = await request.app.state.http_client.get(
+            "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/",
+            params={"appid": 730, "count": count, "format": "json"},
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Steam news request timed out")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    newsitems = resp.json().get("appnews", {}).get("newsitems", [])
+    return [_map_news_item(item, i) for i, item in enumerate(newsitems)]
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
+
+
