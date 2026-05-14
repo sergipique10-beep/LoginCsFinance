@@ -1,3 +1,4 @@
+import os
 import re
 import secrets
 import time
@@ -417,6 +418,24 @@ async def exchange_token(request: Request):
     return response
 
 
+@app.post("/auth/dev-token", summary="[DEV ONLY] Emite tokens para un steam_id sin pasar por Steam OpenID")
+async def dev_token(request: Request):
+    # Activo solo con DEBUG=true en .env — devuelve 404 en cualquier otro entorno
+    if os.getenv("DEBUG", "false").lower() != "true":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    body = await request.json()
+    steam_id: str = body.get("steam_id", "")
+
+    if not re.match(r"^\d{17}$", steam_id):
+        raise HTTPException(status_code=400, detail="steam_id must be exactly 17 digits")
+
+    access_token, refresh_token = _issue_tokens(steam_id)
+    response = JSONResponse({"access_token": access_token})
+    _set_refresh_cookie(response, refresh_token)
+    return response
+
+
 @app.post("/auth/refresh", summary="Rota el refresh token y devuelve nuevo access token")
 async def refresh_tokens(
     request: Request,
@@ -571,11 +590,13 @@ async def get_inventory(
     if resp.status_code == 429:
         raise HTTPException(status_code=429, detail="Steam rate limit — retry later")
     if resp.status_code != 200:
+        logger.error("steamwebapi /inventory → %s: %.500s", resp.status_code, resp.text)
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
 
     if not isinstance(data, list):
+        logger.error("steamwebapi /inventory unexpected format: %.500s", resp.text)
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
     if data:

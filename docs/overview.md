@@ -40,3 +40,4 @@ Two-token architecture: short-lived access token (30 min, in-memory in Angular) 
 - [configuration.md](./configuration.md) — All environment variables
 - [api.md](./api.md) — Endpoint reference
 - [steam-auth-angular.md](./steam-auth-angular.md) — Full auth flow + Angular integration patterns
+- [troubleshooting.md](./troubleshooting.md) — Common errors and diagnostic steps
