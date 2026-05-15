@@ -1,3 +1,5 @@
+import asyncio
+import html
 import os
 import re
 import secrets
@@ -676,7 +678,42 @@ async def get_market_index(
     return points
 
 
-def _map_news_item(item: dict, index: int) -> dict:
+async def _fetch_og_image(client: httpx.AsyncClient, url: str) -> str:
+    if not url:
+        return ""
+    try:
+        resp = await client.get(
+            url, timeout=4.0, follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if resp.status_code != 200:
+            return ""
+        match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](https?://[^"\']+)["\']',
+            resp.text, re.IGNORECASE,
+        ) or re.search(
+            r'<meta[^>]+content=["\'](https?://[^"\']+)["\'][^>]+property=["\']og:image["\']',
+            resp.text, re.IGNORECASE,
+        )
+        return match.group(1) if match else ""
+    except Exception:
+        return ""
+
+
+def _clean_news_content(raw: str, max_chars: int = 220) -> str:
+    text = re.sub(r"<[^>]+>", " ", raw)           # HTML tags
+    text = re.sub(r"\[[^\]]*\]", "", text)          # BBCode [b], [url=...], [img]
+    text = re.sub(r"\{STEAM_CLAN_IMAGE\}\S*", "", text)  # Steam CDN placeholders
+    text = html.unescape(text)                      # &amp; &nbsp; &#39; etc.
+    text = re.sub(r"https?://\S+", "", text)        # full URLs
+    text = re.sub(r"//\S+", "", text)               # protocol-relative URLs
+    text = " ".join(text.split())                   # normalize whitespace
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(" ", 1)[0]
+    return text
+
+
+def _map_news_item(item: dict, index: int, image_url: str = "") -> dict:
     feedname  = item.get("feedname", "").lower()
     feedlabel = item.get("feedlabel", "NEWS")
 
@@ -694,6 +731,8 @@ def _map_news_item(item: dict, index: int) -> dict:
 
     author = item.get("author", "").strip()
 
+    excerpt = _clean_news_content(item.get("contents", ""))
+
     return {
         "id":            str(item.get("gid", index)),
         "category":      feedlabel.upper(),
@@ -701,9 +740,10 @@ def _map_news_item(item: dict, index: int) -> dict:
         "title":         item.get("title", ""),
         "source":        author if author else feedlabel,
         "date":          date_str,
-        "imageUrl":      "",
+        "imageUrl":      image_url,
         "featured":      index == 0,
         "url":           item.get("url", ""),
+        "content":       excerpt,
     }
 
 
@@ -725,7 +765,11 @@ async def get_cs2_news(request: Request, count: int = 5):
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     newsitems = resp.json().get("appnews", {}).get("newsitems", [])
-    return [_map_news_item(item, i) for i, item in enumerate(newsitems)]
+    images = await asyncio.gather(*[
+        _fetch_og_image(request.app.state.http_client, item.get("url", ""))
+        for item in newsitems
+    ])
+    return [_map_news_item(item, i, images[i]) for i, item in enumerate(newsitems)]
 
 
 if __name__ == "__main__":
