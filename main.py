@@ -51,9 +51,11 @@ _refresh_store: dict[str, float] = {}             # jti → expires_at (monotoni
 PROFILE_CACHE_TTL = 82800    # 23 horas — free plan: 5 req/día
 INVENTORY_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
 MARKET_INDEX_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
+ITEM_HISTORY_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
 _profile_cache: dict[str, tuple[dict, float]] = {}
 _inventory_cache: dict[str, tuple[list, float]] = {}
 _market_index_cache: dict[str, tuple[list, float]] = {}
+_item_history_cache: dict[str, tuple[list, float]] = {}
 
 
 # ── Middleware: cabeceras de seguridad ─────────────────────────────────────────
@@ -606,6 +608,8 @@ async def get_inventory(
         logger.info("[DEBUG inventory] keys del primer item: %s", list(first.keys()))
         logger.info("[DEBUG inventory] float field: %s", first.get("float"))
         logger.info("[DEBUG inventory] minfloat: %s | maxfloat: %s", first.get("minfloat"), first.get("maxfloat"))
+        price_fields = {k: v for k, v in first.items() if "price" in k.lower() or "sold" in k.lower() or "delta" in k.lower()}
+        logger.info("[DEBUG inventory] price/sold fields: %s", price_fields)
 
     items = [_map_item(item) for item in data]
     _inventory_cache[steam_id] = (items, now)
@@ -678,6 +682,53 @@ async def get_market_index(
     return points
 
 
+@app.get("/item/history", summary="Historial de precios de un item CS2")
+async def get_item_history(
+    request: Request,
+    name: str,
+    interval: str = "10",
+    user: dict = Depends(require_jwt),
+):
+    _rate_limit(_get_client_ip(request))
+
+    cache_key = f"{name}:{interval}"
+    now = time.monotonic()
+    cached = _item_history_cache.get(cache_key)
+    if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL:
+        return cached[0]
+
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/history",
+            params={"key": STEAM_API_KEY, "market_hash_name": name, "interval": interval, "format": "json"},
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Steam history request timed out")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code == 402:
+        logger.warning("[item-history] daily limit reached for %s", name)
+        return []
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    raw = resp.json() if isinstance(resp.json(), list) else []
+    points = sorted(
+        [
+            {
+                "date":   p.get("createdat", "")[:10],
+                "price":  float(p.get("price") or 0),
+                "volume": int(p.get("sold") or 0),
+            }
+            for p in raw if p.get("price")
+        ],
+        key=lambda p: p["date"],
+    )
+    _item_history_cache[cache_key] = (points, now)
+    return points
+
+
 async def _fetch_og_image(client: httpx.AsyncClient, url: str) -> str:
     if not url:
         return ""
@@ -701,13 +752,14 @@ async def _fetch_og_image(client: httpx.AsyncClient, url: str) -> str:
 
 
 def _clean_news_content(raw: str, max_chars: int = 220) -> str:
-    text = re.sub(r"<[^>]+>", " ", raw)           # HTML tags
-    text = re.sub(r"\[[^\]]*\]", "", text)          # BBCode [b], [url=...], [img]
-    text = re.sub(r"\{STEAM_CLAN_IMAGE\}\S*", "", text)  # Steam CDN placeholders
-    text = html.unescape(text)                      # &amp; &nbsp; &#39; etc.
-    text = re.sub(r"https?://\S+", "", text)        # full URLs
-    text = re.sub(r"//\S+", "", text)               # protocol-relative URLs
-    text = " ".join(text.split())                   # normalize whitespace
+    text = re.sub(r"<[^>]+>", " ", raw)                    # HTML tags
+    text = re.sub(r"\[[^\]]*\]", " ", text)                 # BBCode [b], [url=...], [img] → espacio para no fusionar palabras
+    text = re.sub(r"\{[^}]*\}", " ", text)                  # {STEAM_CLAN_IMAGE}, {h2}, {/h2}, etc.
+    text = html.unescape(text)                              # &amp; &nbsp; &#39; etc.
+    text = re.sub(r"https?://\S+", "", text)                # full URLs (https://...)
+    text = re.sub(r"(?<!\w)/\S+", "", text)                 # /path o //cdn tokens
+    text = re.sub(r"\s*\\\s*", " ", text)                   # backslash separators (\ Cache, \ Fixed)
+    text = " ".join(text.split())                           # normalize whitespace
     if len(text) > max_chars:
         text = text[:max_chars].rsplit(" ", 1)[0]
     return text
