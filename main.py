@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from settings import FRONTEND_URL, STEAM_API_KEY, STEAM_GAME
+from settings import FRONTEND_URL, JWT_SECRET, STEAM_API_KEY, STEAM_GAME
 from middleware import SecurityHeadersMiddleware
 from stores import (
     PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, MARKET_INDEX_CACHE_TTL, ITEM_HISTORY_CACHE_TTL,
