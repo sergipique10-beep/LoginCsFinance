@@ -1,3 +1,5 @@
+import asyncio
+import html
 import os
 import re
 import secrets
@@ -50,9 +52,11 @@ _refresh_store: dict[str, float] = {}             # jti → expires_at (monotoni
 PROFILE_CACHE_TTL = 82800    # 23 horas — free plan: 5 req/día
 INVENTORY_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
 MARKET_INDEX_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
+ITEM_HISTORY_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
 _profile_cache: dict[str, tuple[dict, float]] = {}
 _inventory_cache: dict[str, tuple[list, float]] = {}
-_market_index_cache: dict[str, tuple[dict, float]] = {}
+_market_index_cache: dict[str, tuple[list, float]] = {}
+_item_history_cache: dict[str, tuple[list, float]] = {}
 
 
 # ── Middleware: cabeceras de seguridad ─────────────────────────────────────────
@@ -616,13 +620,10 @@ async def get_inventory(
 
     if data:
         first = data[0]
-        logger.info("[DEBUG inventory] top-level keys: %s", list(first.keys()))
-        nested = first.get("item") or {}
-        if nested:
-            logger.info("[DEBUG inventory] nested item keys: %s", list(nested.keys()))
-            price_fields = {k: v for k, v in nested.items() if any(x in k.lower() for x in ("price", "sold", "delta"))}
-        else:
-            price_fields = {k: v for k, v in first.items() if any(x in k.lower() for x in ("price", "sold", "delta"))}
+        logger.info("[DEBUG inventory] keys del primer item: %s", list(first.keys()))
+        logger.info("[DEBUG inventory] float field: %s", first.get("float"))
+        logger.info("[DEBUG inventory] minfloat: %s | maxfloat: %s", first.get("minfloat"), first.get("maxfloat"))
+        price_fields = {k: v for k, v in first.items() if "price" in k.lower() or "sold" in k.lower() or "delta" in k.lower()}
         logger.info("[DEBUG inventory] price/sold fields: %s", price_fields)
 
     items = [_map_item(item) for item in data]
@@ -687,62 +688,97 @@ async def get_market_index(
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
+    logger.info("[DEBUG market-index] %s:%s → type=%s | %s", segment_type, segment_key, type(data).__name__, str(data)[:1000])
 
-    if isinstance(data, list):
-        raw_points: list = data
-        delta_24h = 0.0
-        top = None
-        turnover24h = 0.0
-        sold24h = 0
-    elif isinstance(data, dict):
-        history = data.get("history", [])
-        if isinstance(history, list):
-            raw_points = history
-        elif isinstance(history, dict):
-            raw_points = history.get("priceindex", [])
-            if not isinstance(raw_points, list):
-                logger.error("[market-index] 'priceindex' series has unexpected type: %s", type(raw_points).__name__)
-                raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
-        else:
-            logger.error("[market-index] 'history' has unexpected type: %s | sample: %s",
-                         type(history).__name__, str(history)[:200])
-            raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
-
-        changes_24h = data.get("changes", {}).get("24h", {})
-        delta_24h = 0.0
-        if isinstance(changes_24h, dict):
-            pi_change = changes_24h.get("priceindex", {})
-            if isinstance(pi_change, dict):
-                delta_24h = float(pi_change.get("change") or 0)
-
-        gainers = data.get("topmovers", {}).get("gainers", [])
-        top = gainers[0] if gainers else None
-        turnover24h = float(data.get("turnover24h") or 0)
-        sold24h = int(data.get("sold24h") or 0)
-    else:
-        logger.error("[market-index] unexpected top-level type: %s", type(data).__name__)
-        raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
-
-    if raw_points:
-        logger.info("[market-index] %d points | sample: %s", len(raw_points), raw_points[0])
-    else:
-        logger.warning("[market-index] history list is empty")
-
-    result = {
-        "turnover24h": turnover24h,
-        "sold24h": sold24h,
-        "delta24h": delta_24h,
-        "hottestItem": {
-            "name": top["markethashname"] if top else "—",
-            "change24h": float(top["change24h"]) if top else 0.0,
-        },
-        "history": [_map_market_index_point(p) for p in raw_points],
-    }
-    _market_index_cache[cache_key] = (result, now)
-    return result
+    points = [_map_market_index_point(p) for p in (data if isinstance(data, list) else [])]
+    _market_index_cache[cache_key] = (points, now)
+    return points
 
 
-def _map_news_item(item: dict, index: int) -> dict:
+@app.get("/item/history", summary="Historial de precios de un item CS2")
+async def get_item_history(
+    request: Request,
+    name: str,
+    interval: str = "10",
+    user: dict = Depends(require_jwt),
+):
+    _rate_limit(_get_client_ip(request))
+
+    cache_key = f"{name}:{interval}"
+    now = time.monotonic()
+    cached = _item_history_cache.get(cache_key)
+    if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL:
+        return cached[0]
+
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/history",
+            params={"key": STEAM_API_KEY, "market_hash_name": name, "interval": interval, "format": "json"},
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Steam history request timed out")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code == 402:
+        logger.warning("[item-history] daily limit reached for %s", name)
+        return []
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    raw = resp.json() if isinstance(resp.json(), list) else []
+    points = sorted(
+        [
+            {
+                "date":   p.get("createdat", "")[:10],
+                "price":  float(p.get("price") or 0),
+                "volume": int(p.get("sold") or 0),
+            }
+            for p in raw if p.get("price")
+        ],
+        key=lambda p: p["date"],
+    )
+    _item_history_cache[cache_key] = (points, now)
+    return points
+
+
+async def _fetch_og_image(client: httpx.AsyncClient, url: str) -> str:
+    if not url:
+        return ""
+    try:
+        resp = await client.get(
+            url, timeout=4.0, follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if resp.status_code != 200:
+            return ""
+        match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](https?://[^"\']+)["\']',
+            resp.text, re.IGNORECASE,
+        ) or re.search(
+            r'<meta[^>]+content=["\'](https?://[^"\']+)["\'][^>]+property=["\']og:image["\']',
+            resp.text, re.IGNORECASE,
+        )
+        return match.group(1) if match else ""
+    except Exception:
+        return ""
+
+
+def _clean_news_content(raw: str, max_chars: int = 220) -> str:
+    text = re.sub(r"<[^>]+>", " ", raw)                    # HTML tags
+    text = re.sub(r"\[[^\]]*\]", " ", text)                 # BBCode [b], [url=...], [img] → espacio para no fusionar palabras
+    text = re.sub(r"\{[^}]*\}", " ", text)                  # {STEAM_CLAN_IMAGE}, {h2}, {/h2}, etc.
+    text = html.unescape(text)                              # &amp; &nbsp; &#39; etc.
+    text = re.sub(r"https?://\S+", "", text)                # full URLs (https://...)
+    text = re.sub(r"(?<!\w)/\S+", "", text)                 # /path o //cdn tokens
+    text = re.sub(r"\s*\\\s*", " ", text)                   # backslash separators (\ Cache, \ Fixed)
+    text = " ".join(text.split())                           # normalize whitespace
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(" ", 1)[0]
+    return text
+
+
+def _map_news_item(item: dict, index: int, image_url: str = "") -> dict:
     feedname  = item.get("feedname", "").lower()
     feedlabel = item.get("feedlabel", "NEWS")
 
@@ -760,6 +796,8 @@ def _map_news_item(item: dict, index: int) -> dict:
 
     author = item.get("author", "").strip()
 
+    excerpt = _clean_news_content(item.get("contents", ""))
+
     return {
         "id":            str(item.get("gid", index)),
         "category":      feedlabel.upper(),
@@ -767,9 +805,10 @@ def _map_news_item(item: dict, index: int) -> dict:
         "title":         item.get("title", ""),
         "source":        author if author else feedlabel,
         "date":          date_str,
-        "imageUrl":      "",
+        "imageUrl":      image_url,
         "featured":      index == 0,
         "url":           item.get("url", ""),
+        "content":       excerpt,
     }
 
 
@@ -791,7 +830,11 @@ async def get_cs2_news(request: Request, count: int = 5):
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     newsitems = resp.json().get("appnews", {}).get("newsitems", [])
-    return [_map_news_item(item, i) for i, item in enumerate(newsitems)]
+    images = await asyncio.gather(*[
+        _fetch_og_image(request.app.state.http_client, item.get("url", ""))
+        for item in newsitems
+    ])
+    return [_map_news_item(item, i, images[i]) for i, item in enumerate(newsitems)]
 
 
 if __name__ == "__main__":
