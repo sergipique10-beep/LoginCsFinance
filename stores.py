@@ -41,5 +41,5 @@ ITEM_HISTORY_CACHE_TTL = 82800
 
 _profile_cache: dict[str, tuple[dict, float]] = {}
 _inventory_cache: dict[str, tuple[list, float]] = {}
-_market_index_cache: dict[str, tuple[list, float]] = {}
+_market_index_cache: dict[str, tuple[dict, float]] = {}
 _item_history_cache: dict[str, tuple[list, float]] = {}

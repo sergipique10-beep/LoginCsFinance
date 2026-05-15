@@ -306,9 +306,53 @@ async def get_market_index(
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
-    points = [_map_market_index_point(p) for p in (data if isinstance(data, list) else [])]
-    _market_index_cache[cache_key] = (points, now)
-    return points
+
+    if isinstance(data, list):
+        raw_points = data
+        delta_24h = 0.0
+        top = None
+        turnover24h = 0.0
+        sold24h = 0
+    elif isinstance(data, dict):
+        history = data.get("history", [])
+        if isinstance(history, list):
+            raw_points = history
+        elif isinstance(history, dict):
+            raw_points = history.get("priceindex", [])
+            if not isinstance(raw_points, list):
+                logger.error("[market-index] 'priceindex' unexpected type: %s", type(raw_points).__name__)
+                raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+        else:
+            logger.error("[market-index] 'history' unexpected type: %s | sample: %s", type(history).__name__, str(history)[:200])
+            raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+
+        changes_24h = data.get("changes", {}).get("24h", {})
+        delta_24h = 0.0
+        if isinstance(changes_24h, dict):
+            pi_change = changes_24h.get("priceindex", {})
+            if isinstance(pi_change, dict):
+                delta_24h = float(pi_change.get("change") or 0)
+
+        gainers = data.get("topmovers", {}).get("gainers", [])
+        top = gainers[0] if gainers else None
+        turnover24h = float(data.get("turnover24h") or 0)
+        sold24h = int(data.get("sold24h") or 0)
+    else:
+        logger.error("[market-index] unexpected top-level type: %s", type(data).__name__)
+        raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+
+    result = {
+        "turnover24h": turnover24h,
+        "sold24h": sold24h,
+        "delta24h": delta_24h,
+        "hottestItem": {
+            "name": top["markethashname"] if top else "—",
+            "change24h": float(top["change24h"]) if top else 0.0,
+        },
+        "history": [_map_market_index_point(p) for p in raw_points],
+    }
+    _market_index_cache[cache_key] = (result, now)
+    return result
 
 
 @app.get("/item/history", summary="Historial de precios de un item CS2")
