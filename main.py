@@ -1,35 +1,28 @@
 import asyncio
 import html
-import os
 import re
-import secrets
 import time
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from urllib.parse import urlencode
 import uvicorn
 
 import httpx
-import jwt
-from fastapi import FastAPI, HTTPException, Request, Depends, Cookie
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
 
-from settings import BASE_URL, FRONTEND_URL, JWT_SECRET, ALLOWED_REDIRECT_ORIGINS, STEAM_API_KEY, STEAM_GAME
+from settings import FRONTEND_URL, STEAM_API_KEY, STEAM_GAME
 from middleware import SecurityHeadersMiddleware
 from stores import (
-    NONCE_TTL, CODE_TTL, RATE_LIMIT_CALLS, RATE_LIMIT_WINDOW,
-    ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL, TOKEN_AUDIENCE,
     PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, MARKET_INDEX_CACHE_TTL, ITEM_HISTORY_CACHE_TTL,
-    _nonces, _auth_codes, _refresh_store, _rate_store,
     _profile_cache, _inventory_cache, _market_index_cache, _item_history_cache,
 )
+from auth.router import router as auth_router
+from auth.service import require_jwt, _get_client_ip, _rate_limit
 
 logger = logging.getLogger("uvicorn.error")
 
-STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
@@ -68,137 +61,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 app.add_middleware(SecurityHeadersMiddleware)
-
-
-# ── Helpers internos ───────────────────────────────────────────────────────────
-
-def _get_client_ip(request: Request) -> str:
-    """Devuelve la IP real del cliente respetando proxies de confianza.
-
-    En producción el proxy inverso (nginx, Caddy…) inyecta X-Forwarded-For.
-    Se toma únicamente el primer valor de la cadena para evitar spoofing.
-    """
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _rate_limit(ip: str) -> None:
-    now = time.monotonic()
-    cutoff = now - RATE_LIMIT_WINDOW
-    calls = [t for t in _rate_store[ip] if t > cutoff]
-    if len(calls) >= RATE_LIMIT_CALLS:
-        raise HTTPException(status_code=429, detail="Too many requests")
-    calls.append(now)
-    _rate_store[ip] = calls
-
-
-def _issue_nonce(redirect_origin: str) -> str:
-    nonce = secrets.token_urlsafe(32)
-    _nonces[nonce] = (time.monotonic(), redirect_origin)
-    return nonce
-
-
-def _consume_nonce(nonce: str) -> str | None:
-    """Consume el nonce y devuelve el redirect_origin asociado, o None si inválido/expirado."""
-    now = time.monotonic()
-    for k in [k for k, (t, _) in _nonces.items() if now - t > NONCE_TTL]:
-        del _nonces[k]
-    entry = _nonces.pop(nonce, None)
-    if entry is None:
-        return None
-    issued_at, redirect_origin = entry
-    if now - issued_at > NONCE_TTL:
-        return None
-    return redirect_origin
-
-
-def _issue_tokens(steam_id: str) -> tuple[str, str]:
-    """Genera un par (access_token, refresh_token) para el steam_id dado.
-
-    El access_token lleva type="access" y expira en ACCESS_TOKEN_TTL.
-    El refresh_token lleva type="refresh", un jti único y expira en REFRESH_TOKEN_TTL.
-    El jti del refresh_token queda registrado en _refresh_store para poder revocarlo.
-    """
-    now = datetime.now(timezone.utc)
-
-    access_token = jwt.encode(
-        {
-            "sub": steam_id,
-            "type": "access",
-            "aud": TOKEN_AUDIENCE,
-            "iat": now,
-            "exp": now + ACCESS_TOKEN_TTL,
-        },
-        JWT_SECRET,
-        algorithm="HS256",
-    )
-
-    jti = secrets.token_urlsafe(32)
-    refresh_exp = now + REFRESH_TOKEN_TTL
-
-    refresh_token = jwt.encode(
-        {
-            "sub": steam_id,
-            "type": "refresh",
-            "aud": TOKEN_AUDIENCE,
-            "jti": jti,
-            "iat": now,
-            "exp": refresh_exp,
-        },
-        JWT_SECRET,
-        algorithm="HS256",
-    )
-
-    # Registrar el jti en el store usando tiempo monotónico para la limpieza lazy
-    _refresh_store[jti] = time.monotonic() + REFRESH_TOKEN_TTL.total_seconds()
-
-    return access_token, refresh_token
-
-
-def _set_refresh_cookie(response: JSONResponse, refresh_token: str) -> None:
-    """Adjunta la cookie HttpOnly que transporta el refresh token."""
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=False,  # TODO prod: cambiar a True (ver CLAUDE.md § Pendiente para producción)
-        samesite="strict",
-        max_age=int(REFRESH_TOKEN_TTL.total_seconds()),
-        path="/",  # "/" porque el proxy Angular reescribe /api/auth/* → /auth/*
-    )
-
-
-# ── Dependencia JWT (rutas protegidas) ─────────────────────────────────────────
-
-_bearer = HTTPBearer()
-
-
-def require_jwt(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
-) -> dict:
-    """Valida el Bearer token y garantiza que sea de tipo 'access'.
-
-    Rechaza explícitamente refresh tokens presentados como access tokens,
-    evitando que un token robado de la cookie sirva para llamadas a la API.
-    """
-    try:
-        payload = jwt.decode(
-            credentials.credentials,
-            JWT_SECRET,
-            algorithms=["HS256"],
-            audience=TOKEN_AUDIENCE,
-        )
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    if payload.get("type") != "access":
-        raise HTTPException(status_code=401, detail="Invalid token type")
-
-    return payload
+app.include_router(auth_router)
 
 
 # ── Inventory mapper ──────────────────────────────────────────────────────────
@@ -288,199 +151,6 @@ def _map_item(item: dict) -> dict:
 @app.get("/")
 def root():
     return {"status": "ok"}
-
-
-@app.get("/auth/steam", summary="Redirige al login de Steam")
-def steam_login(request: Request, platform: str = "web"):
-    _rate_limit(_get_client_ip(request))
-
-    if platform == "android":
-        redirect_origin = next(
-            (o for o in ALLOWED_REDIRECT_ORIGINS if o.startswith("myapp://")),
-            None,
-        )
-        if redirect_origin is None:
-            raise HTTPException(status_code=400, detail="Android redirect origin not configured")
-    else:
-        redirect_origin = FRONTEND_URL
-
-    if redirect_origin not in ALLOWED_REDIRECT_ORIGINS:
-        raise HTTPException(status_code=400, detail="Redirect origin not allowed")
-
-    nonce = _issue_nonce(redirect_origin)
-    params = {
-        "openid.ns": "http://specs.openid.net/auth/2.0",
-        "openid.mode": "checkid_setup",
-        "openid.return_to": f"{BASE_URL}/auth/steam/callback?nonce={nonce}",
-        "openid.realm": BASE_URL,
-        "openid.identity": "http://specs.openid.net/auth/2.0/identifier_select",
-        "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select",
-    }
-    return RedirectResponse(url=f"{STEAM_OPENID_URL}?{urlencode(params)}")
-
-
-@app.get("/auth/steam/callback", summary="Callback OpenID de Steam — emite auth code")
-async def steam_callback(request: Request, nonce: str = ""):
-    # 1. CSRF: verificar nonce y recuperar el redirect_origin sellado al inicio del flujo
-    redirect_origin = _consume_nonce(nonce) if nonce else None
-    if redirect_origin is None:
-        raise HTTPException(status_code=400, detail="Invalid or expired nonce")
-
-    query_params = dict(request.query_params)
-
-    # 2. Replay: return_to debe apuntar a nuestro propio callback
-    return_to = query_params.get("openid.return_to", "")
-    if not return_to.startswith(f"{BASE_URL}/auth/steam/callback"):
-        raise HTTPException(status_code=400, detail="Tampered return_to URL")
-
-    # 3. Verificar con Steam
-    validation_params = {**query_params, "openid.mode": "check_authentication"}
-    try:
-        resp = await request.app.state.http_client.post(STEAM_OPENID_URL, data=validation_params)
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Steam validation timed out")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Could not reach Steam servers")
-
-    if "is_valid:true" not in resp.text:
-        raise HTTPException(status_code=401, detail="Steam authentication failed")
-
-    # 4. Extraer y validar Steam ID (exactamente 17 dígitos)
-    claimed_id = query_params.get("openid.claimed_id", "")
-    match = re.search(r"/openid/id/(\d{17})$", claimed_id)
-    if not match:
-        raise HTTPException(status_code=400, detail="Could not parse Steam ID")
-
-    steam_id = match.group(1)
-
-    # 5. Emitir auth code de un solo uso (TTL CODE_TTL segundos)
-    code = secrets.token_urlsafe(32)
-    _auth_codes[code] = (steam_id, time.monotonic() + CODE_TTL)
-
-    return RedirectResponse(url=f"{redirect_origin}/auth/callback?code={code}")
-
-
-@app.post("/auth/token", summary="Canjea el auth code por access token + refresh cookie")
-async def exchange_token(request: Request):
-    _rate_limit(_get_client_ip(request))
-
-    body = await request.json()
-    code: str = body.get("code", "")
-
-    if not code:
-        raise HTTPException(status_code=400, detail="Missing code")
-
-    # Consumir el código (operación atómica: leer + borrar)
-    entry = _auth_codes.pop(code, None)
-    if entry is None:
-        raise HTTPException(status_code=400, detail="Invalid or already used code")
-
-    steam_id, expires_at = entry
-    if time.monotonic() > expires_at:
-        raise HTTPException(status_code=400, detail="Code expired")
-
-    access_token, refresh_token = _issue_tokens(steam_id)
-
-    response = JSONResponse({"access_token": access_token})
-    _set_refresh_cookie(response, refresh_token)
-    return response
-
-
-@app.post("/auth/dev-token", summary="[DEV ONLY] Emite tokens para un steam_id sin pasar por Steam OpenID")
-async def dev_token(request: Request):
-    # Activo solo con DEBUG=true en .env — devuelve 404 en cualquier otro entorno
-    if os.getenv("DEBUG", "false").lower() != "true":
-        raise HTTPException(status_code=404, detail="Not found")
-
-    body = await request.json()
-    steam_id: str = body.get("steam_id", "")
-
-    if not re.match(r"^\d{17}$", steam_id):
-        raise HTTPException(status_code=400, detail="steam_id must be exactly 17 digits")
-
-    access_token, refresh_token = _issue_tokens(steam_id)
-    response = JSONResponse({"access_token": access_token})
-    _set_refresh_cookie(response, refresh_token)
-    return response
-
-
-@app.post("/auth/refresh", summary="Rota el refresh token y devuelve nuevo access token")
-async def refresh_tokens(
-    request: Request,
-    refresh_token: str | None = Cookie(default=None),
-):
-    _rate_limit(_get_client_ip(request))
-
-    if not refresh_token:
-        raise HTTPException(status_code=401, detail="Missing refresh token")
-
-    # Limpieza lazy: purgar JTIs expirados antes de operar sobre el store
-    now_mono = time.monotonic()
-    expired_jtis = [jti for jti, exp in _refresh_store.items() if now_mono > exp]
-    for jti in expired_jtis:
-        del _refresh_store[jti]
-
-    # Decodificar y validar el refresh token
-    try:
-        payload = jwt.decode(
-            refresh_token,
-            JWT_SECRET,
-            algorithms=["HS256"],
-            audience=TOKEN_AUDIENCE,
-        )
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Refresh token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
-
-    if payload.get("type") != "refresh":
-        raise HTTPException(status_code=401, detail="Invalid token type")
-
-    jti = payload.get("jti")
-    if not jti or jti not in _refresh_store:
-        # El JTI no existe: nunca fue válido, ya fue rotado o fue revocado
-        raise HTTPException(status_code=401, detail="Refresh token revoked or reused")
-
-    steam_id: str = payload["sub"]
-
-    # Revocar el JTI anterior (rotación: cada refresh_token es de un solo uso)
-    del _refresh_store[jti]
-
-    access_token, new_refresh_token = _issue_tokens(steam_id)
-
-    response = JSONResponse({"access_token": access_token})
-    _set_refresh_cookie(response, new_refresh_token)
-    return response
-
-
-@app.post("/auth/logout", summary="Revoca el refresh token y limpia la cookie")
-async def logout(
-    refresh_token: str | None = Cookie(default=None),
-):
-    if refresh_token:
-        try:
-            payload = jwt.decode(
-                refresh_token,
-                JWT_SECRET,
-                algorithms=["HS256"],
-                audience=TOKEN_AUDIENCE,
-            )
-            jti = payload.get("jti")
-            if jti:
-                _refresh_store.pop(jti, None)
-        except jwt.InvalidTokenError:
-            # Token inválido o expirado: no hay JTI que revocar, continuar igualmente
-            pass
-
-    response = JSONResponse({"message": "Logged out"})
-    response.delete_cookie(
-        key="refresh_token",
-        path="/",
-        httponly=True,
-        secure=False,  # TODO prod: cambiar a True (ver CLAUDE.md § Pendiente para producción)
-        samesite="strict",
-    )
-    return response
 
 
 @app.get("/me", summary="Info del usuario autenticado")
