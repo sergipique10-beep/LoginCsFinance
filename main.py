@@ -266,52 +266,67 @@ def _resolve_phase(item: dict) -> str | None:
 
 
 def _map_item(item: dict) -> dict:
-    latest = item.get("pricelatestsell") or 0
+    # /float/assets?with_items=1 nests market data under "item"; /inventory is flat
+    d = item.get("item") or item
+
+    latest = (
+        d.get("pricelatestsell") or
+        d.get("price") or
+        d.get("lowestprice") or
+        d.get("priceusd") or
+        0
+    )
+    p24h = d.get("pricelatestsell24h") or d.get("price24h")
+    p7d  = d.get("pricelatestsell7d")  or d.get("price7d")
+    p30d = d.get("pricelatestsell30d") or d.get("price30d")
+
+    float_data = item.get("float") or d.get("float") or {}
+
     return {
         "id":             item.get("assetid") or item.get("id", ""),
-        "name":           item.get("marketname", ""),
-        "slug":           item.get("slug", ""),
-        "weaponType":     item.get("weapontype"),
-        "itemName":       item.get("itemname"),
-        "itemType":       item.get("itemtype"),
-        "image":          item.get("image", ""),
-        "rarity":         item.get("rarity", "Base Grade"),
-        "rarityColor":    item.get("color", "b0c3d9"),
-        "borderColor":    item.get("bordercolor", "b0c3d9"),
-        "quality":        item.get("quality", "Normal"),
-        "isStatTrak":     bool(item.get("isstattrak", False)),
-        "isSouvenir":     bool(item.get("issouvenir", False)),
-        "isStar":         bool(item.get("isstar", False)),
-        "exterior":       item.get("tag5"),
-        "floatValue":     (item.get("float") or {}).get("floatvalue"),
-        "floatMin":       item.get("minfloat"),
-        "floatMax":       item.get("maxfloat"),
-        "paintIndex":     item.get("paintindex"),
-        "phase":          _resolve_phase(item),
+        "name":           d.get("marketname", "") or d.get("market_hash_name", ""),
+        "slug":           d.get("slug", ""),
+        "weaponType":     d.get("weapontype"),
+        "itemName":       d.get("itemname"),
+        "itemType":       d.get("itemtype"),
+        "image":          d.get("image", ""),
+        "rarity":         d.get("rarity", "Base Grade"),
+        "rarityColor":    d.get("color", "b0c3d9"),
+        "borderColor":    d.get("bordercolor", "b0c3d9"),
+        "quality":        d.get("quality", "Normal"),
+        "isStatTrak":     bool(d.get("isstattrak", False)),
+        "isSouvenir":     bool(d.get("issouvenir", False)),
+        "isStar":         bool(d.get("isstar", False)),
+        "exterior":       d.get("tag5") or d.get("exterior"),
+        "floatValue":     float_data.get("floatvalue") if isinstance(float_data, dict) else None,
+        "floatMin":       d.get("minfloat"),
+        "floatMax":       d.get("maxfloat"),
+        "paintIndex":     d.get("paintindex"),
+        "phase":          _resolve_phase(d),
         "priceLatest":    latest,
-        "priceSafe":      item.get("pricesafe") or 0,
-        "priceMin":       item.get("pricemin") or 0,
-        "priceMax":       item.get("pricemax") or 0,
-        "priceDelta24h":  _safe_delta(latest, item.get("pricelatestsell24h")),
-        "priceDelta7d":   _safe_delta(latest, item.get("pricelatestsell7d")),
-        "priceDelta30d":  _safe_delta(latest, item.get("pricelatestsell30d")),
-        "priceReal":      item.get("pricereal"),
+        "priceSafe":      d.get("pricesafe") or 0,
+        "priceMin":       d.get("pricemin") or 0,
+        "priceMax":       d.get("pricemax") or 0,
+        "priceDelta24h":  _safe_delta(latest, p24h),
+        "priceDelta7d":   _safe_delta(latest, p7d),
+        "priceDelta30d":  _safe_delta(latest, p30d),
+        "priceReal":      d.get("pricereal"),
         "externalPrices": [
             {"market": p["market"], "price": p["price"], "quantity": p["quantity"]}
-            for p in item.get("prices", [])
+            for p in d.get("prices", [])
         ],
-        "sold24h":        item.get("sold24h") or 0,
-        "sold7d":         item.get("sold7d") or 0,
-        "sold30d":        item.get("sold30d") or 0,
-        "soldTotal":      item.get("soldtotal") or 0,
-        "offerVolume":    item.get("offervolume") or 0,
-        "buyOrderVolume": item.get("buyordervolume") or 0,
-        "buyOrderPrice":  item.get("buyorderprice") or 0,
-        "hoursToSold":    item.get("hourstosold") or 0,
-        "marketable":     bool(item.get("marketable", True)),
-        "tradable":       bool(item.get("tradable", True)),
-        "tradeLockDays":  item.get("markettradablerestriction"),
-        "steamUrl":       item.get("steamurl"),
+        "sold24h":        d.get("sold24h") or 0,
+        "sold7d":         d.get("sold7d") or 0,
+        "sold30d":        d.get("sold30d") or 0,
+        "soldTotal":      d.get("soldtotal") or 0,
+        "offerVolume":    d.get("offervolume") or 0,
+        "buyOrderVolume": d.get("buyordervolume") or 0,
+        "buyOrderPrice":  d.get("buyorderprice") or 0,
+        "hoursToSold":    d.get("hourstosold") or 0,
+        "marketable":     bool(d.get("marketable", True)),
+        "tradable":       bool(d.get("tradable", True)),
+        "tradeLockDays":  d.get("markettradablerestriction"),
+        "steamUrl":       d.get("steamurl"),
     }
 
 
@@ -567,13 +582,14 @@ async def get_inventory(
 
     try:
         resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/inventory",
+            f"{STEAM_WEB_API}/float/assets",
             params={
                 "steam_id": steam_id,
                 "game": STEAM_GAME,
                 "key": STEAM_API_KEY,
                 "language": "english",
                 "limit": 5000,
+                "with_items": 1,
             },
         )
     except httpx.TimeoutException:
@@ -583,27 +599,30 @@ async def get_inventory(
 
     if resp.status_code == 403:
         raise HTTPException(status_code=403, detail="Inventory is private")
-    if resp.status_code == 410:
-        return []  # no items for this game
-    if resp.status_code == 411:
-        return []  # no tradeable items
+    if resp.status_code in (410, 411):
+        return []
     if resp.status_code == 429:
         raise HTTPException(status_code=429, detail="Steam rate limit — retry later")
     if resp.status_code != 200:
-        logger.error("steamwebapi /inventory → %s: %.500s", resp.status_code, resp.text)
+        logger.error("steamwebapi /float/assets → %s: %.500s", resp.status_code, resp.text)
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
 
     if not isinstance(data, list):
-        logger.error("steamwebapi /inventory unexpected format: %.500s", resp.text)
+        logger.error("steamwebapi /float/assets unexpected format: %.500s", resp.text)
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
     if data:
         first = data[0]
-        logger.info("[DEBUG inventory] keys del primer item: %s", list(first.keys()))
-        logger.info("[DEBUG inventory] float field: %s", first.get("float"))
-        logger.info("[DEBUG inventory] minfloat: %s | maxfloat: %s", first.get("minfloat"), first.get("maxfloat"))
+        logger.info("[DEBUG inventory] top-level keys: %s", list(first.keys()))
+        nested = first.get("item") or {}
+        if nested:
+            logger.info("[DEBUG inventory] nested item keys: %s", list(nested.keys()))
+            price_fields = {k: v for k, v in nested.items() if any(x in k.lower() for x in ("price", "sold", "delta"))}
+        else:
+            price_fields = {k: v for k, v in first.items() if any(x in k.lower() for x in ("price", "sold", "delta"))}
+        logger.info("[DEBUG inventory] price/sold fields: %s", price_fields)
 
     items = [_map_item(item) for item in data]
     _inventory_cache[steam_id] = (items, now)
