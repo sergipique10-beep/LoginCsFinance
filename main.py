@@ -306,8 +306,6 @@ async def get_market_index(
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
-    logger.info("[DEBUG market-index] %s:%s → type=%s | %s", segment_type, segment_key, type(data).__name__, str(data)[:1000])
-
     points = [_map_market_index_point(p) for p in (data if isinstance(data, list) else [])]
     _market_index_cache[cache_key] = (points, now)
     return points
