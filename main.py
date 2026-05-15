@@ -7,6 +7,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
+import uvicorn
 
 import httpx
 import jwt
@@ -51,7 +52,7 @@ INVENTORY_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
 MARKET_INDEX_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
 _profile_cache: dict[str, tuple[dict, float]] = {}
 _inventory_cache: dict[str, tuple[list, float]] = {}
-_market_index_cache: dict[str, tuple[list, float]] = {}
+_market_index_cache: dict[str, tuple[dict, float]] = {}
 
 
 # ── Middleware: cabeceras de seguridad ─────────────────────────────────────────
@@ -631,34 +632,34 @@ async def get_inventory(
 
 # ── Market index mapper ───────────────────────────────────────────────────────
 
+def _first_not_none(d: dict, *keys):
+    """Devuelve el primer valor no-None encontrado entre las keys dadas."""
+    for k in keys:
+        v = d.get(k)
+        if v is not None:
+            return v
+    return None
+
+
 def _map_market_index_point(point: dict) -> dict:
-    # steamwebapi may use different field names — try all known variants
-    date = (
-        point.get("segment") or point.get("date") or
-        point.get("time") or point.get("timestamp") or ""
-    )
-    price = float(
-        point.get("volume_usd") or point.get("value") or
-        point.get("price") or point.get("avg_price") or 0
-    )
-    volume = int(
-        point.get("volume") or point.get("count") or
-        point.get("transactions") or point.get("items") or 0
-    )
-    return {"date": date, "price": price, "volume": volume}
+    # Cada punto de la serie "priceindex" tiene: ts (unix), value (precio), change (% vs anterior), trend, win
+    return {
+        "date":   str(point.get("ts", "")),
+        "price":  float(point.get("value") or 0),
+        "change": float(point.get("change") or 0),
+        "volume": int(point.get("volume") or 0),
+    }
 
 
 # ── Market routes ─────────────────────────────────────────────────────────────
 
-@app.get("/market/index", summary="Índice de mercado CS2 por timeframe")
+@app.get("/market/index", summary="Índice de mercado global CS2")
 async def get_market_index(
     request: Request,
     tf: str = "24h",
-    segment_type: str = "rarity",
-    segment_key: str = "Covert",
     user: dict = Depends(require_jwt),
 ):
-    cache_key = f"{segment_type}:{segment_key}"
+    cache_key = tf
     now = time.monotonic()
     cached = _market_index_cache.get(cache_key)
     if cached and now - cached[1] < MARKET_INDEX_CACHE_TTL:
@@ -669,8 +670,6 @@ async def get_market_index(
             f"{STEAM_WEB_API}/market-index/cs2",
             params={
                 "key": STEAM_API_KEY,
-                "segment_type": segment_type,
-                "segment_key": segment_key,
                 "format": "json",
             },
         )
@@ -680,19 +679,67 @@ async def get_market_index(
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
 
     if resp.status_code == 402:
-        logger.warning("[market-index] daily limit reached — returning empty")
-        return []
+        logger.warning("[market-index] daily limit reached (402)")
+        raise HTTPException(status_code=429, detail="Steam API daily limit reached — try again tomorrow")
 
     if resp.status_code != 200:
         logger.error("[market-index] steamwebapi returned %s | body: %s", resp.status_code, resp.text[:500])
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
-    logger.info("[DEBUG market-index] %s:%s → type=%s | %s", segment_type, segment_key, type(data).__name__, str(data)[:1000])
 
-    points = [_map_market_index_point(p) for p in (data if isinstance(data, list) else [])]
-    _market_index_cache[cache_key] = (points, now)
-    return points
+    if isinstance(data, list):
+        raw_points: list = data
+        delta_24h = 0.0
+        top = None
+        turnover24h = 0.0
+        sold24h = 0
+    elif isinstance(data, dict):
+        history = data.get("history", [])
+        if isinstance(history, list):
+            raw_points = history
+        elif isinstance(history, dict):
+            raw_points = history.get("priceindex", [])
+            if not isinstance(raw_points, list):
+                logger.error("[market-index] 'priceindex' series has unexpected type: %s", type(raw_points).__name__)
+                raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+        else:
+            logger.error("[market-index] 'history' has unexpected type: %s | sample: %s",
+                         type(history).__name__, str(history)[:200])
+            raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+
+        changes_24h = data.get("changes", {}).get("24h", {})
+        delta_24h = 0.0
+        if isinstance(changes_24h, dict):
+            pi_change = changes_24h.get("priceindex", {})
+            if isinstance(pi_change, dict):
+                delta_24h = float(pi_change.get("change") or 0)
+
+        gainers = data.get("topmovers", {}).get("gainers", [])
+        top = gainers[0] if gainers else None
+        turnover24h = float(data.get("turnover24h") or 0)
+        sold24h = int(data.get("sold24h") or 0)
+    else:
+        logger.error("[market-index] unexpected top-level type: %s", type(data).__name__)
+        raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+
+    if raw_points:
+        logger.info("[market-index] %d points | sample: %s", len(raw_points), raw_points[0])
+    else:
+        logger.warning("[market-index] history list is empty")
+
+    result = {
+        "turnover24h": turnover24h,
+        "sold24h": sold24h,
+        "delta24h": delta_24h,
+        "hottestItem": {
+            "name": top["markethashname"] if top else "—",
+            "change24h": float(top["change24h"]) if top else 0.0,
+        },
+        "history": [_map_market_index_point(p) for p in raw_points],
+    }
+    _market_index_cache[cache_key] = (result, now)
+    return result
 
 
 def _map_news_item(item: dict, index: int) -> dict:
@@ -748,7 +795,7 @@ async def get_cs2_news(request: Request, count: int = 5):
 
 
 if __name__ == "__main__":
-    import uvicorn
+    
     uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
 
 
