@@ -3,9 +3,8 @@ import re
 import secrets
 import time
 import logging
-from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 import uvicorn
 
@@ -15,69 +14,21 @@ from fastapi import FastAPI, HTTPException, Request, Depends, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from settings import BASE_URL, FRONTEND_URL, JWT_SECRET, ALLOWED_REDIRECT_ORIGINS, STEAM_API_KEY, STEAM_GAME
+from middleware import SecurityHeadersMiddleware
+from stores import (
+    NONCE_TTL, CODE_TTL, RATE_LIMIT_CALLS, RATE_LIMIT_WINDOW,
+    ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL, TOKEN_AUDIENCE,
+    PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, MARKET_INDEX_CACHE_TTL,
+    _nonces, _auth_codes, _refresh_store, _rate_store,
+    _profile_cache, _inventory_cache, _market_index_cache,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
 STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
-
-NONCE_TTL = 300              # segundos que un nonce permanece válido
-CODE_TTL = 30                # segundos que un auth code de un solo uso permanece válido
-RATE_LIMIT_CALLS = 10        # peticiones máximas por ventana por IP
-RATE_LIMIT_WINDOW = 60       # segundos
-
-ACCESS_TOKEN_TTL = timedelta(minutes=30)
-REFRESH_TOKEN_TTL = timedelta(days=7)
-
-TOKEN_AUDIENCE = "cs-finance"
-
-
-# ── Stores en memoria ──────────────────────────────────────────────────────────
-# ADVERTENCIA: estos stores son válidos únicamente para despliegues con un solo
-# worker. En entornos multi-worker o multi-instancia deben reemplazarse por Redis.
-# TODO: reemplazar _nonces, _auth_codes y _refresh_store por Redis con TTL nativo.
-
-_nonces: dict[str, tuple[float, str]] = {}  # nonce → (issued_at, redirect_origin)
-_rate_store: dict[str, list[float]] = defaultdict(list)
-_auth_codes: dict[str, tuple[str, float]] = {}   # code → (steam_id, expires_at)
-_refresh_store: dict[str, float] = {}             # jti → expires_at (monotonic)
-
-# Cache de perfiles Steam: evita llamar a steamwebapi.com en cada request.
-# steam_id → (profile_dict, cached_at_monotonic)
-PROFILE_CACHE_TTL = 82800    # 23 horas — free plan: 5 req/día
-INVENTORY_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
-MARKET_INDEX_CACHE_TTL = 82800  # 23 horas — free plan: 5 req/día
-_profile_cache: dict[str, tuple[dict, float]] = {}
-_inventory_cache: dict[str, tuple[list, float]] = {}
-_market_index_cache: dict[str, tuple[dict, float]] = {}
-
-
-# ── Middleware: cabeceras de seguridad ─────────────────────────────────────────
-
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Strict-Transport-Security"] = (
-            "max-age=63072000; includeSubDomains; preload"
-        )
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self'; "
-            "img-src 'self' https://avatars.steamstatic.com; "
-            "connect-src 'self'; "
-            "frame-ancestors 'none'"
-        )
-        response.headers["Permissions-Policy"] = (
-            "camera=(), microphone=(), geolocation=()"
-        )
-        return response
 
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
