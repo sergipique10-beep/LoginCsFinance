@@ -1,12 +1,38 @@
 import asyncio
 import html
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
 
 # ── Inventory mappers ─────────────────────────────────────────────────────────
+
+def _delta_from_history(pts: list, days: int, latest: float) -> float:
+    """Returns the % change between `latest` and the price `days` days ago in `pts`."""
+    if not pts or not latest:
+        return 0.0
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    past = [p for p in pts if p["date"] <= cutoff]
+    if not past:
+        return 0.0
+    ref = past[-1]["price"]
+    if not ref:
+        return 0.0
+    return round((latest - ref) / ref * 100, 2)
+
+
+def _best_price_from_markets(prices: list) -> float:
+    """Returns the best available price from the external prices array (Steam market preferred)."""
+    if not prices:
+        return 0.0
+    for p in prices:
+        if "steam" in str(p.get("market") or "").lower():
+            v = float(p.get("price") or p.get("value") or 0)
+            if v:
+                return v
+    return float(prices[0].get("price") or prices[0].get("value") or 0)
+
 
 def _safe_delta(new: float | None, old: float | None) -> float:
     if not new or not old:

@@ -12,6 +12,7 @@ from stores import (
 )
 from auth.service import require_jwt, _get_client_ip, _rate_limit
 from steam.mappers import (
+    _delta_from_history,
     _map_item,
     _map_market_index_point,
     _map_news_item,
@@ -21,6 +22,58 @@ from steam.mappers import (
 logger = logging.getLogger("uvicorn.error")
 
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
+
+
+async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
+    cache_key = f"{name}:10"
+    now = time.monotonic()
+    cached = _item_history_cache.get(cache_key)
+    if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL:
+        return cached[0]
+    try:
+        resp = await client.get(
+            f"{STEAM_WEB_API}/history",
+            params={"key": STEAM_API_KEY, "market_hash_name": name, "interval": "10", "format": "json"},
+            timeout=8.0,
+        )
+        if resp.status_code != 200:
+            return []
+        raw = resp.json()
+        if not isinstance(raw, list):
+            return []
+        pts = sorted(
+            [
+                {
+                    "date":   p.get("createdat", "")[:10],
+                    "price":  float(p.get("price") or 0),
+                    "volume": int(p.get("sold") or 0),
+                }
+                for p in raw if p.get("price")
+            ],
+            key=lambda p: p["date"],
+        )
+        _item_history_cache[cache_key] = (pts, now)
+        return pts
+    except Exception:
+        return []
+
+
+async def _enrich_prices(client: httpx.AsyncClient, items: list) -> list:
+    histories = await asyncio.gather(*[_fetch_history_for_item(client, it["name"]) for it in items])
+    result = []
+    for item, pts in zip(items, histories):
+        if pts:
+            latest = pts[-1]["price"]
+            item = {
+                **item,
+                "priceLatest":   latest,
+                "priceDelta24h": _delta_from_history(pts, 1, latest),
+                "priceDelta7d":  _delta_from_history(pts, 7, latest),
+                "priceDelta30d": _delta_from_history(pts, 30, latest),
+            }
+        result.append(item)
+    return result
+
 
 router = APIRouter()
 
@@ -74,14 +127,13 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
 
     try:
         resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/float/assets",
+            f"{STEAM_WEB_API}/inventory",
             params={
                 "steam_id": steam_id,
                 "game": STEAM_GAME,
                 "key": STEAM_API_KEY,
                 "language": "english",
                 "limit": 5000,
-                "with_items": 1,
             },
         )
     except httpx.TimeoutException:
@@ -96,24 +148,17 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
     if resp.status_code == 429:
         raise HTTPException(status_code=429, detail="Steam rate limit — retry later")
     if resp.status_code != 200:
-        logger.error("steamwebapi /float/assets → %s: %.500s", resp.status_code, resp.text)
+        logger.error("steamwebapi /inventory → %s: %.500s", resp.status_code, resp.text)
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
 
     if not isinstance(data, list):
-        logger.error("steamwebapi /float/assets unexpected format: %.500s", resp.text)
+        logger.error("steamwebapi /inventory unexpected format: %.500s", resp.text)
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
-    if data:
-        first = data[0]
-        logger.info("[DEBUG inventory] keys del primer item: %s", list(first.keys()))
-        logger.info("[DEBUG inventory] float field: %s", first.get("float"))
-        logger.info("[DEBUG inventory] minfloat: %s | maxfloat: %s", first.get("minfloat"), first.get("maxfloat"))
-        price_fields = {k: v for k, v in first.items() if "price" in k.lower() or "sold" in k.lower() or "delta" in k.lower()}
-        logger.info("[DEBUG inventory] price/sold fields: %s", price_fields)
-
     items = [_map_item(item) for item in data]
+    items = await _enrich_prices(request.app.state.http_client, items)
     _inventory_cache[steam_id] = (items, now)
     return items
 
