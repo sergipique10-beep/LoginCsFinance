@@ -43,39 +43,76 @@ FastAPI microservice that authenticates users via **Steam OpenID 2.0** and issue
 
 Both tokens are HS256. No separate `steam_id` claim — the SteamID is exclusively in `sub`.
 
+## Module structure
+
+```
+LoginCsFinance/
+  main.py           # App factory: lifespan, CORS, middleware, router registration (~60 lines)
+  settings.py       # Env vars loaded via python-dotenv
+  stores.py         # All in-memory stores and TTL constants (single point for Redis migration)
+  middleware.py     # SecurityHeadersMiddleware
+  run_dev.py        # Local dev launcher (uvicorn, HTTP only)
+  auth/
+    service.py      # Auth helpers: _get_client_ip, _rate_limit, _issue_nonce, _consume_nonce,
+                    #               _issue_tokens, _set_refresh_cookie, require_jwt
+    router.py       # APIRouter: /auth/steam, /auth/steam/callback, /auth/token,
+                    #            /auth/dev-token, /auth/refresh, /auth/logout
+  steam/
+    mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
+                    #   _map_news_item, _fetch_og_image, _clean_news_content, etc.
+    router.py       # APIRouter: /me, /inventory, /market/index, /item/history, /news/cs2
+```
+
+**Dependency order** (no circular imports):
+
+```
+settings.py, stores.py, middleware.py, steam/mappers.py  ← nothing internal
+auth/service.py   ← stores, settings
+auth/router.py    ← auth/service, stores, settings
+steam/router.py   ← steam/mappers, stores, settings, auth/service (require_jwt only)
+main.py           ← middleware, auth/router, steam/router, settings
+```
+
 ## Endpoints
 
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
 | GET | `/` | — | Health check |
-| GET | `/auth/steam` | — | Rate-limited; accepts `?platform=android` to use Android redirect origin |
+| GET | `/auth/steam` | — | Rate-limited; accepts `?platform=android` for Android redirect origin |
 | GET | `/auth/steam/callback` | — | Validates nonce + Steam, emits one-time auth code |
 | POST | `/auth/token` | — | Exchanges auth code → access token + refresh cookie |
-| POST | `/auth/dev-token` | — | **Only active when `DEBUG=true`** — emits tokens for any `steam_id` without Steam |
+| POST | `/auth/dev-token` | — | **Only active when `DEBUG=true`** — emits tokens without Steam |
 | POST | `/auth/refresh` | cookie | Rotates refresh token |
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
-| GET | `/me` | Bearer | Returns Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
-| GET | `/inventory` | Bearer | Returns normalized CS2 inventory (see `_map_item`) |
-| GET | `/market/index` | Bearer | Returns market index: `turnover24h`, `sold24h`, `delta24h`, `hottestItem`, `history[]` |
+| GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
+| GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item`) |
+| GET | `/market/index` | Bearer | Market index: `turnover24h`, `sold24h`, `delta24h`, `hottestItem`, `history[]` |
+| GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited |
 
 ## Data mapping
 
-The steamwebapi.com responses are transformed by helpers in `main.py` before being returned:
+steamwebapi.com responses are transformed in `steam/mappers.py` before being returned:
 
-- `_map_item(item)` — maps raw inventory items to a normalized shape with camelCase keys (`priceLatest`, `priceDelta24h`, `floatValue`, `phase`, `externalPrices`, etc.)
-- `_map_market_index_point(point)` — maps time-series points to `{ date, price, change, volume }`
-- `_map_news_item(item, index)` — maps Steam news items; sets `featured: true` for the first item
+- `_map_item(item)` — inventory items → camelCase shape (`priceLatest`, `priceDelta24h`, `floatValue`, `phase`, `externalPrices`, etc.). Handles both flat `/inventory` and nested `/float/assets?with_items=1` formats.
+- `_map_market_index_point(point)` — time-series points → `{ date, price, change, volume }`
+- `_map_news_item(item, index, image_url)` — Steam news items → normalized shape; `featured: true` for index 0; includes `content` excerpt via `_clean_news_content`
+- `_fetch_og_image(client, url)` — async OG image scraper used by `/news/cs2`
 
-## Key files
+## In-memory stores (single-worker only)
 
-| File | Role |
-|------|------|
-| `main.py` | All app logic: endpoints, middleware, token helpers, in-memory stores, data mappers |
-| `settings.py` | Loads env vars from `.env` via `python-dotenv` |
-| `run_dev.py` | Local dev launcher (uvicorn, HTTP only) |
-| `.env` | Local secrets — never committed |
-| `docs/` | Full technical documentation |
+All stores live in `stores.py`. **TODO:** replace with Redis before running multiple workers.
+
+| Store | Key → Value | Purpose |
+|-------|------------|---------|
+| `_nonces` | nonce → (issued_at, redirect_origin) | CSRF protection for OpenID |
+| `_auth_codes` | code → (steam_id, expires_at) | One-time codes (TTL 30 s) |
+| `_refresh_store` | jti → expires_at | Refresh token revocation list |
+| `_rate_store` | ip → [timestamps] | Sliding-window rate limiter |
+| `_profile_cache` | steam_id → (data, cached_at) | 23 h cache — free plan: 5 req/day |
+| `_inventory_cache` | steam_id → (data, cached_at) | 23 h cache |
+| `_market_index_cache` | tf → (data, cached_at) | 23 h cache; keyed by timeframe |
+| `_item_history_cache` | `name:interval` → (data, cached_at) | 23 h cache |
 
 ## Environment variables
 
@@ -84,24 +121,10 @@ The steamwebapi.com responses are transformed by helpers in `main.py` before bei
 | `BASE_URL` | `http://localhost:8001` | Must be reachable by Steam for the OpenID callback (use ngrok in local dev) |
 | `FRONTEND_URL` | `http://localhost:4200` | CORS origin and post-login redirect target |
 | `JWT_SECRET` | `change-this-secret` | Signs all tokens. Startup warns if default or < 32 chars. Use `secrets.token_urlsafe(48)` to generate. |
-| `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`. Startup warns if empty. |
+| `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. |
 | `STEAM_GAME` | `cs2` | Game ID passed to the steamwebapi.com inventory endpoint |
-| `ALLOWED_REDIRECT_ORIGINS` | *(value of FRONTEND_URL)* | Comma-separated whitelist of allowed post-login redirect origins (add `myapp://` scheme for Android) |
+| `ALLOWED_REDIRECT_ORIGINS` | *(value of FRONTEND_URL)* | Comma-separated whitelist of allowed post-login redirect origins (add `myapp://` for Android) |
 | `DEBUG` | `false` | Set `true` to activate `POST /auth/dev-token` |
-
-## In-memory stores (single-worker only)
-
-| Store | Key → Value | Purpose |
-|-------|------------|---------|
-| `_nonces` | nonce → (issued_at, redirect_origin) | CSRF protection for OpenID |
-| `_auth_codes` | code → (steam_id, expires_at) | One-time codes (TTL 30 s) |
-| `_refresh_store` | jti → expires_at | Refresh token revocation list |
-| `_rate_store` | ip → [timestamps] | Sliding-window rate limiter |
-| `_profile_cache` | steam_id → (data, cached_at) | 23 h cache — steamwebapi.com free plan: 5 req/day |
-| `_inventory_cache` | steam_id → (data, cached_at) | 23 h cache |
-| `_market_index_cache` | tf → (data, cached_at) | 23 h cache; keyed by timeframe string |
-
-**TODO:** Replace all four stores and caches with Redis (TTL-native) before running multiple workers.
 
 ## Startup validation
 
@@ -110,12 +133,13 @@ On startup the lifespan hook warns if:
 - `JWT_SECRET` is shorter than 32 characters
 - `STEAM_API_KEY` is empty
 
-The lifespan also creates a shared `httpx.AsyncClient` stored in `app.state.http_client` (closed on shutdown). All endpoints that call external services must use this client — do not create per-request clients.
+The lifespan also creates a shared `httpx.AsyncClient` stored in `app.state.http_client` (closed on shutdown). All endpoints that call external services must use this client — never create per-request clients.
 
 ## Production checklist
 
-Before any production deployment, revert these dev shortcuts:
+Before any production deployment:
 
-- `main.py` `_set_refresh_cookie` and `logout`: `secure=False` → `secure=True`
+- `auth/service.py` `_set_refresh_cookie` and `auth/router.py` `logout`: `secure=False` → `secure=True`
 - `.env`: `BASE_URL` and `FRONTEND_URL` → `https://` URLs
 - `run_dev.py`: restore `ssl_certfile` / `ssl_keyfile` in uvicorn (or terminate TLS at a reverse proxy)
+- Replace `stores.py` in-memory dicts with Redis before running multiple workers
