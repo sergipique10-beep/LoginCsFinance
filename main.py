@@ -255,6 +255,65 @@ def require_jwt(
 
 # ── Inventory mapper ──────────────────────────────────────────────────────────
 
+def _delta_from_history(pts: list, days: int, latest: float) -> float:
+    if not pts or not latest:
+        return 0.0
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    past = [p for p in pts if p["date"] <= cutoff]
+    if not past:
+        return 0.0
+    ref = past[-1]["price"]
+    if not ref:
+        return 0.0
+    return round((latest - ref) / ref * 100, 2)
+
+
+async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
+    cache_key = f"{name}:10"
+    now = time.monotonic()
+    cached = _item_history_cache.get(cache_key)
+    if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL:
+        return cached[0]
+    try:
+        resp = await client.get(
+            f"{STEAM_WEB_API}/history",
+            params={"key": STEAM_API_KEY, "market_hash_name": name, "interval": "10", "format": "json"},
+            timeout=8.0,
+        )
+        if resp.status_code != 200:
+            return []
+        raw = resp.json()
+        if not isinstance(raw, list):
+            return []
+        pts = sorted(
+            [{"date": p.get("createdat", "")[:10], "price": float(p.get("price") or 0), "volume": int(p.get("sold") or 0)}
+             for p in raw if p.get("price")],
+            key=lambda p: p["date"],
+        )
+        _item_history_cache[cache_key] = (pts, now)
+        return pts
+    except Exception:
+        return []
+
+
+async def _enrich_prices(client: httpx.AsyncClient, items: list) -> list:
+    histories = await asyncio.gather(*[_fetch_history_for_item(client, it["name"]) for it in items])
+    result = []
+    for item, pts in zip(items, histories):
+        if pts:
+            latest = pts[-1]["price"]
+            item = {
+                **item,
+                "priceLatest":   latest,
+                "priceDelta24h": _delta_from_history(pts, 1, latest),
+                "priceDelta7d":  _delta_from_history(pts, 7, latest),
+                "priceDelta30d": _delta_from_history(pts, 30, latest),
+            }
+        result.append(item)
+    return result
+
+
 def _safe_delta(new: float | None, old: float | None) -> float:
     if not new or not old:
         return 0.0
@@ -270,8 +329,20 @@ def _resolve_phase(item: dict) -> str | None:
     return match.get("phase") if match else None
 
 
+def _best_price_from_markets(prices: list) -> float:
+    """Pick the best available price from the prices array (Steam market preferred)."""
+    if not prices:
+        return 0.0
+    for p in prices:
+        if "steam" in str(p.get("market") or "").lower():
+            v = float(p.get("price") or p.get("value") or 0)
+            if v:
+                return v
+    v = float(prices[0].get("price") or prices[0].get("value") or 0)
+    return v
+
+
 def _map_item(item: dict) -> dict:
-    # /float/assets?with_items=1 nests market data under "item"; /inventory is flat
     d = item.get("item") or item
 
     latest = (
@@ -279,6 +350,7 @@ def _map_item(item: dict) -> dict:
         d.get("price") or
         d.get("lowestprice") or
         d.get("priceusd") or
+        _best_price_from_markets(d.get("prices", [])) or
         0
     )
     p24h = d.get("pricelatestsell24h") or d.get("price24h")
@@ -587,14 +659,13 @@ async def get_inventory(
 
     try:
         resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/float/assets",
+            f"{STEAM_WEB_API}/inventory",
             params={
                 "steam_id": steam_id,
                 "game": STEAM_GAME,
                 "key": STEAM_API_KEY,
                 "language": "english",
                 "limit": 5000,
-                "with_items": 1,
             },
         )
     except httpx.TimeoutException:
@@ -609,22 +680,14 @@ async def get_inventory(
     if resp.status_code == 429:
         raise HTTPException(status_code=429, detail="Steam rate limit — retry later")
     if resp.status_code != 200:
-        logger.error("steamwebapi /float/assets → %s: %.500s", resp.status_code, resp.text)
+        logger.error("steamwebapi /inventory → %s: %.500s", resp.status_code, resp.text)
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
 
     if not isinstance(data, list):
-        logger.error("steamwebapi /float/assets unexpected format: %.500s", resp.text)
+        logger.error("steamwebapi /inventory unexpected format: %.500s", resp.text)
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
-
-    if data:
-        first = data[0]
-        logger.info("[DEBUG inventory] keys del primer item: %s", list(first.keys()))
-        logger.info("[DEBUG inventory] float field: %s", first.get("float"))
-        logger.info("[DEBUG inventory] minfloat: %s | maxfloat: %s", first.get("minfloat"), first.get("maxfloat"))
-        price_fields = {k: v for k, v in first.items() if "price" in k.lower() or "sold" in k.lower() or "delta" in k.lower()}
-        logger.info("[DEBUG inventory] price/sold fields: %s", price_fields)
 
     items = [_map_item(item) for item in data]
     _inventory_cache[steam_id] = (items, now)
@@ -688,7 +751,7 @@ async def get_market_index(
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
-    logger.info("[DEBUG market-index] %s:%s → type=%s | %s", segment_type, segment_key, type(data).__name__, str(data)[:1000])
+    logger.info("[DEBUG market-index] tf=%s → type=%s | %s", tf, type(data).__name__, str(data)[:1000])
 
     points = [_map_market_index_point(p) for p in (data if isinstance(data, list) else [])]
     _market_index_cache[cache_key] = (points, now)
