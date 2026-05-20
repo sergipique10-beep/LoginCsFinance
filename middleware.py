@@ -15,7 +15,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; "
             "script-src 'self'; "
             "style-src 'self'; "
-            "img-src 'self' https://avatars.steamstatic.com; "
+            "img-src 'self' https://avatars.steamstatic.com https://community.akamai.steamstatic.com; "
             "connect-src 'self'; "
             "frame-ancestors 'none'"
         )

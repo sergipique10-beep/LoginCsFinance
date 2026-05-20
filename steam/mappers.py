@@ -5,6 +5,26 @@ from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
+_STEAM_CDN = "https://community.akamai.steamstatic.com"
+
+
+def _normalize_image(raw: str) -> str:
+    """Normalize steamwebapi image values to a full Steam CDN URL.
+
+    /items and /inventory return a full URL (community.akamai.steamstatic.com) — pass through.
+    Defensive branches handle edge cases (relative path, bare hash) that could appear
+    in less-documented endpoints like topmovers from /market-index.
+    Empty string is returned as-is so the template @if(imageUrl()) shows no broken image.
+    """
+    if not raw:
+        return ""
+    if raw.startswith("http"):
+        return raw
+    if raw.startswith("/economy/image/"):
+        return _STEAM_CDN + raw
+    # bare hash — defensive, not observed in /items but possible in other endpoints
+    return f"{_STEAM_CDN}/economy/image/{raw}"
+
 
 # ── Inventory mappers ─────────────────────────────────────────────────────────
 
@@ -73,7 +93,7 @@ def _map_item(item: dict) -> dict:
         "weaponType":     d.get("weapontype"),
         "itemName":       d.get("itemname"),
         "itemType":       d.get("itemtype"),
-        "image":          d.get("image", ""),
+        "image":          _normalize_image(d.get("image", "")),
         "rarity":         d.get("rarity", "Base Grade"),
         "rarityColor":    d.get("color", "b0c3d9"),
         "borderColor":    d.get("bordercolor", "b0c3d9"),
@@ -111,6 +131,60 @@ def _map_item(item: dict) -> dict:
         "tradable":       bool(d.get("tradable", True)),
         "tradeLockDays":  d.get("markettradablerestriction"),
         "steamUrl":       d.get("steamurl"),
+    }
+
+
+# ── Market index topmovers mapper ────────────────────────────────────────────
+
+def _map_topmovers_item(raw: dict) -> dict:
+    """Maps a topmovers gainer/loser object from /market-index/cs2 to ISkinCard shape."""
+    latest  = float(raw.get("pricelatestsell") or raw.get("price") or 0)
+    p24h    = float(raw.get("pricelatestsell24h") or raw.get("price24h") or 0)
+    p7d     = float(raw.get("pricelatestsell7d") or raw.get("price7d") or 0)
+    p30d    = float(raw.get("pricelatestsell30d") or raw.get("price30d") or 0)
+    change  = float(raw.get("change24h") or raw.get("change") or 0)
+    return {
+        "id":             raw.get("id", "") or raw.get("markethashname", ""),
+        "name":           raw.get("marketname", "") or raw.get("markethashname", ""),
+        "slug":           raw.get("slug", ""),
+        "weaponType":     raw.get("weapontype") or raw.get("itemtype"),
+        "itemName":       raw.get("itemname"),
+        "itemType":       raw.get("itemtype"),
+        "image":          _normalize_image(raw.get("image", "")),
+        "rarity":         raw.get("rarity", "Base Grade"),
+        "rarityColor":    raw.get("color", "b0c3d9"),
+        "borderColor":    raw.get("bordercolor", "b0c3d9"),
+        "quality":        raw.get("quality", "Normal"),
+        "isStatTrak":     bool(raw.get("isstattrak", False)),
+        "isSouvenir":     bool(raw.get("issouvenir", False)),
+        "isStar":         bool(raw.get("isstar", False)),
+        "exterior":       raw.get("tag5") or raw.get("exterior"),
+        "floatValue":     None,
+        "floatMin":       raw.get("minfloat"),
+        "floatMax":       raw.get("maxfloat"),
+        "paintIndex":     raw.get("paintindex"),
+        "phase":          None,
+        "priceLatest":    latest or change,
+        "priceSafe":      0,
+        "priceMin":       0,
+        "priceMax":       0,
+        "priceDelta24h":  _safe_delta(latest, p24h) if p24h else change,
+        "priceDelta7d":   _safe_delta(latest, p7d),
+        "priceDelta30d":  _safe_delta(latest, p30d),
+        "priceReal":      None,
+        "externalPrices": [],
+        "sold24h":        int(raw.get("sold24h") or 0),
+        "sold7d":         int(raw.get("sold7d") or 0),
+        "sold30d":        int(raw.get("sold30d") or 0),
+        "soldTotal":      int(raw.get("soldtotal") or 0),
+        "offerVolume":    0,
+        "buyOrderVolume": 0,
+        "buyOrderPrice":  0,
+        "hoursToSold":    0,
+        "marketable":     True,
+        "tradable":       True,
+        "tradeLockDays":  None,
+        "steamUrl":       None,
     }
 
 
