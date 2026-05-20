@@ -36,6 +36,9 @@ PROFILE_CACHE_TTL = 82800
 INVENTORY_CACHE_TTL = 82800
 MARKET_INDEX_CACHE_TTL = 82800
 ITEM_HISTORY_CACHE_TTL = 82800
+MOVERS_CACHE_TTL = 14400     # 4 hours — hot/cold refreshes during the day within daily quota
+TRENDING_CACHE_TTL = 14400   # 4 hours — same budget as movers
+IMAGE_CACHE_TTL = 82800      # 23 h — same budget as other free-plan caches; CDN URLs are stable
 
 # ── Cache stores ───────────────────────────────────────────────────────────────
 
@@ -43,3 +46,8 @@ _profile_cache: dict[str, tuple[dict, float]] = {}
 _inventory_cache: dict[str, tuple[list, float]] = {}
 _market_index_cache: dict[str, tuple[dict, float]] = {}
 _item_history_cache: dict[str, tuple[list, float]] = {}
+_movers_cache: dict[str, tuple[dict, float]] = {}
+_topmovers_raw_cache: dict[str, tuple[list, list, float]] = {}  # "latest" → (gainers, losers, ts)
+_trending_cache: dict[str, tuple[list, float]] = {}
+_item_image_cache: dict[str, str] = {}  # markethashname/marketname → image URL
+_image_cache_meta: dict[str, float] = {}  # "ts" → monotonic timestamp of last successful population

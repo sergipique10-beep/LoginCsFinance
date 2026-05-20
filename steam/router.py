@@ -7,13 +7,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from settings import STEAM_API_KEY, STEAM_GAME
 from stores import (
-    PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, MARKET_INDEX_CACHE_TTL, ITEM_HISTORY_CACHE_TTL,
-    _profile_cache, _inventory_cache, _market_index_cache, _item_history_cache,
+    PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, MARKET_INDEX_CACHE_TTL,
+    ITEM_HISTORY_CACHE_TTL, MOVERS_CACHE_TTL, TRENDING_CACHE_TTL, IMAGE_CACHE_TTL,
+    _profile_cache, _inventory_cache, _market_index_cache,
+    _item_history_cache, _movers_cache, _topmovers_raw_cache, _trending_cache,
+    _item_image_cache, _image_cache_meta,
 )
 from auth.service import require_jwt, _get_client_ip, _rate_limit
 from steam.mappers import (
     _delta_from_history,
     _map_item,
+    _map_topmovers_item,
     _map_market_index_point,
     _map_news_item,
     _fetch_og_image,
@@ -22,6 +26,9 @@ from steam.mappers import (
 logger = logging.getLogger("uvicorn.error")
 
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
+_STATIC_SKINS_URL = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins.json"
+
+_WEAR_NAMES = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred"]
 
 
 async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
@@ -163,6 +170,281 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
     return items
 
 
+_MOVERS_SELECT = ",".join([
+    "id", "marketname", "markethashname", "slug", "image",
+    "pricelatestsell", "pricelatestsell24h",
+    "pricelatestsell7d", "pricelatestsell30d",
+    "color", "bordercolor", "rarity", "quality",
+    "isstattrak", "issouvenir", "isstar",
+    "itemtype", "itemname", "tag5",
+    "sold24h", "sold7d", "sold30d", "soldtotal",
+    "pricesafe", "pricemin", "pricemax",
+    "offervolume", "buyordervolume", "buyorderprice",
+    "hourstosold", "marketable", "tradable",
+    "markettradablerestriction", "steamurl",
+    "minfloat", "maxfloat", "paintindex",
+])
+
+
+_MOVERS_LIMIT = 10
+_TRENDING_LIMIT = 25
+
+
+def _cache_images(raw_items: list) -> None:
+    """Populate _item_image_cache from a /items response so the topmovers fallback can use it."""
+    for raw in raw_items:
+        img = raw.get("image", "")
+        if not img:
+            continue
+        for key in (raw.get("markethashname"), raw.get("marketname")):
+            if key:
+                _item_image_cache[key] = img
+
+
+def _enrich_images_from_cache(items: list) -> None:
+    """Fill missing image fields in-place using _item_image_cache, keyed by item name."""
+    if not _item_image_cache:
+        return
+    for item in items:
+        if not item.get("image"):
+            item["image"] = _item_image_cache.get(item.get("name", ""), "")
+
+
+async def _fetch_static_images(client: httpx.AsyncClient) -> None:
+    """Populate _item_image_cache from ByMykel/CSGO-API (free GitHub dataset, ~2000 skins).
+
+    Pre-generates wear and StatTrak™ variants so _enrich_images_from_cache can do a direct
+    lookup by item["name"] (= steamwebapi marketname, which includes wear suffix).
+    Skipped if the cache was populated within IMAGE_CACHE_TTL seconds.
+    """
+    now = time.monotonic()
+    if now - _image_cache_meta.get("ts", 0.0) < IMAGE_CACHE_TTL:
+        return
+    try:
+        resp = await client.get(_STATIC_SKINS_URL, timeout=15.0)
+        if resp.status_code != 200:
+            logger.warning("[image-cache] static skins returned %s", resp.status_code)
+            return
+        skins = resp.json()
+        if not isinstance(skins, list):
+            logger.warning("[image-cache] static skins unexpected format: %s", type(skins).__name__)
+            return
+        for skin in skins:
+            name = skin.get("name", "")
+            image = skin.get("image", "")
+            if not name or not image:
+                continue
+            wears = [w.get("name", "") for w in skin.get("wears", []) if w.get("name")]
+            if not wears:
+                wears = _WEAR_NAMES
+            _item_image_cache[name] = image
+            for wear in wears:
+                _item_image_cache[f"{name} ({wear})"] = image
+            if skin.get("stattrak"):
+                _item_image_cache[f"StatTrak™ {name}"] = image
+                for wear in wears:
+                    _item_image_cache[f"StatTrak™ {name} ({wear})"] = image
+        _image_cache_meta["ts"] = now
+        logger.info("[image-cache] loaded %d entries from static skins (%d skins)", len(_item_image_cache), len(skins))
+    except Exception as exc:
+        logger.warning("[image-cache] could not fetch static skins: %s", exc)
+
+
+def _build_movers_from_topmovers(gainers: list, losers: list) -> dict | None:
+    """Builds hot/cold result from market-index topmovers data. Returns None if no data."""
+    if not gainers and not losers:
+        return None
+    hot  = [_map_topmovers_item(g) for g in gainers[:_MOVERS_LIMIT]]
+    cold = [_map_topmovers_item(l) for l in losers[:_MOVERS_LIMIT]]
+    hot  = sorted(hot,  key=lambda x: x["priceDelta24h"], reverse=True)
+    cold = sorted(cold, key=lambda x: x["priceDelta24h"])
+    return {"hot": hot, "cold": cold}
+
+
+@router.get("/market/movers", summary="Top movers del mercado CS2 (hot & cold 24 h)")
+async def get_market_movers(request: Request, user: dict = Depends(require_jwt)):
+    cache_key = "movers"
+    now = time.monotonic()
+    cached = _movers_cache.get(cache_key)
+    if cached and now - cached[1] < MOVERS_CACHE_TTL:
+        return cached[0]
+
+    # ── Primary source: /items (paid plan) ───────────────────────────────────
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/items",
+            params={
+                "key": STEAM_API_KEY,
+                "game": "cs2",
+                "sort_by": "soldZa",
+                "max": 200,
+                "select": _MOVERS_SELECT,
+                "format": "json",
+                "production": "1",
+            },
+            timeout=15.0,
+        )
+        items_ok = resp.status_code == 200
+    except (httpx.TimeoutException, httpx.RequestError):
+        items_ok = False
+        resp = None
+
+    if items_ok and resp is not None:
+        data = resp.json()
+        if isinstance(data, list):
+            _cache_images(data)
+            mapped = []
+            for raw in data:
+                latest  = float(raw.get("pricelatestsell")   or 0)
+                prev24h = float(raw.get("pricelatestsell24h") or 0)
+                volume  = int(raw.get("sold24h") or 0)
+                if latest > 0 and prev24h > 0 and volume >= 5:
+                    mapped.append(_map_item(raw))
+            by_delta = sorted(mapped, key=lambda x: x["priceDelta24h"])
+            result = {
+                "hot":  list(reversed(by_delta[-_MOVERS_LIMIT:])),
+                "cold": by_delta[:_MOVERS_LIMIT],
+            }
+            _movers_cache[cache_key] = (result, now)
+            return result
+        logger.warning("[market-movers] /items returned unexpected type: %s", type(data).__name__)
+    else:
+        if resp is not None:
+            logger.warning("[market-movers] /items returned %s — falling back to market-index topmovers", resp.status_code)
+
+    # ── Fallback: market-index topmovers (free plan) ─────────────────────────
+    raw_topmovers = _topmovers_raw_cache.get("latest")
+    if not raw_topmovers:
+        # topmovers cache is cold — fetch market-index now to populate it
+        try:
+            mi_resp = await request.app.state.http_client.get(
+                f"{STEAM_WEB_API}/market-index/cs2",
+                params={"key": STEAM_API_KEY, "format": "json"},
+                timeout=15.0,
+            )
+            if mi_resp.status_code == 200:
+                mi_data = mi_resp.json()
+                if isinstance(mi_data, dict):
+                    tm = mi_data.get("topmovers", {})
+                    gainers = tm.get("gainers", [])
+                    losers  = tm.get("losers", [])
+                    if gainers:
+                        logger.info("[market-movers] topmovers gainer keys: %s", list(gainers[0].keys()))
+                        logger.info("[market-movers] topmovers gainer sample: %s", gainers[0])
+                    _topmovers_raw_cache["latest"] = (gainers, losers, now)
+                    raw_topmovers = _topmovers_raw_cache["latest"]
+        except Exception as exc:
+            logger.warning("[market-movers] could not fetch market-index for topmovers: %s", exc)
+
+    if raw_topmovers:
+        gainers, losers, _ = raw_topmovers
+        result = _build_movers_from_topmovers(gainers, losers)
+        if result:
+            await _fetch_static_images(request.app.state.http_client)
+            _enrich_images_from_cache(result["hot"])
+            _enrich_images_from_cache(result["cold"])
+            logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(result["hot"]), len(result["cold"]))
+            _movers_cache[cache_key] = (result, now)
+            return result
+
+    # ── Stale cache as last resort ────────────────────────────────────────────
+    stale = _movers_cache.get(cache_key)
+    if stale:
+        logger.info("[market-movers] serving stale cache (%.0f s old)", now - stale[1])
+        return stale[0]
+
+    logger.warning("[market-movers] no data available from any source")
+    return {"hot": [], "cold": []}
+
+
+@router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
+async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
+    cache_key = "trending"
+    now = time.monotonic()
+    cached = _trending_cache.get(cache_key)
+    if cached and now - cached[1] < TRENDING_CACHE_TTL:
+        return cached[0]
+
+    # ── Primary source: /items (paid plan) ───────────────────────────────────
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/items",
+            params={
+                "key": STEAM_API_KEY,
+                "game": "cs2",
+                "sort_by": "soldZa",
+                "max": 60,
+                "select": _MOVERS_SELECT,
+                "format": "json",
+                "production": "1",
+            },
+            timeout=15.0,
+        )
+        items_ok = resp.status_code == 200
+    except (httpx.TimeoutException, httpx.RequestError):
+        items_ok = False
+        resp = None
+
+    if items_ok and resp is not None:
+        data = resp.json()
+        if isinstance(data, list):
+            _cache_images(data)
+            result = []
+            for raw in data:
+                latest = float(raw.get("pricelatestsell") or 0)
+                volume = int(raw.get("sold24h") or 0)
+                if latest > 0 and volume >= 1:
+                    result.append(_map_item(raw))
+            result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_LIMIT]
+            _trending_cache[cache_key] = (result, now)
+            return result
+        logger.warning("[market-trending] /items returned unexpected type: %s", type(data).__name__)
+    else:
+        if resp is not None:
+            logger.warning("[market-trending] /items returned %s — falling back to topmovers", resp.status_code)
+
+    # ── Fallback: topmovers from cache (free plan) ────────────────────────────
+    raw_topmovers = _topmovers_raw_cache.get("latest")
+    if not raw_topmovers:
+        try:
+            mi_resp = await request.app.state.http_client.get(
+                f"{STEAM_WEB_API}/market-index/cs2",
+                params={"key": STEAM_API_KEY, "format": "json"},
+                timeout=15.0,
+            )
+            if mi_resp.status_code == 200:
+                mi_data = mi_resp.json()
+                if isinstance(mi_data, dict):
+                    tm = mi_data.get("topmovers", {})
+                    gainers = tm.get("gainers", [])
+                    losers  = tm.get("losers", [])
+                    _topmovers_raw_cache["latest"] = (gainers, losers, now)
+                    raw_topmovers = _topmovers_raw_cache["latest"]
+        except Exception as exc:
+            logger.warning("[market-trending] could not fetch market-index for topmovers: %s", exc)
+
+    if raw_topmovers:
+        gainers, losers, _ = raw_topmovers
+        combined = gainers + losers
+        if combined:
+            await _fetch_static_images(request.app.state.http_client)
+            result = [_map_topmovers_item(item) for item in combined]
+            _enrich_images_from_cache(result)
+            result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_LIMIT]
+            _trending_cache[cache_key] = (result, now)
+            logger.info("[market-trending] serving from topmovers (%d items)", len(result))
+            return result
+
+    # ── Stale cache as last resort ────────────────────────────────────────────
+    stale = _trending_cache.get(cache_key)
+    if stale:
+        logger.info("[market-trending] serving stale cache (%.0f s old)", now - stale[1])
+        return stale[0]
+
+    logger.warning("[market-trending] no data available from any source")
+    return []
+
+
 @router.get("/market/index", summary="Índice de mercado global CS2")
 async def get_market_index(
     request: Request,
@@ -220,8 +502,14 @@ async def get_market_index(
             if isinstance(pi_change, dict):
                 delta_24h = float(pi_change.get("change") or 0)
 
-        gainers = data.get("topmovers", {}).get("gainers", [])
+        topmovers = data.get("topmovers", {})
+        gainers = topmovers.get("gainers", [])
+        losers  = topmovers.get("losers", [])
         top = gainers[0] if gainers else None
+        if gainers:
+            logger.info("[market-index] topmovers gainer keys: %s", list(gainers[0].keys()))
+            logger.info("[market-index] topmovers gainer sample: %s", gainers[0])
+        _topmovers_raw_cache["latest"] = (gainers, losers, now)
         turnover24h = float(data.get("turnover24h") or 0)
         sold24h = int(data.get("sold24h") or 0)
     else:
