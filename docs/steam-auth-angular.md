@@ -138,7 +138,7 @@ Avoids CORS in development by proxying all `/api/*` calls to the backend:
 ```json
 {
   "/api": {
-    "target": "http://localhost:8001",
+    "target": "http://localhost:8000",
     "secure": false,
     "pathRewrite": { "^/api": "" }
   }
@@ -147,7 +147,7 @@ Avoids CORS in development by proxying all `/api/*` calls to the backend:
 
 Run with: `ng serve --proxy-config proxy.conf.json`
 
-All Angular HTTP calls use `/api/auth/...` — never hardcode `localhost:8001`.
+All Angular HTTP calls use `/api/auth/...` — never hardcode `localhost:8000`.
 
 ### AuthService
 
@@ -311,7 +311,7 @@ Key variables for this flow:
 
 | Variable | Required | Default |
 |----------|----------|---------|
-| `BASE_URL` | Yes | `http://localhost:8001` |
+| `BASE_URL` | Yes | `http://localhost:8000` |
 | `FRONTEND_URL` | Yes | `http://localhost:4200` |
 | `JWT_SECRET` | Yes | `change-this-secret` |
 

@@ -6,7 +6,7 @@ FastAPI backend that authenticates users via **Steam OpenID 2.0** and issues JWT
 
 ```
 Angular SPA (localhost:4200)
-  └── dev proxy /api/* → localhost:8001
+  └── dev proxy /api/* → localhost:8000
         │
         ├── GET  /auth/steam          (redirect to Steam)
         ├── GET  /auth/steam/callback (Steam returns here)
