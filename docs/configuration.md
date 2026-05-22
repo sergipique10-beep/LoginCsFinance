@@ -8,7 +8,7 @@ All backend settings are loaded from `.env` via `python-dotenv` (`settings.py`).
 
 | Variable | Required | Default | Notes |
 |----------|----------|---------|-------|
-| `BASE_URL` | Yes | `http://localhost:8001` | Public URL the backend is reachable at. Steam POSTs the OpenID callback here — must be publicly accessible (use ngrok in local dev). |
+| `BASE_URL` | Yes | `http://localhost:8000` | Public URL the backend is reachable at. Steam POSTs the OpenID callback here — must be publicly accessible (use ngrok in local dev). |
 | `FRONTEND_URL` | Yes | `http://localhost:4200` | Angular app origin. Used for CORS and the post-login redirect. |
 | `JWT_SECRET` | Yes | `change-this-secret` | Signs both access and refresh tokens. Use a strong random string in production. A warning is logged on startup if the default is detected. |
 | `STEAM_API_KEY` | No | *(empty)* | Steam Web API key. Not required for login; reserved for future profile enrichment. Get one at https://steamcommunity.com/dev/apikey |
@@ -28,7 +28,7 @@ Two environment files control where HTTP calls go:
 
 | File | Used when | `apiUrl` |
 |------|-----------|----------|
-| `environment.ts` | `ng serve` (dev web) | `/api` (proxied to `localhost:8001`) |
+| `environment.ts` | `ng serve` (dev web) | `/api` (proxied to `localhost:8000`) |
 | `environment.prod.ts` | `ng build` / Android | `https://TBD` (dominio de producción por definir) |
 
 The dev proxy target is set in `proxy.conf.json` (applies **only** to `ng serve`):
@@ -36,7 +36,7 @@ The dev proxy target is set in `proxy.conf.json` (applies **only** to `ng serve`
 ```json
 {
   "/api": {
-    "target": "https://localhost:8001",
+    "target": "https://localhost:8000",
     "secure": false,
     "pathRewrite": { "^/api": "" }
   }

@@ -36,8 +36,8 @@ PROFILE_CACHE_TTL = 82800
 INVENTORY_CACHE_TTL = 82800
 MARKET_INDEX_CACHE_TTL = 82800
 ITEM_HISTORY_CACHE_TTL = 82800
-MOVERS_CACHE_TTL = 14400     # 4 hours — hot/cold refreshes during the day within daily quota
-TRENDING_CACHE_TTL = 14400   # 4 hours — same budget as movers
+MOVERS_CACHE_TTL = 82800     # 23 h — free plan: 5 req/day, must match other caches
+TRENDING_CACHE_TTL = 82800   # 23 h — same daily budget
 IMAGE_CACHE_TTL = 82800      # 23 h — same budget as other free-plan caches; CDN URLs are stable
 
 # ── Cache stores ───────────────────────────────────────────────────────────────
