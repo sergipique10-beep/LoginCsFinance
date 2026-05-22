@@ -15,10 +15,10 @@ pip install -r requirements.txt
 # Start the server — HTTP, no TLS (dev only)
 python run_dev.py
 # or directly:
-uvicorn main:app --host 127.0.0.1 --port 8001 --reload
+uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 
 # Health check
-curl http://localhost:8001/
+curl http://localhost:8000/
 ```
 
 There are no test or lint commands configured.
@@ -57,10 +57,13 @@ LoginCsFinance/
                     #               _issue_tokens, _set_refresh_cookie, require_jwt
     router.py       # APIRouter: /auth/steam, /auth/steam/callback, /auth/token,
                     #            /auth/dev-token, /auth/refresh, /auth/logout
+                    # Note: reads DEBUG via os.getenv() directly, not settings.py
   steam/
     mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
-                    #   _map_news_item, _fetch_og_image, _clean_news_content, etc.
+                    #   _map_news_item, _fetch_og_image, _clean_news_content,
+                    #   _delta_from_history, _best_price_from_markets, _safe_delta
     router.py       # APIRouter: /me, /inventory, /market/index, /item/history, /news/cs2
+                    # Also contains: _fetch_history_for_item, _enrich_prices (inventory enrichment)
 ```
 
 **Dependency order** (no circular imports):
@@ -85,7 +88,7 @@ main.py           ← middleware, auth/router, steam/router, settings
 | POST | `/auth/refresh` | cookie | Rotates refresh token |
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
-| GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item`) |
+| GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item` + enrichment below) |
 | GET | `/market/index` | Bearer | Market index: `turnover24h`, `sold24h`, `delta24h`, `hottestItem`, `history[]` |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited |
@@ -95,9 +98,12 @@ main.py           ← middleware, auth/router, steam/router, settings
 steamwebapi.com responses are transformed in `steam/mappers.py` before being returned:
 
 - `_map_item(item)` — inventory items → camelCase shape (`priceLatest`, `priceDelta24h`, `floatValue`, `phase`, `externalPrices`, etc.). Handles both flat `/inventory` and nested `/float/assets?with_items=1` formats.
+- `_delta_from_history(pts, days, latest)` — computes % price change vs. N days ago from a history list. Used by `_enrich_prices`.
 - `_map_market_index_point(point)` — time-series points → `{ date, price, change, volume }`
 - `_map_news_item(item, index, image_url)` — Steam news items → normalized shape; `featured: true` for index 0; includes `content` excerpt via `_clean_news_content`
 - `_fetch_og_image(client, url)` — async OG image scraper used by `/news/cs2`
+
+**Inventory enrichment** (`steam/router.py`): after `_map_item` maps the static API data, `_enrich_prices` fires one concurrent `asyncio.gather` call to `/history` per item (hardcoded `interval=10` min). This overwrites `priceLatest`, `priceDelta24h`, `priceDelta7d`, `priceDelta30d` with live-history-derived values. Cached per item in `_item_history_cache`. This means a first `/inventory` call can hit the API N times (once per item) — relevant when near the 5 req/day free plan limit.
 
 ## In-memory stores (single-worker only)
 
@@ -112,13 +118,13 @@ All stores live in `stores.py`. **TODO:** replace with Redis before running mult
 | `_profile_cache` | steam_id → (data, cached_at) | 23 h cache — free plan: 5 req/day |
 | `_inventory_cache` | steam_id → (data, cached_at) | 23 h cache |
 | `_market_index_cache` | tf → (data, cached_at) | 23 h cache; keyed by timeframe |
-| `_item_history_cache` | `name:interval` → (data, cached_at) | 23 h cache |
+| `_item_history_cache` | `name:interval` → (data, cached_at) | 23 h cache; shared by `/item/history` and `_enrich_prices` |
 
 ## Environment variables
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `BASE_URL` | `http://localhost:8001` | Must be reachable by Steam for the OpenID callback (use ngrok in local dev) |
+| `BASE_URL` | `http://localhost:8000` | Must be reachable by Steam for the OpenID callback (use ngrok in local dev) |
 | `FRONTEND_URL` | `http://localhost:4200` | CORS origin and post-login redirect target |
 | `JWT_SECRET` | `change-this-secret` | Signs all tokens. Startup warns if default or < 32 chars. Use `secrets.token_urlsafe(48)` to generate. |
 | `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. |
