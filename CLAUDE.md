@@ -57,6 +57,7 @@ LoginCsFinance/
                     #               _issue_tokens, _set_refresh_cookie, require_jwt
     router.py       # APIRouter: /auth/steam, /auth/steam/callback, /auth/token,
                     #            /auth/dev-token, /auth/refresh, /auth/logout
+<<<<<<< HEAD
                     # Note: reads DEBUG via os.getenv() directly, not settings.py
   steam/
     mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
@@ -104,6 +105,7 @@ steamwebapi.com responses are transformed in `steam/mappers.py` before being ret
 - `_fetch_og_image(client, url)` — async OG image scraper used by `/news/cs2`
 
 **Inventory enrichment** (`steam/router.py`): after `_map_item` maps the static API data, `_enrich_prices` fires one concurrent `asyncio.gather` call to `/history` per item (hardcoded `interval=10` min). This overwrites `priceLatest`, `priceDelta24h`, `priceDelta7d`, `priceDelta30d` with live-history-derived values. Cached per item in `_item_history_cache`. This means a first `/inventory` call can hit the API N times (once per item) — relevant when near the 5 req/day free plan limit.
+
 
 ## In-memory stores (single-worker only)
 
