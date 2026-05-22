@@ -26,7 +26,10 @@ from steam.mappers import (
 logger = logging.getLogger("uvicorn.error")
 
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
-_STATIC_SKINS_URL = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins.json"
+_STATIC_SKINS_URL      = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins.json"
+_STATIC_STICKERS_URL   = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/stickers.json"
+_STATIC_KEYCHAINS_URL  = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/keychains.json"
+_STATIC_KNIVES_URL     = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/knives.json"
 
 _WEAR_NAMES = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred"]
 
@@ -210,44 +213,98 @@ def _enrich_images_from_cache(items: list) -> None:
             item["image"] = _item_image_cache.get(item.get("name", ""), "")
 
 
-async def _fetch_static_images(client: httpx.AsyncClient) -> None:
-    """Populate _item_image_cache from ByMykel/CSGO-API (free GitHub dataset, ~2000 skins).
+def _register_skin(item: dict) -> None:
+    """Register a skin/knife with all wear and StatTrak™ name variants in _item_image_cache."""
+    name = item.get("name", "")
+    image = item.get("image", "")
+    if not name or not image:
+        return
+    wears = [w.get("name", "") for w in item.get("wears", []) if w.get("name")]
+    if not wears:
+        wears = _WEAR_NAMES
+    _item_image_cache[name] = image
+    for wear in wears:
+        _item_image_cache[f"{name} ({wear})"] = image
+    if item.get("stattrak"):
+        _item_image_cache[f"StatTrak™ {name}"] = image
+        for wear in wears:
+            _item_image_cache[f"StatTrak™ {name} ({wear})"] = image
 
-    Pre-generates wear and StatTrak™ variants so _enrich_images_from_cache can do a direct
-    lookup by item["name"] (= steamwebapi marketname, which includes wear suffix).
+
+def _register_flat(item: dict) -> None:
+    """Register a sticker/charm/keychain — no wear variants, just name → image.
+
+    Also registers by market_hash_name if present (stickers often have this field).
+    """
+    image = item.get("image", "")
+    if not image:
+        return
+    for key_field in ("market_hash_name", "name"):
+        key = item.get(key_field, "")
+        if key:
+            _item_image_cache[key] = image
+
+
+async def _fetch_static_images(client: httpx.AsyncClient) -> None:
+    """Populate _item_image_cache from ByMykel/CSGO-API for skins, stickers, charms, and knives.
+
     Skipped if the cache was populated within IMAGE_CACHE_TTL seconds.
     """
     now = time.monotonic()
     if now - _image_cache_meta.get("ts", 0.0) < IMAGE_CACHE_TTL:
         return
-    try:
-        resp = await client.get(_STATIC_SKINS_URL, timeout=15.0)
-        if resp.status_code != 200:
-            logger.warning("[image-cache] static skins returned %s", resp.status_code)
-            return
-        skins = resp.json()
-        if not isinstance(skins, list):
-            logger.warning("[image-cache] static skins unexpected format: %s", type(skins).__name__)
-            return
-        for skin in skins:
-            name = skin.get("name", "")
-            image = skin.get("image", "")
-            if not name or not image:
+
+    sources_with_wears = [
+        ("skins",  _STATIC_SKINS_URL),
+        ("knives", _STATIC_KNIVES_URL),
+    ]
+    sources_flat = [
+        ("stickers",  _STATIC_STICKERS_URL),
+        ("keychains", _STATIC_KEYCHAINS_URL),
+    ]
+
+    total_before = len(_item_image_cache)
+    fetched: dict[str, int] = {}
+
+    for label, url in sources_with_wears:
+        try:
+            resp = await client.get(url, timeout=15.0)
+            if resp.status_code != 200:
+                logger.warning("[image-cache] %s returned %s", label, resp.status_code)
                 continue
-            wears = [w.get("name", "") for w in skin.get("wears", []) if w.get("name")]
-            if not wears:
-                wears = _WEAR_NAMES
-            _item_image_cache[name] = image
-            for wear in wears:
-                _item_image_cache[f"{name} ({wear})"] = image
-            if skin.get("stattrak"):
-                _item_image_cache[f"StatTrak™ {name}"] = image
-                for wear in wears:
-                    _item_image_cache[f"StatTrak™ {name} ({wear})"] = image
-        _image_cache_meta["ts"] = now
-        logger.info("[image-cache] loaded %d entries from static skins (%d skins)", len(_item_image_cache), len(skins))
-    except Exception as exc:
-        logger.warning("[image-cache] could not fetch static skins: %s", exc)
+            data = resp.json()
+            if not isinstance(data, list):
+                logger.warning("[image-cache] %s unexpected format: %s", label, type(data).__name__)
+                continue
+            for item in data:
+                _register_skin(item)
+            fetched[label] = len(data)
+        except Exception as exc:
+            logger.warning("[image-cache] could not fetch %s: %s", label, exc)
+
+    for label, url in sources_flat:
+        try:
+            resp = await client.get(url, timeout=15.0)
+            if resp.status_code != 200:
+                logger.warning("[image-cache] %s returned %s", label, resp.status_code)
+                continue
+            data = resp.json()
+            if not isinstance(data, list):
+                logger.warning("[image-cache] %s unexpected format: %s", label, type(data).__name__)
+                continue
+            for item in data:
+                _register_flat(item)
+            fetched[label] = len(data)
+        except Exception as exc:
+            logger.warning("[image-cache] could not fetch %s: %s", label, exc)
+
+    _image_cache_meta["ts"] = now
+    logger.info(
+        "[image-cache] loaded %d total entries (%+d new) — sources: %s",
+        len(_item_image_cache),
+        len(_item_image_cache) - total_before,
+        fetched,
+    )
 
 
 def _build_movers_from_topmovers(gainers: list, losers: list) -> dict | None:

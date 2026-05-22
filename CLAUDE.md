@@ -15,10 +15,10 @@ pip install -r requirements.txt
 # Start the server — HTTP, no TLS (dev only)
 python run_dev.py
 # or directly:
-uvicorn main:app --host 127.0.0.1 --port 8001 --reload
+uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 
 # Health check
-curl http://localhost:8001/
+curl http://localhost:8000/
 ```
 
 There are no test or lint commands configured.
@@ -118,7 +118,7 @@ All stores live in `stores.py`. **TODO:** replace with Redis before running mult
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `BASE_URL` | `http://localhost:8001` | Must be reachable by Steam for the OpenID callback (use ngrok in local dev) |
+| `BASE_URL` | `http://localhost:8000` | Must be reachable by Steam for the OpenID callback (use ngrok in local dev) |
 | `FRONTEND_URL` | `http://localhost:4200` | CORS origin and post-login redirect target |
 | `JWT_SECRET` | `change-this-secret` | Signs all tokens. Startup warns if default or < 32 chars. Use `secrets.token_urlsafe(48)` to generate. |
 | `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. |

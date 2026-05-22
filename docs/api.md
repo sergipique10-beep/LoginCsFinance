@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL: `http://localhost:8001` (dev) — proxied via Angular as `/api`.
+Base URL: `http://localhost:8000` (dev) — proxied via Angular as `/api`.
 
 ---
 

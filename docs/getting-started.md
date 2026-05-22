@@ -60,7 +60,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 See [configuration.md](./configuration.md) for all available variables.
 
-> **Note:** `BASE_URL` must be publicly reachable for Steam's OpenID callback. Use [ngrok](https://ngrok.com/) in local dev: `ngrok http 8001` then set `BASE_URL=https://<your-subdomain>.ngrok-free.app`.
+> **Note:** `BASE_URL` must be publicly reachable for Steam's OpenID callback. Use [ngrok](https://ngrok.com/) in local dev: `ngrok http 8000` then set `BASE_URL=https://<your-subdomain>.ngrok-free.app`.
 
 ---
 
@@ -70,7 +70,7 @@ See [configuration.md](./configuration.md) for all available variables.
 python run_dev.py
 ```
 
-This starts uvicorn on `https://localhost:8001` using the certificates in `certs/`. Swagger UI is available at `https://localhost:8001/docs`.
+This starts uvicorn on `https://localhost:8000` using the certificates in `certs/`. Swagger UI is available at `https://localhost:8000/docs`.
 
 ---
 
@@ -102,7 +102,7 @@ Create `C:\Users\Marc\Documents\CS-FINANCE\CS-FINANCE-ionic\proxy.conf.json`:
 ```json
 {
   "/api": {
-    "target": "https://localhost:8001",
+    "target": "https://localhost:8000",
     "secure": false,
     "pathRewrite": { "^/api": "" }
   }
@@ -145,7 +145,7 @@ Adjust the relative path to `certs/` if your Angular project lives elsewhere.
 | URL | Expected |
 |-----|----------|
 | `https://localhost:4200` | Angular app loads without certificate warnings |
-| `https://localhost:8001/docs` | FastAPI Swagger UI |
-| `https://localhost:8001/` | `{"status": "ok"}` |
+| `https://localhost:8000/docs` | FastAPI Swagger UI |
+| `https://localhost:8000/` | `{"status": "ok"}` |
 
 If the browser shows a certificate warning despite mkcert being installed, re-run `mkcert -install` and restart the browser.
