@@ -8,82 +8,30 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from settings import STEAM_API_KEY, STEAM_GAME
 from stores import (
     PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, MARKET_INDEX_CACHE_TTL,
-    ITEM_HISTORY_CACHE_TTL, MOVERS_CACHE_TTL, TRENDING_CACHE_TTL, IMAGE_CACHE_TTL,
+    ITEM_HISTORY_CACHE_TTL, MOVERS_CACHE_TTL, TRENDING_CACHE_TTL,
     _profile_cache, _inventory_cache, _market_index_cache,
     _item_history_cache, _movers_cache, _topmovers_raw_cache, _trending_cache,
-    _item_image_cache, _image_cache_meta,
 )
 from auth.service import require_jwt, _get_client_ip, _rate_limit
 from steam.mappers import (
-    _delta_from_history,
     _map_item,
     _map_topmovers_item,
     _map_market_index_point,
     _map_news_item,
     _fetch_og_image,
 )
+from steam.services import (
+    STEAM_WEB_API,
+    _MOVERS_LIMIT,
+    _fetch_history_for_item,
+    _enrich_prices,
+    _cache_images,
+    _enrich_images_from_cache,
+    _fetch_static_images,
+    _build_movers_from_topmovers,
+)
 
 logger = logging.getLogger("uvicorn.error")
-
-STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
-_STATIC_SKINS_URL      = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins.json"
-_STATIC_STICKERS_URL   = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/stickers.json"
-_STATIC_KEYCHAINS_URL  = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/keychains.json"
-_STATIC_KNIVES_URL     = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/knives.json"
-
-_WEAR_NAMES = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred"]
-
-
-async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
-    cache_key = f"{name}:10"
-    now = time.monotonic()
-    cached = _item_history_cache.get(cache_key)
-    if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL:
-        return cached[0]
-    try:
-        resp = await client.get(
-            f"{STEAM_WEB_API}/history",
-            params={"key": STEAM_API_KEY, "market_hash_name": name, "interval": "10", "format": "json"},
-            timeout=8.0,
-        )
-        if resp.status_code != 200:
-            return []
-        raw = resp.json()
-        if not isinstance(raw, list):
-            return []
-        pts = sorted(
-            [
-                {
-                    "date":   p.get("createdat", "")[:10],
-                    "price":  float(p.get("price") or 0),
-                    "volume": int(p.get("sold") or 0),
-                }
-                for p in raw if p.get("price")
-            ],
-            key=lambda p: p["date"],
-        )
-        _item_history_cache[cache_key] = (pts, now)
-        return pts
-    except Exception:
-        return []
-
-
-async def _enrich_prices(client: httpx.AsyncClient, items: list) -> list:
-    histories = await asyncio.gather(*[_fetch_history_for_item(client, it["name"]) for it in items])
-    result = []
-    for item, pts in zip(items, histories):
-        if pts:
-            latest = pts[-1]["price"]
-            item = {
-                **item,
-                "priceLatest":   latest,
-                "priceDelta24h": _delta_from_history(pts, 1, latest),
-                "priceDelta7d":  _delta_from_history(pts, 7, latest),
-                "priceDelta30d": _delta_from_history(pts, 30, latest),
-            }
-        result.append(item)
-    return result
-
 
 router = APIRouter()
 
@@ -188,134 +136,7 @@ _MOVERS_SELECT = ",".join([
     "minfloat", "maxfloat", "paintindex",
 ])
 
-
-_MOVERS_LIMIT = 10
 _TRENDING_LIMIT = 25
-
-
-def _cache_images(raw_items: list) -> None:
-    """Populate _item_image_cache from a /items response so the topmovers fallback can use it."""
-    for raw in raw_items:
-        img = raw.get("image", "")
-        if not img:
-            continue
-        for key in (raw.get("markethashname"), raw.get("marketname")):
-            if key:
-                _item_image_cache[key] = img
-
-
-def _enrich_images_from_cache(items: list) -> None:
-    """Fill missing image fields in-place using _item_image_cache, keyed by item name."""
-    if not _item_image_cache:
-        return
-    for item in items:
-        if not item.get("image"):
-            item["image"] = _item_image_cache.get(item.get("name", ""), "")
-
-
-def _register_skin(item: dict) -> None:
-    """Register a skin/knife with all wear and StatTrak™ name variants in _item_image_cache."""
-    name = item.get("name", "")
-    image = item.get("image", "")
-    if not name or not image:
-        return
-    wears = [w.get("name", "") for w in item.get("wears", []) if w.get("name")]
-    if not wears:
-        wears = _WEAR_NAMES
-    _item_image_cache[name] = image
-    for wear in wears:
-        _item_image_cache[f"{name} ({wear})"] = image
-    if item.get("stattrak"):
-        _item_image_cache[f"StatTrak™ {name}"] = image
-        for wear in wears:
-            _item_image_cache[f"StatTrak™ {name} ({wear})"] = image
-
-
-def _register_flat(item: dict) -> None:
-    """Register a sticker/charm/keychain — no wear variants, just name → image.
-
-    Also registers by market_hash_name if present (stickers often have this field).
-    """
-    image = item.get("image", "")
-    if not image:
-        return
-    for key_field in ("market_hash_name", "name"):
-        key = item.get(key_field, "")
-        if key:
-            _item_image_cache[key] = image
-
-
-async def _fetch_static_images(client: httpx.AsyncClient) -> None:
-    """Populate _item_image_cache from ByMykel/CSGO-API for skins, stickers, charms, and knives.
-
-    Skipped if the cache was populated within IMAGE_CACHE_TTL seconds.
-    """
-    now = time.monotonic()
-    if now - _image_cache_meta.get("ts", 0.0) < IMAGE_CACHE_TTL:
-        return
-
-    sources_with_wears = [
-        ("skins",  _STATIC_SKINS_URL),
-        ("knives", _STATIC_KNIVES_URL),
-    ]
-    sources_flat = [
-        ("stickers",  _STATIC_STICKERS_URL),
-        ("keychains", _STATIC_KEYCHAINS_URL),
-    ]
-
-    total_before = len(_item_image_cache)
-    fetched: dict[str, int] = {}
-
-    for label, url in sources_with_wears:
-        try:
-            resp = await client.get(url, timeout=15.0)
-            if resp.status_code != 200:
-                logger.warning("[image-cache] %s returned %s", label, resp.status_code)
-                continue
-            data = resp.json()
-            if not isinstance(data, list):
-                logger.warning("[image-cache] %s unexpected format: %s", label, type(data).__name__)
-                continue
-            for item in data:
-                _register_skin(item)
-            fetched[label] = len(data)
-        except Exception as exc:
-            logger.warning("[image-cache] could not fetch %s: %s", label, exc)
-
-    for label, url in sources_flat:
-        try:
-            resp = await client.get(url, timeout=15.0)
-            if resp.status_code != 200:
-                logger.warning("[image-cache] %s returned %s", label, resp.status_code)
-                continue
-            data = resp.json()
-            if not isinstance(data, list):
-                logger.warning("[image-cache] %s unexpected format: %s", label, type(data).__name__)
-                continue
-            for item in data:
-                _register_flat(item)
-            fetched[label] = len(data)
-        except Exception as exc:
-            logger.warning("[image-cache] could not fetch %s: %s", label, exc)
-
-    _image_cache_meta["ts"] = now
-    logger.info(
-        "[image-cache] loaded %d total entries (%+d new) — sources: %s",
-        len(_item_image_cache),
-        len(_item_image_cache) - total_before,
-        fetched,
-    )
-
-
-def _build_movers_from_topmovers(gainers: list, losers: list) -> dict | None:
-    """Builds hot/cold result from market-index topmovers data. Returns None if no data."""
-    if not gainers and not losers:
-        return None
-    hot  = [_map_topmovers_item(g) for g in gainers[:_MOVERS_LIMIT]]
-    cold = [_map_topmovers_item(l) for l in losers[:_MOVERS_LIMIT]]
-    hot  = sorted(hot,  key=lambda x: x["priceDelta24h"], reverse=True)
-    cold = sorted(cold, key=lambda x: x["priceDelta24h"])
-    return {"hot": hot, "cold": cold}
 
 
 @router.get("/market/movers", summary="Top movers del mercado CS2 (hot & cold 24 h)")

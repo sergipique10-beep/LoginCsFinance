@@ -62,18 +62,27 @@ LoginCsFinance/
     mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
                     #   _map_news_item, _fetch_og_image, _clean_news_content,
                     #   _delta_from_history, _best_price_from_markets, _safe_delta
-    router.py       # APIRouter: /me, /inventory, /market/index, /item/history, /news/cs2
-                    # Also contains: _fetch_history_for_item, _enrich_prices (inventory enrichment)
+    services.py     # Async service helpers and image-cache utilities:
+                    #   _fetch_history_for_item, _enrich_prices (inventory enrichment)
+                    #   _cache_images, _enrich_images_from_cache (image cache fill/lookup)
+                    #   _register_skin, _register_flat (ByMykel static data registration)
+                    #   _fetch_static_images (lazy loader for ByMykel/CSGO-API)
+                    #   _build_movers_from_topmovers (hot/cold builder from market-index)
+                    #   Constants: STEAM_WEB_API, _STATIC_*_URL, _WEAR_NAMES, _MOVERS_LIMIT
+    router.py       # APIRouter: /me, /inventory, /market/movers, /market/trending,
+                    #   /market/index, /item/history, /news/cs2
+                    # Constants: _MOVERS_SELECT, _TRENDING_LIMIT
 ```
 
 **Dependency order** (no circular imports):
 
 ```
 settings.py, stores.py, middleware.py, steam/mappers.py  ← nothing internal
-auth/service.py   ← stores, settings
-auth/router.py    ← auth/service, stores, settings
-steam/router.py   ← steam/mappers, stores, settings, auth/service (require_jwt only)
-main.py           ← middleware, auth/router, steam/router, settings
+auth/service.py    ← stores, settings
+auth/router.py     ← auth/service, stores, settings
+steam/services.py  ← steam/mappers, stores, settings
+steam/router.py    ← steam/services, steam/mappers, stores, settings, auth/service (require_jwt only)
+main.py            ← middleware, auth/router, steam/router, settings
 ```
 
 ## Endpoints
@@ -103,7 +112,7 @@ steamwebapi.com responses are transformed in `steam/mappers.py` before being ret
 - `_map_news_item(item, index, image_url)` — Steam news items → normalized shape; `featured: true` for index 0; includes `content` excerpt via `_clean_news_content`
 - `_fetch_og_image(client, url)` — async OG image scraper used by `/news/cs2`
 
-**Inventory enrichment** (`steam/router.py`): after `_map_item` maps the static API data, `_enrich_prices` fires one concurrent `asyncio.gather` call to `/history` per item (hardcoded `interval=10` min). This overwrites `priceLatest`, `priceDelta24h`, `priceDelta7d`, `priceDelta30d` with live-history-derived values. Cached per item in `_item_history_cache`. This means a first `/inventory` call can hit the API N times (once per item) — relevant when near the 5 req/day free plan limit.
+**Inventory enrichment** (`steam/services.py`): after `_map_item` maps the static API data, `_enrich_prices` fires one concurrent `asyncio.gather` call to `/history` per item (hardcoded `interval=10` min). This overwrites `priceLatest`, `priceDelta24h`, `priceDelta7d`, `priceDelta30d` with live-history-derived values. Cached per item in `_item_history_cache`. This means a first `/inventory` call can hit the API N times (once per item) — relevant when near the 5 req/day free plan limit.
 
 
 ## In-memory stores (single-worker only)
