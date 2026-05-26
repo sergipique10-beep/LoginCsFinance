@@ -57,7 +57,6 @@ LoginCsFinance/
                     #               _issue_tokens, _set_refresh_cookie, require_jwt
     router.py       # APIRouter: /auth/steam, /auth/steam/callback, /auth/token,
                     #            /auth/dev-token, /auth/refresh, /auth/logout
-<<<<<<< HEAD
                     # Note: reads DEBUG via os.getenv() directly, not settings.py
   steam/
     mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
