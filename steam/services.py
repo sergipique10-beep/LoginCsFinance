@@ -95,7 +95,13 @@ def _enrich_images_from_cache(items: list) -> None:
         return
     for item in items:
         if not item.get("image"):
-            item["image"] = _item_image_cache.get(item.get("name", ""), "")
+            name = item.get("name", "")
+            img  = _item_image_cache.get(name, "")
+            if not img and name.startswith("Souvenir "):
+                item_type = (item.get("itemType") or "").lower()
+                if "charm" not in item_type:
+                    img = _item_image_cache.get(name[len("Souvenir "):], "")
+            item["image"] = img
 
 
 def _register_skin(item: dict) -> None:
@@ -188,8 +194,13 @@ async def _fetch_static_images(client: httpx.AsyncClient) -> None:
 def _build_movers_from_topmovers(gainers: list, losers: list) -> dict | None:
     if not gainers and not losers:
         return None
-    hot  = [_map_topmovers_item(g) for g in gainers[:_MOVERS_LIMIT]]
-    cold = [_map_topmovers_item(l) for l in losers[:_MOVERS_LIMIT]]
+    def _is_slab(raw: dict) -> bool:
+        name = (raw.get("marketname") or raw.get("markethashname") or "").lower()
+        return "sticker slab" in name
+    hot  = [_map_topmovers_item(g) for g in gainers if not _is_slab(g)][:_MOVERS_LIMIT]
+    cold = [_map_topmovers_item(l) for l in losers  if not _is_slab(l)][:_MOVERS_LIMIT]
+    logger.info("[market-movers] topmovers raw: gainers=%d losers=%d | after_filter: hot=%d cold=%d",
+                len(gainers), len(losers), len(hot), len(cold))
     hot  = sorted(hot,  key=lambda x: x["priceDelta24h"], reverse=True)
     cold = sorted(cold, key=lambda x: x["priceDelta24h"])
     return {"hot": hot, "cold": cold}

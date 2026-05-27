@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from settings import STEAM_API_KEY, STEAM_GAME
 from stores import (
     PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, MARKET_INDEX_CACHE_TTL,
-    ITEM_HISTORY_CACHE_TTL, MOVERS_CACHE_TTL, TRENDING_CACHE_TTL,
+    ITEM_HISTORY_CACHE_TTL, MOVERS_CACHE_TTL, TRENDING_CACHE_TTL, SEARCH_CACHE_TTL,
     _profile_cache, _inventory_cache, _market_index_cache,
-    _item_history_cache, _movers_cache, _topmovers_raw_cache, _trending_cache,
+    _item_history_cache, _movers_cache, _topmovers_raw_cache, _trending_cache, _search_cache,
 )
 from auth.service import require_jwt, _get_client_ip, _rate_limit
 from steam.mappers import (
@@ -178,7 +178,11 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
                 volume  = int(raw.get("sold24h") or 0)
                 if latest > 0 and prev24h > 0 and volume >= 5:
                     mapped.append(_map_item(raw))
-            by_delta = sorted(mapped, key=lambda x: x["priceDelta24h"])
+            by_delta = [x for x in sorted(mapped, key=lambda x: x["priceDelta24h"])
+                        if "sticker slab" not in x["name"].lower()]
+            logger.info("[market-movers] mapped=%d after_filter=%d cold_candidates=%s",
+                        len(mapped), len(by_delta),
+                        [x["name"] for x in by_delta[:_MOVERS_LIMIT]])
             result = {
                 "hot":  list(reversed(by_delta[-_MOVERS_LIMIT:])),
                 "cold": by_delta[:_MOVERS_LIMIT],
@@ -233,6 +237,63 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
 
     logger.warning("[market-movers] no data available from any source")
     return {"hot": [], "cold": []}
+
+
+_SEARCH_LIMIT = 30
+
+
+@router.get("/market/items", summary="Busca items en el mercado CS2 por nombre")
+async def get_market_items(
+    request: Request,
+    q: str,
+    user: dict = Depends(require_jwt),
+):
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="q is required")
+
+    cache_key = query.lower()
+    now = time.monotonic()
+    cached = _search_cache.get(cache_key)
+    if cached and now - cached[1] < SEARCH_CACHE_TTL:
+        return cached[0]
+
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/items",
+            params={
+                "key": STEAM_API_KEY,
+                "game": "cs2",
+                "name": query,
+                "max": _SEARCH_LIMIT,
+                "select": _MOVERS_SELECT,
+                "format": "json",
+                "production": "1",
+            },
+            timeout=15.0,
+        )
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code == 402:
+        raise HTTPException(status_code=429, detail="Steam API daily limit reached — try again tomorrow")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    data = resp.json()
+    if not isinstance(data, list):
+        raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+
+    _cache_images(data)
+    result = [
+        _map_item(raw) for raw in data
+        if float(raw.get("pricelatestsell") or 0) > 0
+        and "sticker slab" not in (raw.get("marketname") or raw.get("market_hash_name") or "").lower()
+    ][:_SEARCH_LIMIT]
+
+    _search_cache[cache_key] = (result, now)
+    logger.info("[market-items] q=%r → %d results", query, len(result))
+    return result
 
 
 @router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
