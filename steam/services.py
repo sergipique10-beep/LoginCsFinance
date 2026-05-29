@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import date, timedelta
 
 import httpx
 
@@ -31,16 +32,24 @@ _MOVERS_LIMIT = 10
 # ── Price history ─────────────────────────────────────────────────────────────
 
 async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
-    cache_key = f"{name}:10"
+    cache_key = f"{name}:1d35"
     now = time.monotonic()
     cached = _item_history_cache.get(cache_key)
-    if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL:
+    if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL and cached[0]:
         return cached[0]
     try:
+        today = date.today()
         resp = await client.get(
             f"{STEAM_WEB_API}/history",
-            params={"key": STEAM_API_KEY, "market_hash_name": name, "interval": "10", "format": "json"},
-            timeout=8.0,
+            params={
+                "key": STEAM_API_KEY,
+                "market_hash_name": name,
+                "interval": "1",
+                "start_date": (today - timedelta(days=35)).isoformat(),
+                "end_date": today.isoformat(),
+                "format": "json",
+            },
+            timeout=30.0,
         )
         if resp.status_code != 200:
             return []
@@ -64,15 +73,22 @@ async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
         return []
 
 
-async def _enrich_prices(client: httpx.AsyncClient, items: list) -> list:
-    histories = await asyncio.gather(*[_fetch_history_for_item(client, it["name"]) for it in items])
+async def _enrich_prices(client: httpx.AsyncClient, items: list, concurrency: int = 5) -> list:
+    sem = asyncio.Semaphore(concurrency)
+
+    async def fetch(name: str):
+        async with sem:
+            return await _fetch_history_for_item(client, name)
+
+    histories = await asyncio.gather(*[fetch(it["name"]) for it in items])
     result = []
     for item, pts in zip(items, histories):
         if pts:
-            latest = pts[-1]["price"]
+            # Use the price from /items if available — it's more current than history.
+            # History may be months old for low-volume items.
+            latest = item.get("priceLatest") or pts[-1]["price"]
             item = {
                 **item,
-                "priceLatest":   latest,
                 "priceDelta24h": _delta_from_history(pts, 1, latest),
                 "priceDelta7d":  _delta_from_history(pts, 7, latest),
                 "priceDelta30d": _delta_from_history(pts, 30, latest),
@@ -207,6 +223,8 @@ def _build_movers_from_topmovers(gainers: list, losers: list) -> dict | None:
     cold = [_map_topmovers_item(l) for l in losers  if not _is_slab(l)][:_MOVERS_LIMIT]
     logger.info("[market-movers] topmovers raw: gainers=%d losers=%d | after_filter: hot=%d cold=%d",
                 len(gainers), len(losers), len(hot), len(cold))
-    hot  = sorted(hot,  key=lambda x: x["priceDelta24h"], reverse=True)
-    cold = sorted(cold, key=lambda x: x["priceDelta24h"])
+    hot  = sorted(hot,  key=lambda x: x["_change24h"], reverse=True)
+    cold = sorted(cold, key=lambda x: x["_change24h"])
+    for item in hot + cold:
+        del item["_change24h"]
     return {"hot": hot, "cold": cold}

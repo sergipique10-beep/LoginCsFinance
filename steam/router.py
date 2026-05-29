@@ -174,15 +174,20 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
             _cache_images(data)
             mapped = []
             for raw in data:
-                latest  = float(raw.get("pricelatestsell")   or 0)
-                prev24h = float(raw.get("pricelatestsell24h") or 0)
-                volume  = int(raw.get("sold24h") or 0)
-                if latest > 0 and prev24h > 0 and volume >= 5:
+                latest = float(raw.get("pricelatestsell") or 0)
+                volume = int(raw.get("sold24h") or 0)
+                if latest > 0 and volume >= 5 and "sticker slab" not in (raw.get("marketname") or "").lower():
                     mapped.append(_map_item(raw))
-            by_delta = [x for x in sorted(mapped, key=lambda x: x["priceDelta24h"])
-                        if "sticker slab" not in x["name"].lower()]
-            logger.info("[market-movers] mapped=%d after_filter=%d cold_candidates=%s",
-                        len(mapped), len(by_delta),
+            # Sort by price descending — higher-priced items tend to have more price movement.
+            # Cap at 30 to avoid exhausting /history rate limits on first load.
+            # _fetch_history_for_item caches results for 23h so subsequent calls are free.
+            mapped.sort(key=lambda x: x["priceLatest"], reverse=True)
+            candidates = mapped[:30]
+            logger.info("[market-movers] candidates before enrich: %d (capped from %d)", len(candidates), len(mapped))
+            candidates = await _enrich_prices(request.app.state.http_client, candidates)
+            by_delta = sorted(candidates, key=lambda x: (x["priceDelta7d"] is None, x["priceDelta7d"] or 0))
+            logger.info("[market-movers] enriched=%d cold_candidates=%s",
+                        len(candidates),
                         [x["name"] for x in by_delta[:_MOVERS_LIMIT]])
             result = {
                 "hot":  list(reversed(by_delta[-_MOVERS_LIMIT:])),
@@ -338,6 +343,7 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
                 if latest > 0 and volume >= 1:
                     result.append(_map_item(raw))
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_LIMIT]
+            result = await _enrich_prices(request.app.state.http_client, result)
             _enrich_images_from_cache(result)
             _trending_cache[cache_key] = (result, now)
             return result

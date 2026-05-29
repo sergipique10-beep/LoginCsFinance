@@ -28,17 +28,21 @@ def _normalize_image(raw: str) -> str:
 
 # ── Inventory mappers ─────────────────────────────────────────────────────────
 
-def _delta_from_history(pts: list, days: int, latest: float) -> float:
-    """Returns the % change between `latest` and the price `days` days ago in `pts`."""
+def _delta_from_history(pts: list, days: int, latest: float) -> float | None:
+    """Returns the % change between `latest` and the price `days` ago in `pts`.
+
+    Returns None if there are no data points within the requested window —
+    callers should treat None as 'no recent sales data' rather than 0% change.
+    """
     if not pts or not latest:
-        return 0.0
+        return None
     cutoff = (date.today() - timedelta(days=days)).isoformat()
     past = [p for p in pts if p["date"] <= cutoff]
     if not past:
-        return 0.0
+        return None
     ref = past[-1]["price"]
     if not ref:
-        return 0.0
+        return None
     return round((latest - ref) / ref * 100, 2)
 
 
@@ -54,9 +58,9 @@ def _best_price_from_markets(prices: list) -> float:
     return float(prices[0].get("price") or prices[0].get("value") or 0)
 
 
-def _safe_delta(new: float | None, old: float | None) -> float:
+def _safe_delta(new: float | None, old: float | None) -> float | None:
     if not new or not old:
-        return 0.0
+        return None
     return round((new - old) / old * 100, 2)
 
 
@@ -137,12 +141,15 @@ def _map_item(item: dict) -> dict:
 # ── Market index topmovers mapper ────────────────────────────────────────────
 
 def _map_topmovers_item(raw: dict) -> dict:
-    """Maps a topmovers gainer/loser object from /market-index/cs2 to ISkinCard shape."""
-    latest  = float(raw.get("pricelatestsell") or raw.get("price") or 0)
-    p24h    = float(raw.get("pricelatestsell24h") or raw.get("price24h") or 0)
-    p7d     = float(raw.get("pricelatestsell7d") or raw.get("price7d") or 0)
-    p30d    = float(raw.get("pricelatestsell30d") or raw.get("price30d") or 0)
-    change  = float(raw.get("change24h") or raw.get("change") or 0)
+    """Maps a topmovers gainer/loser object from /market-index/cs2 to ISkinCard shape.
+
+    The topmovers payload only contains {markethashname, price, change24h}.
+    change24h is an absolute price value, not a percentage — it cannot be used
+    as a delta. All price deltas are set to 0.0; _change24h is kept as an
+    internal sort key for _build_movers_from_topmovers.
+    """
+    latest = float(raw.get("price") or 0)
+    change = float(raw.get("change24h") or 0)
     return {
         "id":             raw.get("id", "") or raw.get("markethashname", ""),
         "name":           raw.get("marketname", "") or raw.get("markethashname", ""),
@@ -164,13 +171,13 @@ def _map_topmovers_item(raw: dict) -> dict:
         "floatMax":       raw.get("maxfloat"),
         "paintIndex":     raw.get("paintindex"),
         "phase":          None,
-        "priceLatest":    latest or change,
+        "priceLatest":    latest,
         "priceSafe":      0,
         "priceMin":       0,
         "priceMax":       0,
-        "priceDelta24h":  _safe_delta(latest, p24h) if p24h else change,
-        "priceDelta7d":   _safe_delta(latest, p7d),
-        "priceDelta30d":  _safe_delta(latest, p30d),
+        "priceDelta24h":  0.0,
+        "priceDelta7d":   0.0,
+        "priceDelta30d":  0.0,
         "priceReal":      None,
         "externalPrices": [],
         "sold24h":        int(raw.get("sold24h") or 0),
@@ -185,6 +192,7 @@ def _map_topmovers_item(raw: dict) -> dict:
         "tradable":       True,
         "tradeLockDays":  None,
         "steamUrl":       None,
+        "_change24h":     change,
     }
 
 
