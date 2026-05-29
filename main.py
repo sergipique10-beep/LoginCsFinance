@@ -10,6 +10,7 @@ from settings import FRONTEND_URL, JWT_SECRET, STEAM_API_KEY
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
 from steam.router import router as steam_router
+from steam.services import _fetch_static_images
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
             "los endpoints de Steam Web API no funcionarán"
         )
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
+    await _fetch_static_images(app.state.http_client)
     yield
     await app.state.http_client.aclose()
 
