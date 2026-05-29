@@ -16,3 +16,9 @@ _raw_origins = os.getenv("ALLOWED_REDIRECT_ORIGINS", FRONTEND_URL)
 ALLOWED_REDIRECT_ORIGINS: frozenset[str] = frozenset(
     o.strip() for o in _raw_origins.split(",") if o.strip()
 )
+
+# CORS origins: siempre incluye FRONTEND_URL y https://localhost (Capacitor WebView).
+_raw_cors = os.getenv("ALLOWED_CORS_ORIGINS", FRONTEND_URL)
+_cors_set = {o.strip() for o in _raw_cors.split(",") if o.strip()}
+_cors_set.add("https://localhost")
+ALLOWED_CORS_ORIGINS: list[str] = list(_cors_set)

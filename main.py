@@ -6,7 +6,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from settings import FRONTEND_URL, JWT_SECRET, STEAM_API_KEY
+from settings import ALLOWED_CORS_ORIGINS, JWT_SECRET, STEAM_API_KEY
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
 from steam.router import router as steam_router
@@ -42,7 +42,7 @@ app = FastAPI(title="Steam Login", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=ALLOWED_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
