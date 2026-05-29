@@ -19,6 +19,9 @@ _STATIC_SKINS_URL     = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main
 _STATIC_STICKERS_URL  = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/stickers.json"
 _STATIC_KEYCHAINS_URL = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/keychains.json"
 _STATIC_KNIVES_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/knives.json"
+_STATIC_CRATES_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/crates.json"
+_STATIC_AGENTS_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/agents.json"
+_STATIC_PATCHES_URL   = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/patches.json"
 
 _WEAR_NAMES = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred"]
 
@@ -143,6 +146,9 @@ async def _fetch_static_images(client: httpx.AsyncClient) -> None:
     sources_flat = [
         ("stickers",  _STATIC_STICKERS_URL),
         ("keychains", _STATIC_KEYCHAINS_URL),
+        ("crates",    _STATIC_CRATES_URL),
+        ("agents",    _STATIC_AGENTS_URL),
+        ("patches",   _STATIC_PATCHES_URL),
     ]
 
     total_before = len(_item_image_cache)

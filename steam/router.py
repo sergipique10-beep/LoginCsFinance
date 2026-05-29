@@ -117,6 +117,7 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
 
     items = [_map_item(item) for item in data]
     items = await _enrich_prices(request.app.state.http_client, items)
+    _enrich_images_from_cache(items)
     _inventory_cache[steam_id] = (items, now)
     return items
 
@@ -187,6 +188,8 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
                 "hot":  list(reversed(by_delta[-_MOVERS_LIMIT:])),
                 "cold": by_delta[:_MOVERS_LIMIT],
             }
+            _enrich_images_from_cache(result["hot"])
+            _enrich_images_from_cache(result["cold"])
             _movers_cache[cache_key] = (result, now)
             return result
         logger.warning("[market-movers] /items returned unexpected type: %s", type(data).__name__)
@@ -335,6 +338,7 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
                 if latest > 0 and volume >= 1:
                     result.append(_map_item(raw))
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_LIMIT]
+            _enrich_images_from_cache(result)
             _trending_cache[cache_key] = (result, now)
             return result
         logger.warning("[market-trending] /items returned unexpected type: %s", type(data).__name__)
