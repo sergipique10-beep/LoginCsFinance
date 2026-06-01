@@ -272,7 +272,7 @@ async def get_market_items(
             params={
                 "key": STEAM_API_KEY,
                 "game": "cs2",
-                "name": query,
+                "search": query,
                 "max": _SEARCH_LIMIT,
                 "select": _MOVERS_SELECT,
                 "format": "json",
