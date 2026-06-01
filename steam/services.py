@@ -26,6 +26,7 @@ _STATIC_PATCHES_URL   = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main
 _WEAR_NAMES = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred"]
 
 _MOVERS_LIMIT = 10
+_MOVERS_MIN_PRICE = 10.0
 
 
 # ── Price history ─────────────────────────────────────────────────────────────
@@ -203,8 +204,11 @@ def _build_movers_from_topmovers(gainers: list, losers: list) -> dict | None:
     def _is_slab(raw: dict) -> bool:
         name = (raw.get("marketname") or raw.get("markethashname") or "").lower()
         return "sticker slab" in name
-    hot  = [_map_topmovers_item(g) for g in gainers if not _is_slab(g)][:_MOVERS_LIMIT]
-    cold = [_map_topmovers_item(l) for l in losers  if not _is_slab(l)][:_MOVERS_LIMIT]
+    def _above_min_price(raw: dict) -> bool:
+        price = float(raw.get("pricelatestsell") or raw.get("price") or 0)
+        return price >= _MOVERS_MIN_PRICE
+    hot  = [_map_topmovers_item(g) for g in gainers if not _is_slab(g) and _above_min_price(g)][:_MOVERS_LIMIT]
+    cold = [_map_topmovers_item(l) for l in losers  if not _is_slab(l) and _above_min_price(l)][:_MOVERS_LIMIT]
     logger.info("[market-movers] topmovers raw: gainers=%d losers=%d | after_filter: hot=%d cold=%d",
                 len(gainers), len(losers), len(hot), len(cold))
     hot  = sorted(hot,  key=lambda x: x["priceDelta24h"], reverse=True)

@@ -23,6 +23,7 @@ from steam.mappers import (
 from steam.services import (
     STEAM_WEB_API,
     _MOVERS_LIMIT,
+    _MOVERS_MIN_PRICE,
     _fetch_history_for_item,
     _enrich_prices,
     _cache_images,
@@ -156,7 +157,7 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
                 "key": STEAM_API_KEY,
                 "game": "cs2",
                 "sort_by": "soldZa",
-                "max": 200,
+                "max": 500,
                 "select": _MOVERS_SELECT,
                 "format": "json",
                 "production": "1",
@@ -177,7 +178,7 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
                 latest  = float(raw.get("pricelatestsell")   or 0)
                 prev24h = float(raw.get("pricelatestsell24h") or 0)
                 volume  = int(raw.get("sold24h") or 0)
-                if latest > 0 and prev24h > 0 and volume >= 5:
+                if latest >= _MOVERS_MIN_PRICE and prev24h > 0 and volume >= 2:
                     mapped.append(_map_item(raw))
             by_delta = [x for x in sorted(mapped, key=lambda x: x["priceDelta24h"])
                         if "sticker slab" not in x["name"].lower()]
@@ -261,14 +262,15 @@ async def get_market_items(
     if cached and now - cached[1] < SEARCH_CACHE_TTL:
         return cached[0]
 
+    # ── Step 1: find candidates from /items ──────────────────────────────────
     try:
         resp = await request.app.state.http_client.get(
             f"{STEAM_WEB_API}/items",
             params={
                 "key": STEAM_API_KEY,
                 "game": "cs2",
-                "name": query,
-                "max": _SEARCH_LIMIT,
+                "q": query,
+                "max": 200,
                 "select": _MOVERS_SELECT,
                 "format": "json",
                 "production": "1",
@@ -288,14 +290,67 @@ async def get_market_items(
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
     _cache_images(data)
+    query_lower = query.lower()
+    matching_raw = [
+        raw for raw in data
+        if float(raw.get("pricelatestsell") or raw.get("price") or raw.get("pricemin") or 0) > 0
+        and "sticker slab" not in (raw.get("marketname") or raw.get("markethashname") or "").lower()
+        and query_lower in (raw.get("marketname") or raw.get("markethashname") or "").lower()
+    ]
+
+    if not matching_raw:
+        logger.info("[market-items] q=%r → raw=%d no matches", query, len(data))
+        return []
+
+    # ── Step 2: expand to all variants via /item?with_groups=true ────────────
+    first_name = matching_raw[0].get("marketname") or matching_raw[0].get("markethashname", "")
+    try:
+        groups_resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/item",
+            params={
+                "key": STEAM_API_KEY,
+                "market_hash_name": first_name,
+                "with_groups": "true",
+                "format": "json",
+                "production": "1",
+            },
+            timeout=15.0,
+        )
+        groups_ok = groups_resp.status_code == 200
+    except (httpx.TimeoutException, httpx.RequestError):
+        groups_ok = False
+        groups_resp = None
+
+    all_variants_raw: list = []
+    if groups_ok and groups_resp is not None:
+        gdata = groups_resp.json()
+        logger.info("[market-items] with_groups type=%s keys=%s",
+                    type(gdata).__name__,
+                    list(gdata.keys()) if isinstance(gdata, dict) else "—")
+        if isinstance(gdata, list):
+            all_variants_raw = gdata
+        elif isinstance(gdata, dict):
+            all_variants_raw = (
+                gdata.get("groups")
+                or gdata.get("items")
+                or gdata.get("variants")
+                or [gdata]
+            )
+
+    if not all_variants_raw:
+        all_variants_raw = matching_raw
+
+    _cache_images(all_variants_raw)
     result = [
-        _map_item(raw) for raw in data
-        if float(raw.get("pricelatestsell") or 0) > 0
-        and "sticker slab" not in (raw.get("marketname") or raw.get("market_hash_name") or "").lower()
+        _map_item(raw) for raw in all_variants_raw
+        if float(raw.get("pricelatestsell") or raw.get("price") or raw.get("pricemin") or 0) > 0
+        and "sticker slab" not in (raw.get("marketname") or raw.get("markethashname") or "").lower()
     ][:_SEARCH_LIMIT]
+    _enrich_images_from_cache(result)
 
     _search_cache[cache_key] = (result, now)
-    logger.info("[market-items] q=%r → %d results", query, len(result))
+    logger.info("[market-items] q=%r → raw=%d matching=%d variants=%d result=%d | first=%r",
+                query, len(data), len(matching_raw), len(all_variants_raw), len(result), first_name)
     return result
 
 
