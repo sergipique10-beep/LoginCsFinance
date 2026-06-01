@@ -299,6 +299,9 @@ async def get_market_items(
         and "sticker slab" not in (raw.get("marketname") or raw.get("market_hash_name") or "").lower()
     ][:_SEARCH_LIMIT]
 
+    await _fetch_static_images(request.app.state.http_client)
+    _enrich_images_from_cache(result)
+
     _search_cache[cache_key] = (result, now)
     logger.info("[market-items] q=%r → %d results", query, len(result))
     return result
