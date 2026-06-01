@@ -9,8 +9,10 @@ from settings import STEAM_API_KEY, STEAM_GAME
 from stores import (
     PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, MARKET_INDEX_CACHE_TTL,
     ITEM_HISTORY_CACHE_TTL, MOVERS_CACHE_TTL, TRENDING_CACHE_TTL, SEARCH_CACHE_TTL,
+    MARKET_PRICES_CACHE_TTL,
     _profile_cache, _inventory_cache, _market_index_cache,
     _item_history_cache, _movers_cache, _topmovers_raw_cache, _trending_cache, _search_cache,
+    _market_prices_cache,
 )
 from auth.service import require_jwt, _get_client_ip, _rate_limit
 from steam.mappers import (
@@ -22,6 +24,7 @@ from steam.mappers import (
 )
 from steam.services import (
     STEAM_WEB_API,
+    STEAM_MARKET_API,
     _MOVERS_LIMIT,
     _fetch_history_for_item,
     _enrich_prices,
@@ -480,6 +483,64 @@ async def get_market_index(
     }
     _market_index_cache[cache_key] = (result, now)
     return result
+
+
+_VALID_MARKETS = frozenset({
+    "buff", "skinport", "skinbaron", "dmarket", "waxpeer",
+    "bitskins", "csgotm", "haloskins", "tradeit", "skinbid",
+    "csfloat", "youpin",
+})
+
+
+@router.get("/market/prices", summary="Precios en tiempo real de un item por mercado")
+async def get_market_prices(
+    request: Request,
+    market: str,
+    name: str | None = None,
+    currency: str | None = None,
+    user: dict = Depends(require_jwt),
+):
+    market = market.lower().strip()
+    if market not in _VALID_MARKETS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown market '{market}'. Valid: {', '.join(sorted(_VALID_MARKETS))}",
+        )
+
+    cache_key = f"{market}:{(name or '').lower()}:{(currency or 'usd').lower()}"
+    now = time.monotonic()
+    cached = _market_prices_cache.get(cache_key)
+    if cached and now - cached[1] < MARKET_PRICES_CACHE_TTL:
+        return cached[0]
+
+    params: dict = {"key": STEAM_API_KEY}
+    if name:
+        params["market_hash_name"] = name
+    if currency:
+        params["currency"] = currency
+
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_MARKET_API}/{market}/prices",
+            params=params,
+            timeout=15.0,
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Market prices request timed out")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code == 402:
+        raise HTTPException(status_code=429, detail="Steam API daily limit reached — try again tomorrow")
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"Market '{market}' not found or no prices available")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    data = resp.json()
+    _market_prices_cache[cache_key] = (data, now)
+    logger.info("[market-prices] market=%r name=%r → %s items", market, name, len(data) if isinstance(data, list) else "object")
+    return data
 
 
 @router.get("/item/history", summary="Historial de precios de un item CS2")

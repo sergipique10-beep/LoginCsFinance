@@ -15,6 +15,7 @@ from steam.mappers import _delta_from_history, _map_topmovers_item
 logger = logging.getLogger("uvicorn.error")
 
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
+STEAM_MARKET_API = "https://www.steamwebapi.com/market"
 
 _STATIC_SKINS_URL     = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins.json"
 _STATIC_STICKERS_URL  = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/stickers.json"

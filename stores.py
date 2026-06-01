@@ -39,6 +39,7 @@ ITEM_HISTORY_CACHE_TTL = 82800
 MOVERS_CACHE_TTL = 82800     # 23 h — free plan: 5 req/day, must match other caches
 TRENDING_CACHE_TTL = 82800   # 23 h — same daily budget
 SEARCH_CACHE_TTL = 300       # 5 min — search queries cached briefly to avoid hammering the API
+MARKET_PRICES_CACHE_TTL = 300  # 5 min — live market prices, updated frequently by steamwebapi
 IMAGE_CACHE_TTL = 82800      # 23 h — same budget as other free-plan caches; CDN URLs are stable
 
 # ── Cache stores ───────────────────────────────────────────────────────────────
@@ -51,5 +52,6 @@ _movers_cache: dict[str, tuple[dict, float]] = {}
 _topmovers_raw_cache: dict[str, tuple[list, list, float]] = {}  # "latest" → (gainers, losers, ts)
 _trending_cache: dict[str, tuple[list, float]] = {}
 _search_cache: dict[str, tuple[list, float]] = {}
+_market_prices_cache: dict[str, tuple[any, float]] = {}
 _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image URL
 _image_cache_meta: dict[str, float] = {}  # "ts" → monotonic timestamp of last successful population
