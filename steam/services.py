@@ -115,7 +115,17 @@ def _enrich_images_from_cache(items: list) -> None:
     for item in items:
         if not item.get("image"):
             name = item.get("name", "")
-            img  = _item_image_cache.get(name, "")
+            img = _item_image_cache.get(name, "")
+            # StatTrak variants share the same skin image as their base version.
+            # Removing "StatTrak™ " covers all cases in one step:
+            #   "★ StatTrak™ X (wear)" → "★ X (wear)"  (knife, image from API)
+            #   "StatTrak™ X (wear)"   → "X (wear)"     (weapon, image from API or ByMykel)
+            if not img and "StatTrak™ " in name:
+                img = _item_image_cache.get(name.replace("StatTrak™ ", "", 1), "")
+            # Non-StatTrak "★ X": ByMykel stores knives without the star prefix.
+            if not img and name.startswith("★ "):
+                img = _item_image_cache.get(name[2:], "")
+            # Souvenir items: try the base skin name without the "Souvenir " prefix.
             if not img and name.startswith("Souvenir "):
                 item_type = (item.get("itemType") or "").lower()
                 if "charm" not in item_type:
@@ -132,12 +142,16 @@ def _register_skin(item: dict) -> None:
     if not wears:
         wears = _WEAR_NAMES
     _item_image_cache[name] = image
+    _item_image_cache[f"★ {name}"] = image
     for wear in wears:
         _item_image_cache[f"{name} ({wear})"] = image
+        _item_image_cache[f"★ {name} ({wear})"] = image
     if item.get("stattrak"):
         _item_image_cache[f"StatTrak™ {name}"] = image
+        _item_image_cache[f"★ StatTrak™ {name}"] = image
         for wear in wears:
             _item_image_cache[f"StatTrak™ {name} ({wear})"] = image
+            _item_image_cache[f"★ StatTrak™ {name} ({wear})"] = image
 
 
 def _register_flat(item: dict) -> None:

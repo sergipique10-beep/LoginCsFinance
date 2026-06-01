@@ -272,7 +272,7 @@ async def get_market_items(
             params={
                 "key": STEAM_API_KEY,
                 "game": "cs2",
-                "name": query,
+                "search": query,
                 "max": _SEARCH_LIMIT,
                 "select": _MOVERS_SELECT,
                 "format": "json",
@@ -298,6 +298,9 @@ async def get_market_items(
         if float(raw.get("pricelatestsell") or 0) > 0
         and "sticker slab" not in (raw.get("marketname") or raw.get("market_hash_name") or "").lower()
     ][:_SEARCH_LIMIT]
+
+    await _fetch_static_images(request.app.state.http_client)
+    _enrich_images_from_cache(result)
 
     _search_cache[cache_key] = (result, now)
     logger.info("[market-items] q=%r → %d results", query, len(result))
