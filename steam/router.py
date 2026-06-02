@@ -28,6 +28,8 @@ from steam.services import (
     _MOVERS_LIMIT,
     _fetch_history_for_item,
     _enrich_prices,
+    _enrich_market_prices,
+    _fetch_market_providers,
     _cache_images,
     _enrich_images_from_cache,
     _fetch_static_images,
@@ -120,6 +122,7 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
 
     items = [_map_item(item) for item in data]
     items = await _enrich_prices(request.app.state.http_client, items)
+    items = await _enrich_market_prices(request.app.state.http_client, items)
     _enrich_images_from_cache(items)
     _inventory_cache[steam_id] = (items, now)
     return items
@@ -198,6 +201,8 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
             }
             _enrich_images_from_cache(result["hot"])
             _enrich_images_from_cache(result["cold"])
+            await _enrich_market_prices(request.app.state.http_client, result["hot"])
+            await _enrich_market_prices(request.app.state.http_client, result["cold"])
             _movers_cache[cache_key] = (result, now)
             return result
         logger.warning("[market-movers] /items returned unexpected type: %s", type(data).__name__)
@@ -236,6 +241,8 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
             await _fetch_static_images(request.app.state.http_client)
             _enrich_images_from_cache(result["hot"])
             _enrich_images_from_cache(result["cold"])
+            await _enrich_market_prices(request.app.state.http_client, result["hot"])
+            await _enrich_market_prices(request.app.state.http_client, result["cold"])
             logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(result["hot"]), len(result["cold"]))
             _movers_cache[cache_key] = (result, now)
             return result
@@ -303,6 +310,7 @@ async def get_market_items(
     ][:_SEARCH_LIMIT]
 
     await _fetch_static_images(request.app.state.http_client)
+    result = await _enrich_market_prices(request.app.state.http_client, result)
     _enrich_images_from_cache(result)
 
     _search_cache[cache_key] = (result, now)
@@ -350,6 +358,7 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
                     result.append(_map_item(raw))
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_LIMIT]
             result = await _enrich_prices(request.app.state.http_client, result)
+            result = await _enrich_market_prices(request.app.state.http_client, result)
             _enrich_images_from_cache(result)
             _trending_cache[cache_key] = (result, now)
             return result
@@ -386,6 +395,7 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
             result = [_map_topmovers_item(item) for item in combined]
             _enrich_images_from_cache(result)
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_LIMIT]
+            result = await _enrich_market_prices(request.app.state.http_client, result)
             _trending_cache[cache_key] = (result, now)
             logger.info("[market-trending] serving from topmovers (%d items)", len(result))
             return result
@@ -490,6 +500,12 @@ _VALID_MARKETS = frozenset({
     "bitskins", "csgotm", "haloskins", "tradeit", "skinbid",
     "csfloat", "youpin",
 })
+
+
+@router.get("/market/providers", summary="Lista de markets soportados como price providers")
+async def get_market_providers(request: Request, user: dict = Depends(require_jwt)):
+    providers = await _fetch_market_providers(request.app.state.http_client)
+    return providers
 
 
 @router.get("/market/prices", summary="Precios en tiempo real de un item por mercado")
