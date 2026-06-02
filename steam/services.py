@@ -7,8 +7,10 @@ import httpx
 
 from settings import STEAM_API_KEY
 from stores import (
-    ITEM_HISTORY_CACHE_TTL, IMAGE_CACHE_TTL,
+    ITEM_HISTORY_CACHE_TTL, IMAGE_CACHE_TTL, MARKET_LOOKUP_CACHE_TTL,
+    MARKET_PROVIDERS_CACHE_TTL,
     _item_history_cache, _item_image_cache, _image_cache_meta,
+    _market_lookup_cache, _market_providers_cache,
 )
 from steam.mappers import _delta_from_history, _map_topmovers_item
 
@@ -224,6 +226,107 @@ async def _fetch_static_images(client: httpx.AsyncClient) -> None:
         len(_item_image_cache) - total_before,
         fetched,
     )
+
+
+# ── Movers ────────────────────────────────────────────────────────────────────
+
+# ── Multi-market price lookup ─────────────────────────────────────────────────
+
+_TRACKED_MARKETS = ("csfloat", "buff")
+
+
+async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> dict[str, float]:
+    now = time.monotonic()
+    cached = _market_lookup_cache.get(market)
+    if cached and now - cached[1] < MARKET_LOOKUP_CACHE_TTL:
+        return cached[0]
+    try:
+        resp = await client.get(
+            f"{STEAM_MARKET_API}/{market}/prices",
+            params={"key": STEAM_API_KEY, "format": "json"},
+            timeout=30.0,
+        )
+        if resp.status_code != 200:
+            logger.warning("[market-lookup] %s returned %s", market, resp.status_code)
+            return (cached[0] if cached else {})
+        data = resp.json()
+        if not isinstance(data, list):
+            return (cached[0] if cached else {})
+        lookup: dict[str, float] = {}
+        for item in data:
+            name = item.get("market_hash_name") or item.get("markethashname") or item.get("name")
+            price = item.get("price") or item.get("value") or 0
+            if name and price:
+                lookup[name] = float(price)
+        _market_lookup_cache[market] = (lookup, now)
+        logger.info("[market-lookup] %s: %d prices loaded", market, len(lookup))
+        return lookup
+    except Exception as exc:
+        logger.warning("[market-lookup] could not fetch %s: %s", market, exc)
+        return (cached[0] if cached else {})
+
+
+async def _enrich_market_prices(client: httpx.AsyncClient, items: list) -> list:
+    csfloat_lookup, buff_lookup = await asyncio.gather(
+        _fetch_market_price_lookup(client, "csfloat"),
+        _fetch_market_price_lookup(client, "buff"),
+    )
+    for item in items:
+        name = item.get("name", "")
+        item["csfloatPrice"] = csfloat_lookup.get(name) or None
+        item["buffPrice"] = buff_lookup.get(name) or None
+    return items
+
+
+_STEAM_FAVICON = "https://store.steampowered.com/favicon.ico"
+
+_PROVIDER_IDS = {"csfloat", "buff"}
+
+_FALLBACK_PROVIDERS = [
+    {"id": "steam",   "name": "Steam",   "logoUrl": _STEAM_FAVICON},
+    {"id": "csfloat", "name": "CSFloat", "logoUrl": ""},
+    {"id": "buff",    "name": "Buff163", "logoUrl": ""},
+]
+
+
+async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
+    now = time.monotonic()
+    cached = _market_providers_cache.get("providers")
+    if cached and now - cached[1] < MARKET_PROVIDERS_CACHE_TTL:
+        return cached[0]
+    try:
+        resp = await client.get(
+            f"{STEAM_WEB_API}/info/markets",
+            params={"key": STEAM_API_KEY},
+            timeout=15.0,
+        )
+        if resp.status_code != 200:
+            logger.warning("[market-providers] info/markets returned %s", resp.status_code)
+            return _FALLBACK_PROVIDERS
+        data = resp.json()
+        if not isinstance(data, list):
+            return _FALLBACK_PROVIDERS
+
+        lookup: dict[str, dict] = {}
+        for m in data:
+            mid = (m.get("id") or m.get("key") or m.get("name") or "").lower()
+            if mid in _PROVIDER_IDS:
+                lookup[mid] = {
+                    "id":      mid,
+                    "name":    m.get("name") or mid.capitalize(),
+                    "logoUrl": m.get("logo") or m.get("image") or m.get("icon") or "",
+                }
+
+        providers = [{"id": "steam", "name": "Steam", "logoUrl": _STEAM_FAVICON}]
+        for pid in ("csfloat", "buff"):
+            providers.append(lookup.get(pid) or next(f for f in _FALLBACK_PROVIDERS if f["id"] == pid))
+
+        _market_providers_cache["providers"] = (providers, now)
+        logger.info("[market-providers] loaded %d providers", len(providers))
+        return providers
+    except Exception as exc:
+        logger.warning("[market-providers] failed: %s", exc)
+        return _FALLBACK_PROVIDERS
 
 
 # ── Movers ────────────────────────────────────────────────────────────────────
