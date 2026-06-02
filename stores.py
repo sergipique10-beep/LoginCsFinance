@@ -41,6 +41,8 @@ TRENDING_CACHE_TTL = 82800   # 23 h — same daily budget
 SEARCH_CACHE_TTL = 300       # 5 min — search queries cached briefly to avoid hammering the API
 MARKET_PRICES_CACHE_TTL = 300  # 5 min — live market prices, updated frequently by steamwebapi
 IMAGE_CACHE_TTL = 82800      # 23 h — same budget as other free-plan caches; CDN URLs are stable
+MARKET_LOOKUP_CACHE_TTL = 82800  # 23 h — full price list per market (premium endpoint, same daily budget)
+MARKET_PROVIDERS_CACHE_TTL = 82800  # 23 h — market list is mostly static
 
 # ── Cache stores ───────────────────────────────────────────────────────────────
 
@@ -55,3 +57,5 @@ _search_cache: dict[str, tuple[list, float]] = {}
 _market_prices_cache: dict[str, tuple[any, float]] = {}
 _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image URL
 _image_cache_meta: dict[str, float] = {}  # "ts" → monotonic timestamp of last successful population
+_market_lookup_cache: dict[str, tuple[dict, float]] = {}  # market → ({name: price}, ts)
+_market_providers_cache: dict[str, tuple[list, float]] = {}  # "providers" → (list, ts)
