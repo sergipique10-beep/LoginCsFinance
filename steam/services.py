@@ -282,10 +282,17 @@ _STEAM_FAVICON = "https://store.steampowered.com/favicon.ico"
 
 _PROVIDER_IDS = {"csfloat", "buff"}
 
+# Known public logos used as fallback when the API doesn't return them
+_KNOWN_LOGOS: dict[str, str] = {
+    "steam":   _STEAM_FAVICON,
+    "csfloat": "https://csfloat.com/favicon.ico",
+    "buff":    "https://buff.163.com/favicon.ico",
+}
+
 _FALLBACK_PROVIDERS = [
-    {"id": "steam",   "name": "Steam",   "logoUrl": _STEAM_FAVICON},
-    {"id": "csfloat", "name": "CSFloat", "logoUrl": ""},
-    {"id": "buff",    "name": "Buff163", "logoUrl": ""},
+    {"id": "steam",   "name": "Steam",   "logoUrl": _KNOWN_LOGOS["steam"]},
+    {"id": "csfloat", "name": "CSFloat", "logoUrl": _KNOWN_LOGOS["csfloat"]},
+    {"id": "buff",    "name": "Buff163", "logoUrl": _KNOWN_LOGOS["buff"]},
 ]
 
 
@@ -307,14 +314,23 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
         if not isinstance(data, list):
             return _FALLBACK_PROVIDERS
 
+        if data:
+            logger.info("[market-providers] sample keys: %s", list(data[0].keys()))
+
         lookup: dict[str, dict] = {}
         for m in data:
             mid = (m.get("id") or m.get("key") or m.get("name") or "").lower()
             if mid in _PROVIDER_IDS:
+                api_logo = (
+                    m.get("logo") or m.get("logoUrl") or m.get("logo_url") or
+                    m.get("image") or m.get("imageUrl") or m.get("image_url") or
+                    m.get("icon") or m.get("iconUrl") or m.get("icon_url") or
+                    m.get("thumbnail") or ""
+                )
                 lookup[mid] = {
                     "id":      mid,
                     "name":    m.get("name") or mid.capitalize(),
-                    "logoUrl": m.get("logo") or m.get("image") or m.get("icon") or "",
+                    "logoUrl": api_logo or _KNOWN_LOGOS.get(mid, ""),
                 }
 
         providers = [{"id": "steam", "name": "Steam", "logoUrl": _STEAM_FAVICON}]
