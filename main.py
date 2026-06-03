@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from settings import ALLOWED_CORS_ORIGINS, JWT_SECRET, STEAM_API_KEY
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
-from steam.router import router as steam_router
+from steam.routes import router as steam_router
 from steam.services import _fetch_static_images
 
 logger = logging.getLogger("uvicorn.error")
