@@ -30,7 +30,8 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
     now = time.monotonic()
     cached = _profile_cache.get(steam_id)
     if cached and now - cached[1] < PROFILE_CACHE_TTL:
-        return cached[0]
+        profile = cached[0]
+        return profile if "steam64_id" in profile else {**profile, "steam64_id": steam_id}
 
     try:
         resp = await request.app.state.http_client.get(
@@ -56,6 +57,7 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
         "avatarThumbUrl": data.get("avatarmedium") or data.get("avatarfull", ""),
         "profileUrl":     data.get("profileurl", ""),
         "isOnline":       data.get("personastate", 0) != 0,
+        "steam64_id":     steam_id,
     }
     _profile_cache[steam_id] = (profile, now)
     return profile
