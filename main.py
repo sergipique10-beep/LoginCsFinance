@@ -1,55 +1,21 @@
-import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from pathlib import Path
 import uvicorn
 
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from settings import ALLOWED_CORS_ORIGINS, JWT_SECRET, STEAM_API_KEY
+from settings import (
+    ALLOWED_CORS_ORIGINS, JWT_SECRET, STEAM_API_KEY,
+    SUPABASE_URL, SUPABASE_SERVICE_KEY, CAP_TICK_TOKEN,
+)
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
 from steam.routes import router as steam_router
-from steam.services import STEAM_WEB_API, _fetch_static_images
-from stores import _market_cap_history, _CAP_HISTORY_MAX, load_cap_history, save_cap_history
+from steam.services import _fetch_static_images
 
 logger = logging.getLogger("uvicorn.error")
-
-_CAP_HISTORY_PATH = Path("data/market_cap_history.json")
-
-
-async def _tick_market_cap(http_client: httpx.AsyncClient) -> None:
-    """Hourly cron: snapshot the CS2 market priceindex."""
-    try:
-        resp = await http_client.get(
-            f"{STEAM_WEB_API}/market-index/cs2",
-            params={"key": STEAM_API_KEY, "format": "json"},
-            timeout=15.0,
-        )
-        if resp.status_code != 200:
-            logger.warning("[cap-history] market-index returned %s", resp.status_code)
-            return
-        data = resp.json()
-        if not isinstance(data, dict):
-            return
-        price_index = data.get("priceindex")
-        if price_index is None:
-            logger.warning("[cap-history] 'priceindex' missing from response")
-            return
-        point = {
-            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "v": float(price_index),
-        }
-        _market_cap_history.append(point)
-        if len(_market_cap_history) > _CAP_HISTORY_MAX:
-            del _market_cap_history[:-_CAP_HISTORY_MAX]
-        save_cap_history(_CAP_HISTORY_PATH)
-        logger.info("[cap-history] snapshot saved: %s = %.4f", point["ts"], point["v"])
-    except Exception as exc:
-        logger.warning("[cap-history] tick failed: %s", exc)
 
 
 @asynccontextmanager
@@ -69,23 +35,16 @@ async def lifespan(app: FastAPI):
             "STEAM_API_KEY no está configurada — "
             "los endpoints de Steam Web API no funcionarán"
         )
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY and CAP_TICK_TOKEN):
+        logger.warning(
+            "SUPABASE_URL / SUPABASE_SERVICE_KEY / CAP_TICK_TOKEN incompletas — "
+            "el histórico del índice de precio (cap-history) no funcionará"
+        )
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
     await _fetch_static_images(app.state.http_client)
 
-    load_cap_history(_CAP_HISTORY_PATH)
-
-    async def _hourly_loop():
-        while True:
-            now = datetime.now(timezone.utc)
-            seconds_until_next_hour = (60 - now.minute) * 60 - now.second
-            await asyncio.sleep(seconds_until_next_hour)
-            await _tick_market_cap(app.state.http_client)
-
-    task = asyncio.create_task(_hourly_loop())
-
     yield
 
-    task.cancel()
     await app.state.http_client.aclose()
 
 

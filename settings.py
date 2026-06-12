@@ -9,6 +9,14 @@ STEAM_API_KEY = os.getenv("STEAM_API_KEY", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "change-this-secret")
 STEAM_GAME = os.getenv("STEAM_GAME", "cs2")
 
+# Supabase: histórico persistente del índice de precio CS2.
+# El backend usa la service_role key (bypassa RLS) — nunca la anon/publishable.
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+
+# Token que protege POST /internal/cap-tick (cron externo de GitHub Actions).
+CAP_TICK_TOKEN = os.getenv("CAP_TICK_TOKEN", "")
+
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.
 # Separar múltiples valores con coma en .env.
 # Debe incluir la URL web y el scheme nativo de Android.

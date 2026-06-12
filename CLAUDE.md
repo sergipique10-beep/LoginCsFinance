@@ -52,6 +52,7 @@ LoginCsFinance/
   stores.py         # All in-memory stores and TTL constants (single point for Redis migration)
   middleware.py     # SecurityHeadersMiddleware
   run_dev.py        # Local dev launcher (uvicorn, HTTP only)
+  data/             # (removed) formerly held market_cap_history.json — now in Supabase
   auth/
     service.py      # Auth helpers: _get_client_ip, _rate_limit, _issue_nonce, _consume_nonce,
                     #               _issue_tokens, _set_refresh_cookie, require_jwt
@@ -69,20 +70,30 @@ LoginCsFinance/
                     #   _fetch_static_images (lazy loader for ByMykel/CSGO-API)
                     #   _build_movers_from_topmovers (hot/cold builder from market-index)
                     #   Constants: STEAM_WEB_API, _STATIC_*_URL, _WEAR_NAMES, _MOVERS_LIMIT
-    router.py       # APIRouter: /me, /inventory, /market/movers, /market/trending,
-                    #   /market/index, /item/history, /news/cs2
-                    # Constants: _MOVERS_SELECT, _TRENDING_LIMIT
+    cap_history_repo.py  # Supabase data layer for the CS2 price-index history:
+                    #   get_supabase (module-cached client, service_role),
+                    #   insert_snapshot (upsert by ts), fetch_range (rows since cutoff).
+                    #   supabase-py is sync → calls wrapped in asyncio.to_thread.
+    routes/         # APIRouters split by domain (registered in routes/__init__.py):
+      items.py      #   /me, /inventory, /item/history
+      market.py     #   /market/movers, /market/items, /market/trending, /market/index,
+                    #   /market/cap-history, /market/providers, /market/prices,
+                    #   /internal/cap-tick. Constants: _MOVERS_SELECT, _TRENDING_LIMIT,
+                    #   _CAP_TF_MAP, _CAP_BUCKET_MAP; helper _downsample.
+      news.py       #   /news/cs2
 ```
 
 **Dependency order** (no circular imports):
 
 ```
 settings.py, stores.py, middleware.py, steam/mappers.py  ← nothing internal
-auth/service.py    ← stores, settings
-auth/router.py     ← auth/service, stores, settings
-steam/services.py  ← steam/mappers, stores, settings
-steam/router.py    ← steam/services, steam/mappers, stores, settings, auth/service (require_jwt only)
-main.py            ← middleware, auth/router, steam/router, settings
+auth/service.py         ← stores, settings
+auth/router.py          ← auth/service, stores, settings
+steam/services.py       ← steam/mappers, stores, settings
+steam/cap_history_repo.py ← settings (+ supabase)
+steam/routes/*          ← steam/services, steam/mappers, steam/cap_history_repo, stores,
+                          settings, auth/service (require_jwt only)
+main.py                 ← middleware, auth/router, steam/routes, settings
 ```
 
 ## Endpoints
@@ -99,6 +110,8 @@ main.py            ← middleware, auth/router, steam/router, settings
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
 | GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item` + enrichment below) |
 | GET | `/market/index` | Bearer | Market index: `turnover24h`, `sold24h`, `delta24h`, `hottestItem`, `history[]` |
+| GET | `/market/cap-history` | Bearer | CS2 price-index history from Supabase, downsampled per `?tf=` (`7d`/`1m`/`3m`/`6m`/`1y`/`3y`). Returns `[{ ts, v, priceindex, realpriceindex, buyorderpriceindex, turnover24h }]`; `v = priceindex` (frontend contract). Invalid `tf` → 400. |
+| POST | `/internal/cap-tick` | `X-Cap-Token` | Hourly capture (called by external cron). Fetches `market-index/cs2`, upserts an hour-floored snapshot of the 4 fields into Supabase. Token compared via `secrets.compare_digest`; bad/missing → 401. |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited |
 
@@ -130,6 +143,16 @@ All stores live in `stores.py`. **TODO:** replace with Redis before running mult
 | `_market_index_cache` | tf → (data, cached_at) | 23 h cache; keyed by timeframe |
 | `_item_history_cache` | `name:interval` → (data, cached_at) | 23 h cache; shared by `/item/history` and `_enrich_prices` |
 
+## Market cap history (Supabase, persistent)
+
+The CS2 price-index history is **persisted in a dedicated Supabase Postgres project** (`cs-finance`), not in memory. This survives restarts/redeploys (ephemeral disk on Render free wiped the old JSON every deploy).
+
+- **Table** `public.market_cap_history`: `ts timestamptz PK`, `priceindex` (not null), `realpriceindex`, `buyorderpriceindex`, `turnover24h`. RLS enabled with **no policies** — the backend uses the `service_role` key, which bypasses RLS.
+- **Data layer**: `steam/cap_history_repo.py` (`get_supabase`, `insert_snapshot`, `fetch_range`). supabase-py is synchronous → all calls wrapped in `asyncio.to_thread`.
+- **Capture**: an **external cron** (GitHub Actions, `.github/workflows/cap-tick.yml`, hourly at `:05`) POSTs `/internal/cap-tick`. This wakes the server even if it sleeps (Render free) — there is no in-process `asyncio` loop. The snapshot `ts` is floored to the hour so reruns within the same hour upsert (idempotent), not duplicate.
+- **Serving**: `GET /market/cap-history?tf=` reads `fetch_range` and downsamples (`_downsample`) per `_CAP_BUCKET_MAP` (7d→1h, 1m→6h, 3m/6m→1d, 1y/3y→1w), averaging each field per bucket. Output keeps `{ ts, v }` with `v = priceindex`.
+- **Note**: steamwebapi does not return past history (`history: []`) — the past is not backfilled, only captured better going forward.
+
 ## Environment variables
 
 | Variable | Default | Notes |
@@ -141,6 +164,9 @@ All stores live in `stores.py`. **TODO:** replace with Redis before running mult
 | `STEAM_GAME` | `cs2` | Game ID passed to the steamwebapi.com inventory endpoint |
 | `ALLOWED_REDIRECT_ORIGINS` | *(value of FRONTEND_URL)* | Comma-separated whitelist of allowed post-login redirect origins (add `myapp://` for Android) |
 | `DEBUG` | `false` | Set `true` to activate `POST /auth/dev-token` |
+| `SUPABASE_URL` | *(empty)* | URL of the `cs-finance` Supabase project. Startup warns if missing. |
+| `SUPABASE_SERVICE_KEY` | *(empty)* | service_role key (bypasses RLS) — never the anon/publishable key. Startup warns if missing. |
+| `CAP_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/cap-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
 
 ## Startup validation
 
@@ -148,6 +174,7 @@ On startup the lifespan hook warns if:
 - `JWT_SECRET` equals the default placeholder `"change-this-secret"`
 - `JWT_SECRET` is shorter than 32 characters
 - `STEAM_API_KEY` is empty
+- any of `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` / `CAP_TICK_TOKEN` is missing (cap-history won't work)
 
 The lifespan also creates a shared `httpx.AsyncClient` stored in `app.state.http_client` (closed on shutdown). All endpoints that call external services must use this client — never create per-request clients.
 
