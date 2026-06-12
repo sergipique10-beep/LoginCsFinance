@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import datetime, timezone, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -10,6 +11,7 @@ from stores import (
     SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL,
     _market_index_cache, _movers_cache, _topmovers_raw_cache,
     _trending_cache, _search_cache, _market_prices_cache,
+    _market_cap_history,
 )
 from auth.service import require_jwt
 from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point
@@ -398,6 +400,34 @@ async def get_market_index(
         "history": [_map_market_index_point(p) for p in raw_points],
     }
     _market_index_cache[cache_key] = (result, now)
+    return result
+
+
+_CAP_TF_MAP: dict[str, timedelta] = {
+    "7d":  timedelta(days=7),
+    "1m":  timedelta(days=30),
+    "3m":  timedelta(days=90),
+    "6m":  timedelta(days=180),
+    "1y":  timedelta(days=365),
+    "3y":  timedelta(days=1095),
+}
+
+
+@router.get("/market/cap-history", summary="Historial del índice de precio CS2 (snapshots horarios)")
+async def get_market_cap_history(
+    tf: str = "7d",
+    user: dict = Depends(require_jwt),
+):
+    if tf not in _CAP_TF_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid tf '{tf}'. Valid values: {', '.join(_CAP_TF_MAP)}",
+        )
+    cutoff = datetime.now(timezone.utc) - _CAP_TF_MAP[tf]
+    result = [
+        p for p in _market_cap_history
+        if datetime.fromisoformat(p["ts"].replace("Z", "+00:00")) >= cutoff
+    ]
     return result
 
 

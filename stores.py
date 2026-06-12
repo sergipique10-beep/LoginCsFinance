@@ -7,8 +7,13 @@ TODO: replace _nonces, _auth_codes, _refresh_store, _rate_store,
       _profile_cache, _inventory_cache, _market_index_cache and
       _item_history_cache with Redis.
 """
+import json
+import logging
 from collections import defaultdict
 from datetime import timedelta
+from pathlib import Path
+
+_stores_logger = logging.getLogger("uvicorn.error")
 
 # ── Auth constants ─────────────────────────────────────────────────────────────
 
@@ -59,3 +64,34 @@ _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image UR
 _image_cache_meta: dict[str, float] = {}  # "ts" → monotonic timestamp of last successful population
 _market_lookup_cache: dict[str, tuple[dict, float]] = {}  # market → ({name: price}, ts)
 _market_providers_cache: dict[str, tuple[list, float]] = {}  # "providers" → (list, ts)
+
+# ── Market cap history ─────────────────────────────────────────────────────────
+# Hourly snapshots of the CS2 market priceindex.
+# Shape: [{"ts": "2024-01-01T00:00:00Z", "v": 123.45}, ...]
+# Persisted to a JSON file so history survives restarts.
+
+_CAP_HISTORY_MAX = 3 * 365 * 24  # ~3 years of hourly snapshots
+_market_cap_history: list[dict] = []
+
+
+def load_cap_history(path: Path) -> None:
+    global _market_cap_history
+    try:
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                _market_cap_history.clear()
+                _market_cap_history.extend(data[-_CAP_HISTORY_MAX:])
+                _stores_logger.info("[cap-history] loaded %d snapshots from %s", len(_market_cap_history), path)
+    except Exception as exc:
+        _stores_logger.warning("[cap-history] could not load %s: %s", path, exc)
+
+
+def save_cap_history(path: Path) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(_market_cap_history, f, separators=(",", ":"))
+    except Exception as exc:
+        _stores_logger.warning("[cap-history] could not save %s: %s", path, exc)
