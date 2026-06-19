@@ -1,19 +1,20 @@
 import logging
+import secrets
 import time
 from datetime import datetime, timezone, timedelta
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from settings import STEAM_API_KEY
+from settings import STEAM_API_KEY, CAP_TICK_TOKEN
 from stores import (
     MARKET_INDEX_CACHE_TTL, MOVERS_CACHE_TTL, TRENDING_CACHE_TTL,
     SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL,
     _market_index_cache, _movers_cache, _topmovers_raw_cache,
     _trending_cache, _search_cache, _market_prices_cache,
-    _market_cap_history,
 )
 from auth.service import require_jwt
+from ..cap_history_repo import insert_snapshot, fetch_range
 from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point
 from ..services import (
     STEAM_WEB_API,
@@ -412,6 +413,110 @@ _CAP_TF_MAP: dict[str, timedelta] = {
     "3y":  timedelta(days=1095),
 }
 
+# Tamaño de bucket de downsampling por timeframe. A 3 años de snapshots
+# horarios serían ~26k puntos crudos; agrupando se mantiene el payload acotado.
+_CAP_BUCKET_MAP: dict[str, timedelta] = {
+    "7d":  timedelta(hours=1),
+    "1m":  timedelta(hours=6),
+    "3m":  timedelta(days=1),
+    "6m":  timedelta(days=1),
+    "1y":  timedelta(weeks=1),
+    "3y":  timedelta(weeks=1),
+}
+
+_CAP_FIELDS = ("priceindex", "realpriceindex", "buyorderpriceindex", "turnover24h")
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _parse_ts(ts: str) -> datetime:
+    """Parsea un timestamptz ISO (con 'Z' o offset) a datetime aware en UTC."""
+    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _downsample(rows: list[dict], bucket: timedelta) -> list[dict]:
+    """
+    Agrupa filas por floor(ts / bucket) y promedia cada campo.
+    Mantiene { ts, v } (v = priceindex) y añade real/buyorder/turnover medios.
+    `ts` de salida = inicio del bucket. Asume `rows` ordenado por ts asc.
+    """
+    bucket_s = bucket.total_seconds()
+    grouped: dict[float, list[dict]] = {}
+    order: list[float] = []
+    for row in rows:
+        ts = _parse_ts(row["ts"])
+        idx = (ts - _EPOCH).total_seconds() // bucket_s
+        if idx not in grouped:
+            grouped[idx] = []
+            order.append(idx)
+        grouped[idx].append(row)
+
+    out: list[dict] = []
+    for idx in order:
+        members = grouped[idx]
+        start = _EPOCH + timedelta(seconds=idx * bucket_s)
+        point: dict = {"ts": start.isoformat().replace("+00:00", "Z")}
+        for field in _CAP_FIELDS:
+            vals = [m[field] for m in members if m.get(field) is not None]
+            point[field] = sum(vals) / len(vals) if vals else None
+        # Contrato con el frontend: v = priceindex.
+        point["v"] = point["priceindex"]
+        out.append(point)
+    return out
+
+
+@router.post("/internal/cap-tick", summary="Captura un snapshot del índice de precio CS2 (cron interno)")
+async def cap_tick(
+    request: Request,
+    x_cap_token: str | None = Header(default=None),
+):
+    if not CAP_TICK_TOKEN or not x_cap_token or not secrets.compare_digest(x_cap_token, CAP_TICK_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
+
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/market-index/cs2",
+            params={"key": STEAM_API_KEY, "format": "json"},
+            timeout=15.0,
+        )
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code != 200:
+        logger.warning("[cap-tick] market-index returned %s", resp.status_code)
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+
+    price_index = data.get("priceindex")
+    if price_index is None:
+        logger.warning("[cap-tick] 'priceindex' missing from response")
+        raise HTTPException(status_code=502, detail="'priceindex' missing from Steam response")
+
+    def _num(value):
+        return float(value) if value is not None else None
+
+    # Floor al inicio de la hora: la PK es `ts`, así que varias capturas dentro
+    # de la misma hora colapsan en una sola fila (upsert idempotente).
+    hour_ts = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    point = {
+        "ts": hour_ts.isoformat().replace("+00:00", "Z"),
+        "priceindex": float(price_index or 0),
+        "realpriceindex": _num(data.get("realpriceindex")),
+        "buyorderpriceindex": _num(data.get("buyorderpriceindex")),
+        "turnover24h": _num(data.get("turnover24h")),
+    }
+
+    await insert_snapshot(point)
+    logger.info("[cap-tick] snapshot saved: %s = %.4f", point["ts"], point["priceindex"])
+    return {"ok": True, "ts": point["ts"], "priceindex": point["priceindex"]}
+
 
 @router.get("/market/cap-history", summary="Historial del índice de precio CS2 (snapshots horarios)")
 async def get_market_cap_history(
@@ -424,11 +529,8 @@ async def get_market_cap_history(
             detail=f"Invalid tf '{tf}'. Valid values: {', '.join(_CAP_TF_MAP)}",
         )
     cutoff = datetime.now(timezone.utc) - _CAP_TF_MAP[tf]
-    result = [
-        p for p in _market_cap_history
-        if datetime.fromisoformat(p["ts"].replace("Z", "+00:00")) >= cutoff
-    ]
-    return result
+    rows = await fetch_range(cutoff)
+    return _downsample(rows, _CAP_BUCKET_MAP[tf])
 
 
 @router.get("/market/providers", summary="Lista de markets soportados como price providers")

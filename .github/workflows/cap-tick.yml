@@ -1,0 +1,21 @@
+name: cap-tick
+
+# Cron externo que despierta al backend (Render free duerme) y captura un
+# snapshot horario del índice de precio CS2. El endpoint es idempotente por
+# hora (upsert por ts en Supabase), así que reintentos no duplican filas.
+
+on:
+  schedule:
+    - cron: "5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /internal/cap-tick
+        run: |
+          curl -fsS -X POST "$BASE_URL/internal/cap-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          CAP_TICK_TOKEN: ${{ secrets.CAP_TICK_TOKEN }}
