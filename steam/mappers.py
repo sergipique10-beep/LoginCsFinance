@@ -84,10 +84,6 @@ def _map_item(item: dict) -> dict:
         d.get("priceusd") or
         0
     )
-    p24h = d.get("pricelatestsell24h") or d.get("price24h")
-    p7d  = d.get("pricelatestsell7d")  or d.get("price7d")
-    p30d = d.get("pricelatestsell30d") or d.get("price30d")
-
     float_data = item.get("float") or d.get("float") or {}
 
     return {
@@ -117,9 +113,12 @@ def _map_item(item: dict) -> dict:
         "priceSafe":      d.get("pricesafe") or 0,
         "priceMin":       d.get("pricemin") or 0,
         "priceMax":       d.get("pricemax") or 0,
-        "priceDelta24h":  _safe_delta(latest, p24h),
-        "priceDelta7d":   _safe_delta(latest, p7d),
-        "priceDelta30d":  _safe_delta(latest, p30d),
+        # Deltas start as None — _enrich_prices overwrites with history-derived values.
+        # The /inventory endpoint returns identical prices for all timeframes on the
+        # Starter plan, so _safe_delta would always give 0.0 here (misleading).
+        "priceDelta24h":  None,
+        "priceDelta7d":   None,
+        "priceDelta30d":  None,
         "priceReal":      d.get("pricereal"),
         "externalPrices": [
             {"market": p["market"], "price": p["price"], "quantity": p["quantity"]}

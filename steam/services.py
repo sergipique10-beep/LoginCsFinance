@@ -55,9 +55,11 @@ async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
             timeout=30.0,
         )
         if resp.status_code != 200:
+            logger.warning("[item-history] %s → HTTP %s: %s", name, resp.status_code, resp.text[:200])
             return []
         raw = resp.json()
         if not isinstance(raw, list):
+            logger.warning("[item-history] %s → unexpected format: %s", name, str(raw)[:200])
             return []
         pts = sorted(
             [
@@ -70,9 +72,11 @@ async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
             ],
             key=lambda p: p["date"],
         )
+        logger.info("[item-history] %s → %d points", name, len(pts))
         _item_history_cache[cache_key] = (pts, now)
         return pts
-    except Exception:
+    except Exception as exc:
+        logger.warning("[item-history] %s → exception: %s", name, exc)
         return []
 
 
