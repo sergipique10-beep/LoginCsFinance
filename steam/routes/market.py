@@ -97,10 +97,10 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
                 if latest > 0 and volume >= 5 and "sticker slab" not in (raw.get("marketname") or "").lower():
                     mapped.append(_map_item(raw))
             # Sort by price descending — higher-priced items tend to have more price movement.
-            # Cap at 30 to avoid exhausting /history rate limits on first load.
-            # _fetch_history_for_item caches results for 23h so subsequent calls are free.
+            # Cap at 20 (= _MOVERS_LIMIT * 2): exactly the number of items displayed,
+            # and safe within the Starter plan's 20 req/min rate limit.
             mapped.sort(key=lambda x: x["priceLatest"], reverse=True)
-            candidates = mapped[:30]
+            candidates = mapped[:_MOVERS_LIMIT * 2]
             logger.info("[market-movers] candidates before enrich: %d (capped from %d)", len(candidates), len(mapped))
             candidates = await _enrich_prices(request.app.state.http_client, candidates)
             by_delta = sorted(candidates, key=lambda x: (x["priceDelta7d"] is None, x["priceDelta7d"] or 0))
@@ -115,7 +115,12 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
             _enrich_images_from_cache(result["cold"])
             await _enrich_market_prices(request.app.state.http_client, result["hot"])
             await _enrich_market_prices(request.app.state.http_client, result["cold"])
-            _movers_cache[cache_key] = (result, now)
+            has_deltas = any(
+                item.get("priceDelta7d") is not None
+                for item in result["hot"] + result["cold"]
+            )
+            if has_deltas:
+                _movers_cache[cache_key] = (result, now)
             return result
         logger.warning("[market-movers] /items returned unexpected type: %s", type(data).__name__)
     else:
