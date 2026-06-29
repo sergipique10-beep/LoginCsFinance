@@ -73,6 +73,19 @@ def _resolve_phase(item: dict) -> str | None:
     return match.get("phase") if match else None
 
 
+def _inline_delta(latest: float, raw_old) -> float | None:
+    """Compute % delta from a pre-fetched historical price field.
+
+    Returns None when the historical value is missing, zero, or identical to
+    latest — identical values mean the API plan returns the same price for all
+    timeframes (plan limitation), so 0.0 would be misleading.
+    """
+    old = float(raw_old or 0) or None
+    if not old or old == latest:
+        return None
+    return _safe_delta(latest, old)
+
+
 def _map_item(item: dict) -> dict:
     # /float/assets?with_items=1 nests market data under "item"; /inventory is flat
     d = item.get("item") or item
@@ -113,12 +126,14 @@ def _map_item(item: dict) -> dict:
         "priceSafe":      d.get("pricesafe") or 0,
         "priceMin":       d.get("pricemin") or 0,
         "priceMax":       d.get("pricemax") or 0,
-        # Deltas start as None — _enrich_prices overwrites with history-derived values.
-        # The /inventory endpoint returns identical prices for all timeframes on the
-        # Starter plan, so _safe_delta would always give 0.0 here (misleading).
-        "priceDelta24h":  None,
-        "priceDelta7d":   None,
-        "priceDelta30d":  None,
+        # Compute deltas from pre-fetched price fields only when they genuinely differ
+        # from the latest price. Identical values indicate a plan limitation (Starter plan
+        # returns the same price for all timeframes), in which case None is more honest
+        # than a misleading 0.0. _enrich_prices can still override these with
+        # history-derived values for endpoints that call it (e.g. inventory).
+        "priceDelta24h":  _inline_delta(latest, d.get("pricelatestsell24h")),
+        "priceDelta7d":   _inline_delta(latest, d.get("pricelatestsell7d")),
+        "priceDelta30d":  _inline_delta(latest, d.get("pricelatestsell30d")),
         "priceReal":      d.get("pricereal"),
         "externalPrices": [
             {"market": p["market"], "price": p["price"], "quantity": p["quantity"]}

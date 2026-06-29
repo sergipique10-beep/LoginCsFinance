@@ -34,49 +34,55 @@ _MOVERS_LIMIT = 10
 
 # ── Price history ─────────────────────────────────────────────────────────────
 
+_HISTORY_EMPTY_TTL = 300  # 5 min backoff for failed/empty results to avoid retry storms
+
+
 async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
-    cache_key = f"{name}:1d35"
+    cache_key = f"{name}:csfloat:35d"
     now = time.monotonic()
     cached = _item_history_cache.get(cache_key)
-    if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL and cached[0]:
-        return cached[0]
+    if cached:
+        ttl = _HISTORY_EMPTY_TTL if not cached[0] else ITEM_HISTORY_CACHE_TTL
+        if now - cached[1] < ttl:
+            return cached[0]
     try:
         today = date.today()
         resp = await client.get(
-            f"{STEAM_WEB_API}/history",
+            f"{STEAM_MARKET_API}/csfloat/history",
             params={
                 "key": STEAM_API_KEY,
                 "market_hash_name": name,
-                "interval": "1",
                 "start_date": (today - timedelta(days=35)).isoformat(),
                 "end_date": today.isoformat(),
-                "format": "json",
             },
             timeout=30.0,
         )
         if resp.status_code != 200:
             logger.warning("[item-history] %s → HTTP %s: %s", name, resp.status_code, resp.text[:200])
+            _item_history_cache[cache_key] = ([], now)
             return []
         raw = resp.json()
         if not isinstance(raw, list):
             logger.warning("[item-history] %s → unexpected format: %s", name, str(raw)[:200])
+            _item_history_cache[cache_key] = ([], now)
             return []
         pts = sorted(
             [
                 {
                     "date":   p.get("createdat", "")[:10],
                     "price":  float(p.get("price") or 0),
-                    "volume": int(p.get("sold") or 0),
+                    "volume": int(p.get("quantity") or 0),
                 }
                 for p in raw if p.get("price")
             ],
             key=lambda p: p["date"],
         )
-        logger.info("[item-history] %s → %d points", name, len(pts))
+        logger.info("[item-history] %s → %d points (csfloat)", name, len(pts))
         _item_history_cache[cache_key] = (pts, now)
         return pts
     except Exception as exc:
         logger.warning("[item-history] %s → exception: %s", name, exc)
+        _item_history_cache[cache_key] = ([], now)
         return []
 
 
@@ -91,9 +97,10 @@ async def _enrich_prices(client: httpx.AsyncClient, items: list, concurrency: in
     result = []
     for item, pts in zip(items, histories):
         if pts:
-            # Use the price from /items if available — it's more current than history.
-            # History may be months old for low-volume items.
-            latest = item.get("priceLatest") or pts[-1]["price"]
+            # Use the most recent point in the CSFloat history as "current" price so
+            # we compare CSFloat vs CSFloat (same market). Using priceLatest (Steam)
+            # vs CSFloat history produces misleading cross-market deltas.
+            latest = pts[-1]["price"]
             item = {
                 **item,
                 "priceDelta24h": _delta_from_history(pts, 1, latest),

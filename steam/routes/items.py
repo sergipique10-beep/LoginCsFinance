@@ -13,7 +13,6 @@ from auth.service import require_jwt, _get_client_ip, _rate_limit
 from ..mappers import _map_item
 from ..services import (
     STEAM_WEB_API,
-    _enrich_prices,
     _enrich_market_prices,
     _enrich_images_from_cache,
 )
@@ -105,7 +104,6 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
     items = [_map_item(item) for item in data]
-    items = await _enrich_prices(request.app.state.http_client, items)
     items = await _enrich_market_prices(request.app.state.http_client, items)
     _enrich_images_from_cache(items)
     _inventory_cache[steam_id] = (items, now)

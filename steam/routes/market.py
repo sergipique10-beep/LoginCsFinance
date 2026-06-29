@@ -101,15 +101,22 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
             # and safe within the Starter plan's 20 req/min rate limit.
             mapped.sort(key=lambda x: x["priceLatest"], reverse=True)
             candidates = mapped[:_MOVERS_LIMIT * 2]
-            logger.info("[market-movers] candidates before enrich: %d (capped from %d)", len(candidates), len(mapped))
+            logger.info("[market-movers] candidates: %d (capped from %d)", len(candidates), len(mapped))
             candidates = await _enrich_prices(request.app.state.http_client, candidates)
-            by_delta = sorted(candidates, key=lambda x: (x["priceDelta7d"] is None, x["priceDelta7d"] or 0))
-            logger.info("[market-movers] enriched=%d cold_candidates=%s",
-                        len(candidates),
-                        [x["name"] for x in by_delta[:_MOVERS_LIMIT]])
+            with_delta = sorted(
+                [x for x in candidates if x["priceDelta7d"] is not None],
+                key=lambda x: x["priceDelta7d"],
+            )
+            no_delta = [x for x in candidates if x["priceDelta7d"] is None]
+            logger.info("[market-movers] enriched=%d with_delta=%d no_delta=%d",
+                        len(candidates), len(with_delta), len(no_delta))
+            # hot = highest positive deltas; cold = lowest/most-negative deltas.
+            # Fill remaining slots with no-delta items only if needed.
+            hot  = list(reversed(with_delta[-_MOVERS_LIMIT:])) + no_delta
+            cold = with_delta[:_MOVERS_LIMIT] + no_delta
             result = {
-                "hot":  list(reversed(by_delta[-_MOVERS_LIMIT:])),
-                "cold": by_delta[:_MOVERS_LIMIT],
+                "hot":  hot[:_MOVERS_LIMIT],
+                "cold": cold[:_MOVERS_LIMIT],
             }
             _enrich_images_from_cache(result["hot"])
             _enrich_images_from_cache(result["cold"])
