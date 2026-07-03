@@ -103,6 +103,19 @@ _WEAPON_CATEGORY: dict[str, str] = {
 }
 
 
+_CATEGORY_PRIORITY: list[str] = [
+    "Rifle", "Sniper Rifle", "Pistol", "SMG", "Heavy", "Knife", "Gloves",
+    "Case", "Capsule", "Sticker", "Agent", "Patch", "Graffiti", "Music Kit",
+]
+
+
+def _category_rank(weapon_type: str | None) -> int:
+    """Índice de orden de una categoría; las no listadas van al final."""
+    if weapon_type in _CATEGORY_PRIORITY:
+        return _CATEGORY_PRIORITY.index(weapon_type)
+    return len(_CATEGORY_PRIORITY)
+
+
 def _weapon_category(itemtype: str | None) -> str | None:
     """Deriva la categoría de alto nivel ('Rifle', 'Knife'...) desde el itemtype crudo.
 

@@ -169,7 +169,11 @@ def _register_flat(item: dict) -> None:
 
 async def _fetch_static_images(client: httpx.AsyncClient) -> None:
     now = time.monotonic()
-    if now - _image_cache_meta.get("ts", 0.0) < IMAGE_CACHE_TTL:
+    # time.monotonic() arranca en el uptime del sistema, no en 0. Usar 0.0 como
+    # "nunca cargado" hacía que `now - 0.0 < TTL` fuese True en cualquier equipo
+    # con <23h de uptime → retornaba sin poblar el cache. Centinela None explícito.
+    last_ts = _image_cache_meta.get("ts")
+    if last_ts is not None and now - last_ts < IMAGE_CACHE_TTL:
         return
 
     sources_with_wears = [
