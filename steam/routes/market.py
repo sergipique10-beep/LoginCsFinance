@@ -15,7 +15,7 @@ from stores import (
 )
 from auth.service import require_jwt
 from ..cap_history_repo import insert_snapshot, fetch_range
-from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point
+from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point, _category_rank
 from ..services import (
     STEAM_WEB_API,
     STEAM_MARKET_API,
@@ -48,7 +48,7 @@ _MOVERS_SELECT = ",".join([
     "minfloat", "maxfloat", "paintindex",
 ])
 
-_TRENDING_LIMIT = 25
+_TRENDING_LIMIT = 80
 _SEARCH_LIMIT = 30
 
 _VALID_MARKETS = frozenset({
@@ -118,6 +118,9 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
                 "hot":  hot[:_MOVERS_LIMIT],
                 "cold": cold[:_MOVERS_LIMIT],
             }
+            # steamwebapi /items no devuelve `image` en este plan → el cache estático
+            # (ByMykel) es la única fuente. Igual que en /market/items y /market/trending.
+            await _fetch_static_images(request.app.state.http_client)
             _enrich_images_from_cache(result["hot"])
             _enrich_images_from_cache(result["cold"])
             await _enrich_market_prices(request.app.state.http_client, result["hot"])
@@ -255,7 +258,7 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
                 "key": STEAM_API_KEY,
                 "game": "cs2",
                 "sort_by": "soldZa",
-                "max": 60,
+                "max": 150,
                 "select": _MOVERS_SELECT,
                 "format": "json",
                 "production": "1",
@@ -277,9 +280,15 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
                 volume = int(raw.get("sold24h") or 0)
                 if latest > 0 and volume >= 1:
                     result.append(_map_item(raw))
-            result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_LIMIT]
+            result = sorted(
+                result,
+                key=lambda x: (_category_rank(x.get("weaponType")), -(x.get("sold24h") or 0)),
+            )[:_TRENDING_LIMIT]
             result = await _enrich_prices(request.app.state.http_client, result)
             result = await _enrich_market_prices(request.app.state.http_client, result)
+            # steamwebapi /items no devuelve `image` en este plan → el cache estático
+            # (ByMykel) es la única fuente. Igual que en /market/items (search).
+            await _fetch_static_images(request.app.state.http_client)
             _enrich_images_from_cache(result)
             _trending_cache[cache_key] = (result, now)
             return result
