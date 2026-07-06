@@ -17,6 +17,12 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 # Token que protege POST /internal/cap-tick (cron externo de GitHub Actions).
 CAP_TICK_TOKEN = os.getenv("CAP_TICK_TOKEN", "")
 
+# Firebase Admin SDK: envía push notifications (FCM) a Android e iOS.
+FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+
+# Token que protege POST /internal/news-tick (cron externo de GitHub Actions).
+NEWS_TICK_TOKEN = os.getenv("NEWS_TICK_TOKEN", "")
+
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.
 # Separar múltiples valores con coma en .env.
 # Debe incluir la URL web y el scheme nativo de Android.
