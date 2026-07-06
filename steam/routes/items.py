@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from settings import STEAM_API_KEY, STEAM_GAME
 from stores import (
     PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, ITEM_HISTORY_CACHE_TTL,
+    INVENTORY_REFRESH_COOLDOWN,
     _profile_cache, _inventory_cache, _item_history_cache,
+    _inventory_refresh_cooldown,
 )
 from auth.service import require_jwt, _get_client_ip, _rate_limit
 from ..mappers import _map_item
@@ -62,15 +64,7 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
     return profile
 
 
-@router.get("/inventory", summary="Inventario CS2 del usuario autenticado")
-async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
-    steam_id: str = user["sub"]
-
-    now = time.monotonic()
-    cached = _inventory_cache.get(steam_id)
-    if cached and now - cached[1] < INVENTORY_CACHE_TTL:
-        return cached[0]
-
+async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
     try:
         resp = await request.app.state.http_client.get(
             f"{STEAM_WEB_API}/inventory",
@@ -98,7 +92,6 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     data = resp.json()
-
     if not isinstance(data, list):
         logger.error("steamwebapi /inventory unexpected format: %.500s", resp.text)
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
@@ -106,7 +99,36 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
     items = [_map_item(item) for item in data]
     items = await _enrich_market_prices(request.app.state.http_client, items)
     _enrich_images_from_cache(items)
+    return items
+
+
+@router.get("/inventory", summary="Inventario CS2 del usuario autenticado")
+async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
+    steam_id: str = user["sub"]
+
+    now = time.monotonic()
+    cached = _inventory_cache.get(steam_id)
+    if cached and now - cached[1] < INVENTORY_CACHE_TTL:
+        return cached[0]
+
+    items = await _fetch_fresh_inventory(request, steam_id)
     _inventory_cache[steam_id] = (items, now)
+    return items
+
+
+@router.post("/inventory/refresh", summary="Fuerza un refresh del inventario ignorando el caché de 23h")
+async def refresh_inventory(request: Request, user: dict = Depends(require_jwt)):
+    steam_id: str = user["sub"]
+
+    now = time.monotonic()
+    cooldown_start = _inventory_refresh_cooldown.get(steam_id)
+    if cooldown_start and now - cooldown_start < INVENTORY_REFRESH_COOLDOWN:
+        remaining = int(INVENTORY_REFRESH_COOLDOWN - (now - cooldown_start))
+        raise HTTPException(status_code=429, detail=f"Refresh cooldown active — retry in {remaining}s")
+
+    items = await _fetch_fresh_inventory(request, steam_id)
+    _inventory_cache[steam_id] = (items, now)
+    _inventory_refresh_cooldown[steam_id] = now
     return items
 
 

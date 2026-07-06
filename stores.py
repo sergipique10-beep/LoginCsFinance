@@ -44,6 +44,8 @@ IMAGE_CACHE_TTL = 82800      # 23 h — same budget as other free-plan caches; C
 MARKET_LOOKUP_CACHE_TTL = 82800  # 23 h — full price list per market (premium endpoint, same daily budget)
 MARKET_PROVIDERS_CACHE_TTL = 82800  # 23 h — market list is mostly static
 
+INVENTORY_REFRESH_COOLDOWN = 3600  # 1h — manual "force refresh" button, protects shared steamwebapi quota
+
 # ── Cache stores ───────────────────────────────────────────────────────────────
 
 _profile_cache: dict[str, tuple[dict, float]] = {}
@@ -59,6 +61,8 @@ _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image UR
 _image_cache_meta: dict[str, float] = {}  # "ts" → monotonic timestamp of last successful population
 _market_lookup_cache: dict[str, tuple[dict, float]] = {}  # market → ({name: price}, ts)
 _market_providers_cache: dict[str, tuple[list, float]] = {}  # "providers" → (list, ts)
+
+_inventory_refresh_cooldown: dict[str, float] = {}  # steam_id → monotonic timestamp of last forced refresh
 
 # Market cap history: ahora persiste en Supabase (Postgres), no en memoria/JSON.
 # Ver steam/cap_history_repo.py.
