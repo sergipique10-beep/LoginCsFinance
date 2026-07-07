@@ -1,0 +1,21 @@
+name: news-tick
+
+# Cron externo que detecta noticias CS2 nuevas y dispara push notifications
+# (broadcast a todos los dispositivos registrados). Desfasado 10 minutos del
+# cron de cap-tick para no coincidir.
+
+on:
+  schedule:
+    - cron: "15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /internal/news-tick
+        run: |
+          curl -fsS -X POST "$BASE_URL/internal/news-tick" -H "X-News-Tick-Token: $NEWS_TICK_TOKEN"
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          NEWS_TICK_TOKEN: ${{ secrets.NEWS_TICK_TOKEN }}
