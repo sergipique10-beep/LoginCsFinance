@@ -125,7 +125,9 @@ steamwebapi.com responses are transformed in `steam/mappers.py` before being ret
 - `_map_news_item(item, index, image_url)` — Steam news items → normalized shape; `featured: true` for index 0; includes `content` excerpt via `_clean_news_content`
 - `_fetch_og_image(client, url)` — async OG image scraper used by `/news/cs2`
 
-**Inventory enrichment** (`steam/services.py`): after `_map_item` maps the static API data, `_enrich_prices` fires one concurrent `asyncio.gather` call to `/history` per item (hardcoded `interval=10` min). This overwrites `priceLatest`, `priceDelta24h`, `priceDelta7d`, `priceDelta30d` with live-history-derived values. Cached per item in `_item_history_cache`. This means a first `/inventory` call can hit the API N times (once per item) — relevant when near the 5 req/day free plan limit.
+**Inventory enrichment** (`steam/services.py`): after `_map_item` maps the static API data, `_enrich_prices` fires one concurrent `asyncio.gather` call to `csfloat/history` per item. This overwrites `priceLatest`, `priceDelta24h`, `priceDelta7d`, `priceDelta30d` with live-history-derived values. Cached per item in `_item_history_cache`. This means a first request enriches N items = N API calls.
+
+**Rate limiting** (`_history_limiter`, `steam/services.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched synchronously per request must fit one window — that's why `_TRENDING_LIMIT` and `_MOVERS_LIMIT` are ≤18.
 
 
 ## In-memory stores (single-worker only)
@@ -138,7 +140,7 @@ All stores live in `stores.py`. **TODO:** replace with Redis before running mult
 | `_auth_codes` | code → (steam_id, expires_at) | One-time codes (TTL 30 s) |
 | `_refresh_store` | jti → expires_at | Refresh token revocation list |
 | `_rate_store` | ip → [timestamps] | Sliding-window rate limiter |
-| `_profile_cache` | steam_id → (data, cached_at) | 23 h cache — free plan: 5 req/day |
+| `_profile_cache` | steam_id → (data, cached_at) | 23 h cache — steamwebapi Starter: 20 req/60s per endpoint, 2k/day |
 | `_inventory_cache` | steam_id → (data, cached_at) | 23 h cache |
 | `_market_index_cache` | tf → (data, cached_at) | 23 h cache; keyed by timeframe |
 | `_item_history_cache` | `name:interval` → (data, cached_at) | 23 h cache; shared by `/item/history` and `_enrich_prices` |

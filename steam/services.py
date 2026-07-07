@@ -37,6 +37,40 @@ _MOVERS_LIMIT = 10
 _HISTORY_EMPTY_TTL = 300  # 5 min backoff for failed/empty results to avoid retry storms
 
 
+class _SlidingWindowLimiter:
+    """Caps calls to at most `limit` per `window` seconds, process-wide.
+
+    steamwebapi Starter allows 20 req/60s *per endpoint*. _enrich_prices fires
+    one csfloat/history call per item (up to 80 for trending) — without this,
+    everything past the 20th got HTTP 429 → empty history → priceDelta7d=None →
+    "N/A" badges. Callers that exceed the window wait their turn instead of failing.
+    ponytail: single global window; if inventory+trending+movers contend heavily,
+    split per-endpoint limiters — but they all hit csfloat/history so one is correct.
+    """
+
+    def __init__(self, limit: int, window: float):
+        self._limit = limit
+        self._window = window
+        self._calls: list[float] = []
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                self._calls = [t for t in self._calls if now - t < self._window]
+                if len(self._calls) < self._limit:
+                    self._calls.append(now)
+                    return
+                wait = self._window - (now - self._calls[0])
+            await asyncio.sleep(max(wait, 0.05))
+
+
+# 18/60s leaves headroom under the real 20/60s cap for concurrent requests to the
+# same endpoint (e.g. /market/prices lookups) sharing the quota.
+_history_limiter = _SlidingWindowLimiter(limit=18, window=60.0)
+
+
 async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
     cache_key = f"{name}:csfloat:35d"
     now = time.monotonic()
@@ -46,6 +80,8 @@ async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
         if now - cached[1] < ttl:
             return cached[0]
     try:
+        await _history_limiter.acquire()
+        now = time.monotonic()  # limiter may have blocked; refresh for cache stamps
         today = date.today()
         resp = await client.get(
             f"{STEAM_MARKET_API}/csfloat/history",

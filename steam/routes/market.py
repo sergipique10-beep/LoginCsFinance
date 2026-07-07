@@ -48,7 +48,10 @@ _MOVERS_SELECT = ",".join([
     "minfloat", "maxfloat", "paintindex",
 ])
 
-_TRENDING_LIMIT = 80
+# Capped to fit one 60s rate-limit window: _enrich_prices fires one csfloat/history
+# call per item, throttled to 18/60s by _history_limiter. A higher limit would make
+# the first (cold-cache) request block for minutes waiting on the limiter.
+_TRENDING_LIMIT = 18
 _SEARCH_LIMIT = 30
 
 _VALID_MARKETS = frozenset({
