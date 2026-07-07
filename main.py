@@ -9,11 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from settings import (
     ALLOWED_CORS_ORIGINS, JWT_SECRET, STEAM_API_KEY,
     SUPABASE_URL, SUPABASE_SERVICE_KEY, CAP_TICK_TOKEN,
+    FIREBASE_SERVICE_ACCOUNT_JSON, NEWS_TICK_TOKEN,
 )
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
 from steam.routes import router as steam_router
 from steam.services import _fetch_static_images
+from notifications.router import router as notifications_router
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -40,6 +42,16 @@ async def lifespan(app: FastAPI):
             "SUPABASE_URL / SUPABASE_SERVICE_KEY / CAP_TICK_TOKEN incompletas — "
             "el histórico del índice de precio (cap-history) no funcionará"
         )
+    if not FIREBASE_SERVICE_ACCOUNT_JSON:
+        logger.warning(
+            "FIREBASE_SERVICE_ACCOUNT_JSON no está configurada — "
+            "las push notifications no funcionarán"
+        )
+    if not NEWS_TICK_TOKEN:
+        logger.warning(
+            "NEWS_TICK_TOKEN no está configurada — "
+            "el cron de noticias (news-tick) no funcionará"
+        )
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
     await _fetch_static_images(app.state.http_client)
 
@@ -60,6 +72,7 @@ app.add_middleware(
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_router)
 app.include_router(steam_router)
+app.include_router(notifications_router)
 
 
 @app.get("/")
