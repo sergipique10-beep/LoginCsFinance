@@ -15,6 +15,7 @@ from stores import (
 )
 from auth.service import require_jwt
 from ..cap_history_repo import insert_snapshot, fetch_range
+from ..trending_repo import replace_snapshot, fetch_snapshot
 from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point, _category_rank
 from ..services import (
     STEAM_WEB_API,
@@ -335,9 +336,45 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
     return []
 
 
+def _row_to_item(row: dict) -> dict:
+    """Convierte una fila de market_trending (snake_case) al shape ISkinCard (camelCase)."""
+    return {
+        "id": row["name"],
+        "name": row["name"],
+        "slug": row.get("slug", ""),
+        "weaponType": row.get("weapon_type"),
+        "itemName": row.get("item_name"),
+        "itemType": row.get("item_type"),
+        "image": row.get("image", ""),
+        "rarity": row.get("rarity", "Base Grade"),
+        "rarityColor": row.get("rarity_color", "b0c3d9"),
+        "borderColor": row.get("border_color", "b0c3d9"),
+        "quality": row.get("quality", "Normal"),
+        "isStatTrak": row.get("is_stat_trak", False),
+        "isSouvenir": row.get("is_souvenir", False),
+        "isStar": row.get("is_star", False),
+        "exterior": row.get("exterior"),
+        "floatValue": None,
+        "floatMin": row.get("float_min"),
+        "floatMax": row.get("float_max"),
+        "paintIndex": row.get("paint_index"),
+        "phase": row.get("phase"),
+        "priceLatest": row.get("price_latest", 0),
+        "csfloatPrice": row.get("csfloat_price"),
+        "buffPrice": row.get("buff_price"),
+        "priceSafe": 0,
+        "priceMin": 0,
+        "priceMax": 0,
+        "priceDelta24h": row.get("price_delta_24h"),
+        "priceDelta7d": row.get("price_delta_7d"),
+        "priceDelta30d": row.get("price_delta_30d"),
+    }
+
+
 @router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
 async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
-    return await _compute_trending(request.app.state.http_client)
+    rows = await fetch_snapshot()
+    return [_row_to_item(row) for row in rows]
 
 
 @router.get("/market/index", summary="Índice de mercado global CS2")
