@@ -245,17 +245,17 @@ async def get_market_items(
     return result
 
 
-@router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
-async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
-    cache_key = "trending"
+async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
+    """Calcula el ranking trending actual (sin cache, sin persistencia).
+
+    Llamado tanto por GET /market/trending (antes de la migración a
+    Supabase) como por POST /internal/trending-tick.
+    """
     now = time.monotonic()
-    cached = _trending_cache.get(cache_key)
-    if cached and now - cached[1] < TRENDING_CACHE_TTL:
-        return cached[0]
 
     # ── Primary source: /items (paid plan) ───────────────────────────────────
     try:
-        resp = await request.app.state.http_client.get(
+        resp = await client.get(
             f"{STEAM_WEB_API}/items",
             params={
                 "key": STEAM_API_KEY,
@@ -287,13 +287,12 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
                 result,
                 key=lambda x: (_category_rank(x.get("weaponType")), -(x.get("sold24h") or 0)),
             )[:_TRENDING_LIMIT]
-            result = await _enrich_prices(request.app.state.http_client, result)
-            result = await _enrich_market_prices(request.app.state.http_client, result)
+            result = await _enrich_prices(client, result)
+            result = await _enrich_market_prices(client, result)
             # steamwebapi /items no devuelve `image` en este plan → el cache estático
             # (ByMykel) es la única fuente. Igual que en /market/items (search).
-            await _fetch_static_images(request.app.state.http_client)
+            await _fetch_static_images(client)
             _enrich_images_from_cache(result)
-            _trending_cache[cache_key] = (result, now)
             return result
         logger.warning("[market-trending] /items returned unexpected type: %s", type(data).__name__)
     else:
@@ -304,7 +303,7 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
     raw_topmovers = _topmovers_raw_cache.get("latest")
     if not raw_topmovers:
         try:
-            mi_resp = await request.app.state.http_client.get(
+            mi_resp = await client.get(
                 f"{STEAM_WEB_API}/market-index/cs2",
                 params={"key": STEAM_API_KEY, "format": "json"},
                 timeout=15.0,
@@ -324,23 +323,21 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
         gainers, losers, _ = raw_topmovers
         combined = gainers + losers
         if combined:
-            await _fetch_static_images(request.app.state.http_client)
+            await _fetch_static_images(client)
             result = [_map_topmovers_item(item) for item in combined]
             _enrich_images_from_cache(result)
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_LIMIT]
-            result = await _enrich_market_prices(request.app.state.http_client, result)
-            _trending_cache[cache_key] = (result, now)
+            result = await _enrich_market_prices(client, result)
             logger.info("[market-trending] serving from topmovers (%d items)", len(result))
             return result
 
-    # ── Stale cache as last resort ────────────────────────────────────────────
-    stale = _trending_cache.get(cache_key)
-    if stale:
-        logger.info("[market-trending] serving stale cache (%.0f s old)", now - stale[1])
-        return stale[0]
-
     logger.warning("[market-trending] no data available from any source")
     return []
+
+
+@router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
+async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
+    return await _compute_trending(request.app.state.http_client)
 
 
 @router.get("/market/index", summary="Índice de mercado global CS2")
