@@ -591,6 +591,52 @@ async def get_market_cap_history(
     return _downsample(rows, _CAP_BUCKET_MAP[tf])
 
 
+def _to_row(item: dict, rank: int) -> dict:
+    """Convierte un item ISkinCard-shaped (camelCase) a una fila de market_trending (snake_case)."""
+    return {
+        "name": item["name"],
+        "rank": rank,
+        "slug": item.get("slug", ""),
+        "weapon_type": item.get("weaponType"),
+        "item_name": item.get("itemName"),
+        "item_type": item.get("itemType"),
+        "image": item.get("image", ""),
+        "rarity": item.get("rarity", "Base Grade"),
+        "rarity_color": item.get("rarityColor", "b0c3d9"),
+        "border_color": item.get("borderColor", "b0c3d9"),
+        "quality": item.get("quality", "Normal"),
+        "is_stat_trak": bool(item.get("isStatTrak", False)),
+        "is_souvenir": bool(item.get("isSouvenir", False)),
+        "is_star": bool(item.get("isStar", False)),
+        "exterior": item.get("exterior"),
+        "float_min": item.get("floatMin"),
+        "float_max": item.get("floatMax"),
+        "paint_index": item.get("paintIndex"),
+        "phase": item.get("phase"),
+        "price_latest": item.get("priceLatest", 0),
+        "csfloat_price": item.get("csfloatPrice"),
+        "buff_price": item.get("buffPrice"),
+        "price_delta_24h": item.get("priceDelta24h"),
+        "price_delta_7d": item.get("priceDelta7d"),
+        "price_delta_30d": item.get("priceDelta30d"),
+    }
+
+
+@router.post("/internal/trending-tick", summary="Captura el ranking trending del mercado CS2 (cron interno)")
+async def trending_tick(
+    request: Request,
+    x_cap_token: str | None = Header(default=None),
+):
+    if not CAP_TICK_TOKEN or not x_cap_token or not secrets.compare_digest(x_cap_token, CAP_TICK_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
+
+    items = await _compute_trending(request.app.state.http_client)
+    rows = [_to_row(item, rank) for rank, item in enumerate(items)]
+    await replace_snapshot(rows)
+    logger.info("[trending-tick] snapshot saved: %d items", len(rows))
+    return {"ok": True, "count": len(rows)}
+
+
 @router.get("/market/providers", summary="Lista de markets soportados como price providers")
 async def get_market_providers(request: Request, user: dict = Depends(require_jwt)):
     providers = await _fetch_market_providers(request.app.state.http_client)
