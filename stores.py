@@ -9,6 +9,7 @@ TODO: replace _nonces, _auth_codes, _refresh_store, _rate_store,
 """
 from collections import defaultdict
 from datetime import timedelta
+from typing import Any
 
 # ── Auth constants ─────────────────────────────────────────────────────────────
 
@@ -31,13 +32,12 @@ _rate_store: dict[str, list[float]] = defaultdict(list)
 
 # ── Cache constants ────────────────────────────────────────────────────────────
 
-# steamwebapi.com free plan: 5 req/day — cache for 23 h to stay under the limit
+# steamwebapi.com Starter plan: 20 req/60s per endpoint, 2k/day — cache 23 h to stay well under the daily budget
 PROFILE_CACHE_TTL = 82800
 INVENTORY_CACHE_TTL = 82800
 MARKET_INDEX_CACHE_TTL = 82800
 ITEM_HISTORY_CACHE_TTL = 82800
 MOVERS_CACHE_TTL = 900       # 15 min — Starter plan: 2,000 req/day
-TRENDING_CACHE_TTL = 82800   # 23 h — same daily budget
 SEARCH_CACHE_TTL = 300       # 5 min — search queries cached briefly to avoid hammering the API
 MARKET_PRICES_CACHE_TTL = 300  # 5 min — live market prices, updated frequently by steamwebapi
 IMAGE_CACHE_TTL = 82800      # 23 h — same budget as other free-plan caches; CDN URLs are stable
@@ -52,9 +52,8 @@ _market_index_cache: dict[str, tuple[dict, float]] = {}
 _item_history_cache: dict[str, tuple[list, float]] = {}
 _movers_cache: dict[str, tuple[dict, float]] = {}
 _topmovers_raw_cache: dict[str, tuple[list, list, float]] = {}  # "latest" → (gainers, losers, ts)
-_trending_cache: dict[str, tuple[list, float]] = {}
 _search_cache: dict[str, tuple[list, float]] = {}
-_market_prices_cache: dict[str, tuple[any, float]] = {}
+_market_prices_cache: dict[str, tuple[Any, float]] = {}
 _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image URL
 _image_cache_meta: dict[str, float] = {}  # "ts" → monotonic timestamp of last successful population
 _market_lookup_cache: dict[str, tuple[dict, float]] = {}  # market → ({name: price}, ts)

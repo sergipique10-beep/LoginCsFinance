@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from settings import STEAM_API_KEY, CAP_TICK_TOKEN
 from stores import (
-    MARKET_INDEX_CACHE_TTL, MOVERS_CACHE_TTL, TRENDING_CACHE_TTL,
+    MARKET_INDEX_CACHE_TTL, MOVERS_CACHE_TTL,
     SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL,
     _market_index_cache, _movers_cache, _topmovers_raw_cache,
-    _trending_cache, _search_cache, _market_prices_cache,
+    _search_cache, _market_prices_cache,
 )
 from auth.service import require_jwt
 from ..cap_history_repo import insert_snapshot, fetch_range
