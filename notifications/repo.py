@@ -40,6 +40,13 @@ async def delete_device_tokens(tokens: list[str]) -> None:
     await asyncio.to_thread(_do)
 
 
+async def delete_device_token(token: str) -> None:
+    def _do() -> None:
+        get_supabase().table(_DEVICE_TOKENS_TABLE).delete().eq("token", token).execute()
+
+    await asyncio.to_thread(_do)
+
+
 async def filter_new_news_gids(gids: list[str]) -> list[str]:
     """Returns the subset of gids NOT already present in notified_news."""
     if not gids:

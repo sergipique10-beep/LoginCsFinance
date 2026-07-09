@@ -84,13 +84,24 @@ async def check_and_notify_new_news(http_client: httpx.AsyncClient) -> dict:
     new_gids_set = set(new_gids)
     new_items = [item for item in newsitems if str(item.get("gid", "")) in new_gids_set]
 
-    for item in new_items:
+    if len(new_items) == 1:
+        item = new_items[0]
         title = item.get("title", "CS2 News")[:100]
         body = _clean_news_content(item.get("contents", ""), max_chars=140) or title
         await send_broadcast(
             title=title,
             body=body,
             data={"newsId": str(item["gid"]), "url": item.get("url", "")},
+        )
+    elif new_items:
+        title = f"CS2 News — {len(new_items)} nuevas actualizaciones"
+        body = "\n".join(
+            f"• {item.get('title', 'Sin título')[:60]}" for item in new_items[:5]
+        )
+        await send_broadcast(
+            title=title,
+            body=body,
+            data={"newsId": str(new_items[0]["gid"]), "url": new_items[0].get("url", "")},
         )
 
     await repo.mark_news_notified(new_gids)
