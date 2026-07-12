@@ -9,7 +9,15 @@ from fastapi import APIRouter, Cookie, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 import jwt
-from settings import ALLOWED_REDIRECT_ORIGINS, BASE_URL, FRONTEND_URL, JWT_SECRET
+from settings import (
+    ALLOWED_REDIRECT_ORIGINS,
+    BASE_URL,
+    FRONTEND_URL,
+    JWT_SECRET,
+    REVIEW_PASSWORD,
+    REVIEW_STEAM_ID,
+    REVIEW_USER,
+)
 from stores import _auth_codes, CODE_TTL, _refresh_store, TOKEN_AUDIENCE
 from auth.service import (
     _consume_nonce,
@@ -134,6 +142,25 @@ async def dev_token(request: Request):
         raise HTTPException(status_code=400, detail="steam_id must be exactly 17 digits")
 
     access_token, refresh_token = _issue_tokens(steam_id)
+    response = JSONResponse({"access_token": access_token})
+    _set_refresh_cookie(response, refresh_token)
+    return response
+
+
+@router.post("/auth/review-login", summary="Acceso de revisión (Google Play) sin Steam")
+async def review_login(request: Request):
+    _rate_limit(_get_client_ip(request))
+    if not (REVIEW_USER and REVIEW_PASSWORD and REVIEW_STEAM_ID):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    body = await request.json()
+    user = body.get("user", "")
+    password = body.get("password", "")
+    if not (secrets.compare_digest(user, REVIEW_USER)
+            and secrets.compare_digest(password, REVIEW_PASSWORD)):
+        raise HTTPException(status_code=401, detail="Invalid review credentials")
+
+    access_token, refresh_token = _issue_tokens(REVIEW_STEAM_ID)
     response = JSONResponse({"access_token": access_token})
     _set_refresh_cookie(response, refresh_token)
     return response
