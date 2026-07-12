@@ -153,9 +153,14 @@ async def review_login(request: Request):
     if not (REVIEW_USER and REVIEW_PASSWORD and REVIEW_STEAM_ID):
         raise HTTPException(status_code=404, detail="Not found")
 
-    body = await request.json()
-    user = body.get("user", "")
-    password = body.get("password", "")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+    # Coerce to str: non-str / non-ASCII JSON values make compare_digest raise
+    # TypeError → 500, reachable pre-auth by any anonymous caller.
+    user = str(body.get("user", ""))
+    password = str(body.get("password", ""))
     if not (secrets.compare_digest(user, REVIEW_USER)
             and secrets.compare_digest(password, REVIEW_PASSWORD)):
         raise HTTPException(status_code=401, detail="Invalid review credentials")
