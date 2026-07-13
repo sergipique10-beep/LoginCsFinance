@@ -8,15 +8,17 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from settings import STEAM_API_KEY, CAP_TICK_TOKEN
 from stores import (
-    MARKET_INDEX_CACHE_TTL, MOVERS_CACHE_TTL,
+    MARKET_INDEX_CACHE_TTL,
     SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL,
-    _market_index_cache, _movers_cache, _topmovers_raw_cache,
+    _market_index_cache, _topmovers_raw_cache,
     _search_cache, _market_prices_cache,
 )
 from auth.service import require_jwt
 from ..cap_history_repo import insert_snapshot, fetch_range
 from ..trending_repo import replace_snapshot, fetch_snapshot
+from ..movers_repo import replace_snapshot as movers_replace, fetch_snapshot as movers_fetch
 from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point, _category_rank
+from ..market_rows import _to_row, _row_to_item
 from ..services import (
     STEAM_WEB_API,
     STEAM_MARKET_API,
@@ -62,17 +64,17 @@ _VALID_MARKETS = frozenset({
 })
 
 
-@router.get("/market/movers", summary="Top movers del mercado CS2 (hot & cold 24 h)")
-async def get_market_movers(request: Request, user: dict = Depends(require_jwt)):
-    cache_key = "movers"
+async def _compute_movers(client: httpx.AsyncClient) -> dict:
+    """Calcula el ranking hot/cold actual (sin cache, sin persistencia).
+
+    Llamado por POST /internal/movers-tick. GET /market/movers ahora lee
+    el snapshot ya persistido en Supabase.
+    """
     now = time.monotonic()
-    cached = _movers_cache.get(cache_key)
-    if cached and now - cached[1] < MOVERS_CACHE_TTL:
-        return cached[0]
 
     # ── Primary source: /items (paid plan) ───────────────────────────────────
     try:
-        resp = await request.app.state.http_client.get(
+        resp = await client.get(
             f"{STEAM_WEB_API}/items",
             params={
                 "key": STEAM_API_KEY,
@@ -106,7 +108,7 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
             mapped.sort(key=lambda x: x["priceLatest"], reverse=True)
             candidates = mapped[:_MOVERS_LIMIT * 2]
             logger.info("[market-movers] candidates: %d (capped from %d)", len(candidates), len(mapped))
-            candidates = await _enrich_prices(request.app.state.http_client, candidates)
+            candidates = await _enrich_prices(client, candidates)
             with_delta = sorted(
                 [x for x in candidates if x["priceDelta7d"] is not None],
                 key=lambda x: x["priceDelta7d"],
@@ -124,17 +126,11 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
             }
             # steamwebapi /items no devuelve `image` en este plan → el cache estático
             # (ByMykel) es la única fuente. Igual que en /market/items y /market/trending.
-            await _fetch_static_images(request.app.state.http_client)
+            await _fetch_static_images(client)
             _enrich_images_from_cache(result["hot"])
             _enrich_images_from_cache(result["cold"])
-            await _enrich_market_prices(request.app.state.http_client, result["hot"])
-            await _enrich_market_prices(request.app.state.http_client, result["cold"])
-            has_deltas = any(
-                item.get("priceDelta7d") is not None
-                for item in result["hot"] + result["cold"]
-            )
-            if has_deltas:
-                _movers_cache[cache_key] = (result, now)
+            await _enrich_market_prices(client, result["hot"])
+            await _enrich_market_prices(client, result["cold"])
             return result
         logger.warning("[market-movers] /items returned unexpected type: %s", type(data).__name__)
     else:
@@ -146,7 +142,7 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
     if not raw_topmovers:
         # topmovers cache is cold — fetch market-index now to populate it
         try:
-            mi_resp = await request.app.state.http_client.get(
+            mi_resp = await client.get(
                 f"{STEAM_WEB_API}/market-index/cs2",
                 params={"key": STEAM_API_KEY, "format": "json"},
                 timeout=15.0,
@@ -169,23 +165,24 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
         gainers, losers, _ = raw_topmovers
         result = _build_movers_from_topmovers(gainers, losers)
         if result:
-            await _fetch_static_images(request.app.state.http_client)
+            await _fetch_static_images(client)
             _enrich_images_from_cache(result["hot"])
             _enrich_images_from_cache(result["cold"])
-            await _enrich_market_prices(request.app.state.http_client, result["hot"])
-            await _enrich_market_prices(request.app.state.http_client, result["cold"])
+            await _enrich_market_prices(client, result["hot"])
+            await _enrich_market_prices(client, result["cold"])
             logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(result["hot"]), len(result["cold"]))
-            _movers_cache[cache_key] = (result, now)
             return result
-
-    # ── Stale cache as last resort ────────────────────────────────────────────
-    stale = _movers_cache.get(cache_key)
-    if stale:
-        logger.info("[market-movers] serving stale cache (%.0f s old)", now - stale[1])
-        return stale[0]
 
     logger.warning("[market-movers] no data available from any source")
     return {"hot": [], "cold": []}
+
+
+@router.get("/market/movers", summary="Top movers del mercado CS2 (hot & cold 24 h)")
+async def get_market_movers(request: Request, user: dict = Depends(require_jwt)):
+    rows = await movers_fetch()
+    hot  = [_row_to_item(r) for r in rows if r.get("bucket") == "hot"]
+    cold = [_row_to_item(r) for r in rows if r.get("bucket") == "cold"]
+    return {"hot": hot, "cold": cold}
 
 
 @router.get("/market/items", summary="Busca items en el mercado CS2 por nombre")
@@ -334,41 +331,6 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
 
     logger.warning("[market-trending] no data available from any source")
     return []
-
-
-def _row_to_item(row: dict) -> dict:
-    """Convierte una fila de market_trending (snake_case) al shape ISkinCard (camelCase)."""
-    return {
-        "id": row["name"],
-        "name": row["name"],
-        "slug": row.get("slug", ""),
-        "weaponType": row.get("weapon_type"),
-        "itemName": row.get("item_name"),
-        "itemType": row.get("item_type"),
-        "image": row.get("image", ""),
-        "rarity": row.get("rarity", "Base Grade"),
-        "rarityColor": row.get("rarity_color", "b0c3d9"),
-        "borderColor": row.get("border_color", "b0c3d9"),
-        "quality": row.get("quality", "Normal"),
-        "isStatTrak": row.get("is_stat_trak", False),
-        "isSouvenir": row.get("is_souvenir", False),
-        "isStar": row.get("is_star", False),
-        "exterior": row.get("exterior"),
-        "floatValue": None,
-        "floatMin": row.get("float_min"),
-        "floatMax": row.get("float_max"),
-        "paintIndex": row.get("paint_index"),
-        "phase": row.get("phase"),
-        "priceLatest": row.get("price_latest", 0),
-        "csfloatPrice": row.get("csfloat_price"),
-        "buffPrice": row.get("buff_price"),
-        "priceSafe": 0,
-        "priceMin": 0,
-        "priceMax": 0,
-        "priceDelta24h": row.get("price_delta_24h"),
-        "priceDelta7d": row.get("price_delta_7d"),
-        "priceDelta30d": row.get("price_delta_30d"),
-    }
 
 
 @router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
@@ -591,37 +553,6 @@ async def get_market_cap_history(
     return _downsample(rows, _CAP_BUCKET_MAP[tf])
 
 
-def _to_row(item: dict, rank: int) -> dict:
-    """Convierte un item ISkinCard-shaped (camelCase) a una fila de market_trending (snake_case)."""
-    return {
-        "name": item["name"],
-        "rank": rank,
-        "slug": item.get("slug", ""),
-        "weapon_type": item.get("weaponType"),
-        "item_name": item.get("itemName"),
-        "item_type": item.get("itemType"),
-        "image": item.get("image", ""),
-        "rarity": item.get("rarity", "Base Grade"),
-        "rarity_color": item.get("rarityColor", "b0c3d9"),
-        "border_color": item.get("borderColor", "b0c3d9"),
-        "quality": item.get("quality", "Normal"),
-        "is_stat_trak": bool(item.get("isStatTrak", False)),
-        "is_souvenir": bool(item.get("isSouvenir", False)),
-        "is_star": bool(item.get("isStar", False)),
-        "exterior": item.get("exterior"),
-        "float_min": item.get("floatMin"),
-        "float_max": item.get("floatMax"),
-        "paint_index": item.get("paintIndex"),
-        "phase": item.get("phase"),
-        "price_latest": item.get("priceLatest", 0),
-        "csfloat_price": item.get("csfloatPrice"),
-        "buff_price": item.get("buffPrice"),
-        "price_delta_24h": item.get("priceDelta24h"),
-        "price_delta_7d": item.get("priceDelta7d"),
-        "price_delta_30d": item.get("priceDelta30d"),
-    }
-
-
 @router.post("/internal/trending-tick", summary="Captura el ranking trending del mercado CS2 (cron interno)")
 async def trending_tick(
     request: Request,
@@ -634,6 +565,18 @@ async def trending_tick(
     rows = [_to_row(item, rank) for rank, item in enumerate(items)]
     await replace_snapshot(rows)
     logger.info("[trending-tick] snapshot saved: %d items", len(rows))
+    return {"ok": True, "count": len(rows)}
+
+
+@router.post("/internal/movers-tick", summary="Captura el ranking hot/cold del mercado CS2 (cron interno)")
+async def movers_tick(request: Request, x_cap_token: str | None = Header(default=None)):
+    if not CAP_TICK_TOKEN or not x_cap_token or not secrets.compare_digest(x_cap_token, CAP_TICK_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
+    result = await _compute_movers(request.app.state.http_client)
+    rows = [_to_row(item, rank, "hot")  for rank, item in enumerate(result["hot"])] \
+         + [_to_row(item, rank, "cold") for rank, item in enumerate(result["cold"])]
+    await movers_replace(rows)
+    logger.info("[movers-tick] snapshot saved: %d items", len(rows))
     return {"ok": True, "count": len(rows)}
 
 
