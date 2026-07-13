@@ -22,6 +22,12 @@ REVIEW_USER = os.getenv("REVIEW_USER", "")
 REVIEW_PASSWORD = os.getenv("REVIEW_PASSWORD", "")
 REVIEW_STEAM_ID = os.getenv("REVIEW_STEAM_ID", "")
 
+# Firebase Admin SDK: envía push notifications (FCM) a Android e iOS.
+FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+
+# Token que protege POST /internal/news-tick (cron externo de GitHub Actions).
+NEWS_TICK_TOKEN = os.getenv("NEWS_TICK_TOKEN", "")
+
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.
 # Separar múltiples valores con coma en .env.
 # Debe incluir la URL web y el scheme nativo de Android.

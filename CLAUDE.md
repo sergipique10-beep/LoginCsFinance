@@ -81,6 +81,10 @@ LoginCsFinance/
                     #   /internal/cap-tick. Constants: _MOVERS_SELECT, _TRENDING_LIMIT,
                     #   _CAP_TF_MAP, _CAP_BUCKET_MAP; helper _downsample.
       news.py       #   /news/cs2
+  notifications/
+    repo.py           # Supabase data layer: device_tokens, notified_news (reuses steam/cap_history_repo's client)
+    service.py        # register_token, send_broadcast (firebase-admin), check_and_notify_new_news
+    router.py         # APIRouter: /notifications/register-token, /internal/news-tick
 ```
 
 **Dependency order** (no circular imports):
@@ -112,6 +116,8 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | GET | `/market/index` | Bearer | Market index: `turnover24h`, `sold24h`, `delta24h`, `hottestItem`, `history[]` |
 | GET | `/market/cap-history` | Bearer | CS2 price-index history from Supabase, downsampled per `?tf=` (`7d`/`1m`/`3m`/`6m`/`1y`/`3y`). Returns `[{ ts, v, priceindex, realpriceindex, buyorderpriceindex, turnover24h }]`; `v = priceindex` (frontend contract). Invalid `tf` → 400. |
 | POST | `/internal/cap-tick` | `X-Cap-Token` | Hourly capture (called by external cron). Fetches `market-index/cs2`, upserts an hour-floored snapshot of the 4 fields into Supabase. Token compared via `secrets.compare_digest`; bad/missing → 401. |
+| POST | `/notifications/register-token` | Bearer | Registra un token FCM (`{ token, platform }`) para recibir push notifications. |
+| POST | `/internal/news-tick` | `X-News-Tick-Token` | Cron horario (GitHub Actions). Detecta noticias CS2 nuevas y envía push broadcast vía FCM. Idempotente (dedup por `gid` en `notified_news`). |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited |
 
@@ -169,6 +175,8 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `SUPABASE_URL` | *(empty)* | URL of the `cs-finance` Supabase project. Startup warns if missing. |
 | `SUPABASE_SERVICE_KEY` | *(empty)* | service_role key (bypasses RLS) — never the anon/publishable key. Startup warns if missing. |
 | `CAP_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/cap-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | *(empty)* | JSON completo de la service account de Firebase (Firebase Admin SDK), como string. Startup warns if missing. |
+| `NEWS_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/news-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
 
 ## Startup validation
 
