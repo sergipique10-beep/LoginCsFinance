@@ -17,6 +17,7 @@ from auth.service import require_jwt
 from ..cap_history_repo import insert_snapshot, fetch_range
 from ..trending_repo import replace_snapshot, fetch_snapshot
 from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point, _category_rank
+from ..market_rows import _to_row, _row_to_item
 from ..services import (
     STEAM_WEB_API,
     STEAM_MARKET_API,
@@ -336,41 +337,6 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
     return []
 
 
-def _row_to_item(row: dict) -> dict:
-    """Convierte una fila de market_trending (snake_case) al shape ISkinCard (camelCase)."""
-    return {
-        "id": row["name"],
-        "name": row["name"],
-        "slug": row.get("slug", ""),
-        "weaponType": row.get("weapon_type"),
-        "itemName": row.get("item_name"),
-        "itemType": row.get("item_type"),
-        "image": row.get("image", ""),
-        "rarity": row.get("rarity", "Base Grade"),
-        "rarityColor": row.get("rarity_color", "b0c3d9"),
-        "borderColor": row.get("border_color", "b0c3d9"),
-        "quality": row.get("quality", "Normal"),
-        "isStatTrak": row.get("is_stat_trak", False),
-        "isSouvenir": row.get("is_souvenir", False),
-        "isStar": row.get("is_star", False),
-        "exterior": row.get("exterior"),
-        "floatValue": None,
-        "floatMin": row.get("float_min"),
-        "floatMax": row.get("float_max"),
-        "paintIndex": row.get("paint_index"),
-        "phase": row.get("phase"),
-        "priceLatest": row.get("price_latest", 0),
-        "csfloatPrice": row.get("csfloat_price"),
-        "buffPrice": row.get("buff_price"),
-        "priceSafe": 0,
-        "priceMin": 0,
-        "priceMax": 0,
-        "priceDelta24h": row.get("price_delta_24h"),
-        "priceDelta7d": row.get("price_delta_7d"),
-        "priceDelta30d": row.get("price_delta_30d"),
-    }
-
-
 @router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
 async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
     rows = await fetch_snapshot()
@@ -589,37 +555,6 @@ async def get_market_cap_history(
     cutoff = datetime.now(timezone.utc) - _CAP_TF_MAP[tf]
     rows = await fetch_range(cutoff)
     return _downsample(rows, _CAP_BUCKET_MAP[tf])
-
-
-def _to_row(item: dict, rank: int) -> dict:
-    """Convierte un item ISkinCard-shaped (camelCase) a una fila de market_trending (snake_case)."""
-    return {
-        "name": item["name"],
-        "rank": rank,
-        "slug": item.get("slug", ""),
-        "weapon_type": item.get("weaponType"),
-        "item_name": item.get("itemName"),
-        "item_type": item.get("itemType"),
-        "image": item.get("image", ""),
-        "rarity": item.get("rarity", "Base Grade"),
-        "rarity_color": item.get("rarityColor", "b0c3d9"),
-        "border_color": item.get("borderColor", "b0c3d9"),
-        "quality": item.get("quality", "Normal"),
-        "is_stat_trak": bool(item.get("isStatTrak", False)),
-        "is_souvenir": bool(item.get("isSouvenir", False)),
-        "is_star": bool(item.get("isStar", False)),
-        "exterior": item.get("exterior"),
-        "float_min": item.get("floatMin"),
-        "float_max": item.get("floatMax"),
-        "paint_index": item.get("paintIndex"),
-        "phase": item.get("phase"),
-        "price_latest": item.get("priceLatest", 0),
-        "csfloat_price": item.get("csfloatPrice"),
-        "buff_price": item.get("buffPrice"),
-        "price_delta_24h": item.get("priceDelta24h"),
-        "price_delta_7d": item.get("priceDelta7d"),
-        "price_delta_30d": item.get("priceDelta30d"),
-    }
 
 
 @router.post("/internal/trending-tick", summary="Captura el ranking trending del mercado CS2 (cron interno)")
