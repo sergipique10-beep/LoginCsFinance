@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from settings import (
     ALLOWED_CORS_ORIGINS, JWT_SECRET, STEAM_API_KEY,
     SUPABASE_URL, SUPABASE_SERVICE_KEY, CAP_TICK_TOKEN,
+    REVIEW_USER, REVIEW_PASSWORD, REVIEW_STEAM_ID,
 )
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
@@ -40,6 +41,8 @@ async def lifespan(app: FastAPI):
             "SUPABASE_URL / SUPABASE_SERVICE_KEY / CAP_TICK_TOKEN incompletas — "
             "el histórico del índice de precio (cap-history) no funcionará"
         )
+    if not (REVIEW_USER and REVIEW_PASSWORD and REVIEW_STEAM_ID):
+        logger.info("[startup] review-login desactivado (REVIEW_USER/PASSWORD/STEAM_ID incompletos)")
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
     await _fetch_static_images(app.state.http_client)
 

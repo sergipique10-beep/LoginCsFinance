@@ -17,6 +17,11 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 # Token que protege POST /internal/cap-tick (cron externo de GitHub Actions).
 CAP_TICK_TOKEN = os.getenv("CAP_TICK_TOKEN", "")
 
+# Credenciales de acceso de revisión para Google Play (sin pasar por Steam).
+REVIEW_USER = os.getenv("REVIEW_USER", "")
+REVIEW_PASSWORD = os.getenv("REVIEW_PASSWORD", "")
+REVIEW_STEAM_ID = os.getenv("REVIEW_STEAM_ID", "")
+
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.
 # Separar múltiples valores con coma en .env.
 # Debe incluir la URL web y el scheme nativo de Android.
