@@ -1,8 +1,10 @@
 name: cap-tick
 
-# Cron externo que despierta al backend (Render free duerme) y captura un
-# snapshot horario del índice de precio CS2. El endpoint es idempotente por
-# hora (upsert por ts en Supabase), así que reintentos no duplican filas.
+# Cron externo que despierta al backend (Render free duerme) y captura
+# snapshots horarios: el índice de precio CS2 (cap-tick, upsert por ts) y
+# el ranking trending del mercado (trending-tick, reemplazo completo).
+# Ambos endpoints son idempotentes/deterministas dentro de la misma hora,
+# así que reintentos no duplican ni corrompen datos.
 
 on:
   schedule:
@@ -16,6 +18,12 @@ jobs:
       - name: POST /internal/cap-tick
         run: |
           curl -fsS -X POST "$BASE_URL/internal/cap-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          CAP_TICK_TOKEN: ${{ secrets.CAP_TICK_TOKEN }}
+      - name: POST /internal/trending-tick
+        run: |
+          curl -fsS -X POST "$BASE_URL/internal/trending-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
           CAP_TICK_TOKEN: ${{ secrets.CAP_TICK_TOKEN }}
