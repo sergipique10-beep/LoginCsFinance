@@ -17,13 +17,13 @@ jobs:
     steps:
       - name: POST /internal/trending-tick
         run: |
-          curl -fsS -X POST "$BASE_URL/internal/trending-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
+          curl -fsS -m 120 --retry 2 -X POST "$BASE_URL/internal/trending-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
           CAP_TICK_TOKEN: ${{ secrets.CAP_TICK_TOKEN }}
       - name: POST /internal/movers-tick
         run: |
-          curl -fsS -X POST "$BASE_URL/internal/movers-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
+          curl -fsS -m 120 --retry 2 -X POST "$BASE_URL/internal/movers-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
           CAP_TICK_TOKEN: ${{ secrets.CAP_TICK_TOKEN }}
