@@ -1,0 +1,29 @@
+name: market-tick
+
+# Cron externo (cada 15 min) que despierta al backend y persiste los rankings
+# del mercado CS2 en Supabase: trending (por volumen 24h) y hot/cold (movers).
+# Ambos endpoints reemplazan por completo su tabla, así que reintentos no duplican.
+# Los endpoints públicos GET /market/trending y /market/movers solo leen de
+# Supabase — nunca llaman a steamwebapi en el path de usuario.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /internal/trending-tick
+        run: |
+          curl -fsS -X POST "$BASE_URL/internal/trending-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          CAP_TICK_TOKEN: ${{ secrets.CAP_TICK_TOKEN }}
+      - name: POST /internal/movers-tick
+        run: |
+          curl -fsS -X POST "$BASE_URL/internal/movers-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          CAP_TICK_TOKEN: ${{ secrets.CAP_TICK_TOKEN }}
