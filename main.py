@@ -10,7 +10,7 @@ from settings import (
     ALLOWED_CORS_ORIGINS, JWT_SECRET, STEAM_API_KEY,
     SUPABASE_URL, SUPABASE_SERVICE_KEY, CAP_TICK_TOKEN,
     REVIEW_USER, REVIEW_PASSWORD, REVIEW_STEAM_ID,
-    FIREBASE_SERVICE_ACCOUNT_JSON, NEWS_TICK_TOKEN,
+    FIREBASE_SERVICE_ACCOUNT_JSON, NEWS_TICK_TOKEN, BROADCAST_TOKEN,
 )
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
@@ -54,6 +54,11 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "NEWS_TICK_TOKEN no está configurada — "
             "el cron de noticias (news-tick) no funcionará"
+        )
+    if not BROADCAST_TOKEN:
+        logger.warning(
+            "BROADCAST_TOKEN no está configurada — "
+            "el anuncio manual (POST /internal/broadcast) no funcionará"
         )
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
     await _fetch_static_images(app.state.http_client)

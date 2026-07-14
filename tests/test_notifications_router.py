@@ -46,3 +46,63 @@ def test_news_tick_calls_service_with_valid_token(client, monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {"notified": 2}
     mock_check.assert_awaited_once()
+
+
+def test_broadcast_requires_token_header(client, monkeypatch):
+    monkeypatch.setattr(notifications_router, "BROADCAST_TOKEN", "secret123")
+
+    resp = client.post("/internal/broadcast", json={"title": "Hola", "body": "Mundo"})
+
+    assert resp.status_code == 401
+
+
+def test_broadcast_rejects_wrong_token(client, monkeypatch):
+    monkeypatch.setattr(notifications_router, "BROADCAST_TOKEN", "secret123")
+
+    resp = client.post(
+        "/internal/broadcast",
+        json={"title": "Hola", "body": "Mundo"},
+        headers={"X-Broadcast-Token": "wrong"},
+    )
+
+    assert resp.status_code == 401
+
+
+def test_broadcast_sends_with_valid_token(client, monkeypatch):
+    monkeypatch.setattr(notifications_router, "BROADCAST_TOKEN", "secret123")
+    mock_send = AsyncMock(return_value={"sent": 3, "failed": 0, "pruned": 0})
+    monkeypatch.setattr(notifications_service, "send_broadcast", mock_send)
+
+    resp = client.post(
+        "/internal/broadcast",
+        json={"title": "Nueva version", "body": "Ya disponible la v2"},
+        headers={"X-Broadcast-Token": "secret123"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"sent": 3, "failed": 0, "pruned": 0}
+    mock_send.assert_awaited_once_with(title="Nueva version", body="Ya disponible la v2", data={})
+
+
+def test_broadcast_rejects_empty_title(client, monkeypatch):
+    monkeypatch.setattr(notifications_router, "BROADCAST_TOKEN", "secret123")
+
+    resp = client.post(
+        "/internal/broadcast",
+        json={"title": "", "body": "Mundo"},
+        headers={"X-Broadcast-Token": "secret123"},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_broadcast_rejects_too_long_body(client, monkeypatch):
+    monkeypatch.setattr(notifications_router, "BROADCAST_TOKEN", "secret123")
+
+    resp = client.post(
+        "/internal/broadcast",
+        json={"title": "Hola", "body": "x" * 241},
+        headers={"X-Broadcast-Token": "secret123"},
+    )
+
+    assert resp.status_code == 422

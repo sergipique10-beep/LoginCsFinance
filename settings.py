@@ -28,6 +28,9 @@ FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
 # Token que protege POST /internal/news-tick (cron externo de GitHub Actions).
 NEWS_TICK_TOKEN = os.getenv("NEWS_TICK_TOKEN", "")
 
+# Token que protege POST /internal/broadcast (anuncio manual, workflow_dispatch).
+BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN", "")
+
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.
 # Separar múltiples valores con coma en .env.
 # Debe incluir la URL web y el scheme nativo de Android.
