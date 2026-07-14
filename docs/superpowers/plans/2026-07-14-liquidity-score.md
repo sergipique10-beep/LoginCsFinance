@@ -19,6 +19,8 @@
 - **Pesos exactos del spec:** velocidad `0.30`, tiempo de venta `0.25`, haircut `0.25`, demanda `0.10`, consistencia `0.10`.
 - **Los tests siguen el patrón de `tests/test_price_deltas.py`:** docstrings que explican el *porqué* del caso, datos con forma real de la API.
 - Todos los comandos se corren desde `LoginCsfinance/` salvo la Task 4, que corre desde `CS-FINANCE-ionic/`.
+- **Usar el Python del venv**: `./venv/Scripts/python.exe -m pytest ...`. El Python del sistema no tiene las dependencias (`firebase_admin`) y la colección de tests falla antes de empezar.
+- **Baseline: 27 tests pasando** (`f2fec9f`). Cualquier task que baje ese número rompió algo preexistente.
 
 ---
 
@@ -97,7 +99,7 @@ def test_item_liquido_puntua_alto():
 
 - [ ] **Step 2: Correr el test para verificar que falla**
 
-Run: `python -m pytest tests/test_liquidity.py -v`
+Run: `./venv/Scripts/python.exe -m pytest tests/test_liquidity.py -v`
 Expected: FAIL con `ModuleNotFoundError: No module named 'steam.liquidity'`
 
 - [ ] **Step 3: Escribir `steam/liquidity.py`**
@@ -238,7 +240,7 @@ def compute_liquidity(raw: dict) -> tuple[float | None, dict | None]:
 
 - [ ] **Step 4: Correr el test para verificar que pasa**
 
-Run: `python -m pytest tests/test_liquidity.py -v`
+Run: `./venv/Scripts/python.exe -m pytest tests/test_liquidity.py -v`
 Expected: PASS (1 passed)
 
 - [ ] **Step 5: Agregar el test de recorte a `[0, 1]`**
@@ -262,7 +264,7 @@ def test_componentes_recortados_a_cero_uno():
 
 - [ ] **Step 6: Correr los tests**
 
-Run: `python -m pytest tests/test_liquidity.py -v`
+Run: `./venv/Scripts/python.exe -m pytest tests/test_liquidity.py -v`
 Expected: PASS (2 passed)
 
 - [ ] **Step 7: Commit**
@@ -378,7 +380,7 @@ def test_bid_por_encima_del_ask_descarta_el_haircut():
 
 - [ ] **Step 2: Correr los tests**
 
-Run: `python -m pytest tests/test_liquidity.py -v`
+Run: `./venv/Scripts/python.exe -m pytest tests/test_liquidity.py -v`
 Expected: PASS (6 passed). Si alguno falla, corregir `steam/liquidity.py` — no el test — y volver a correr.
 
 - [ ] **Step 3: Commit**
@@ -457,7 +459,7 @@ def test_movers_select_pide_los_campos_del_score():
 
 - [ ] **Step 2: Correr los tests para verificar que fallan**
 
-Run: `python -m pytest tests/test_liquidity.py -v`
+Run: `./venv/Scripts/python.exe -m pytest tests/test_liquidity.py -v`
 Expected: FAIL — `KeyError: 'liquidityScore'` en los dos primeros, y `AssertionError` en el del select (falta `prices`).
 
 - [ ] **Step 3: Conectar `compute_liquidity` en `steam/mappers.py`**
@@ -531,8 +533,8 @@ por:
 
 - [ ] **Step 5: Correr toda la suite**
 
-Run: `python -m pytest tests/ -v`
-Expected: PASS (13 passed — 9 de liquidity + 4 de price_deltas). Los tests de `test_price_deltas.py` **no deben romperse**: si alguno falla, el cambio en `_map_item` rompió algo.
+Run: `./venv/Scripts/python.exe -m pytest tests/ -v`
+Expected: PASS (36 passed = 27 preexistentes + 9 de liquidity). Los 27 preexistentes **no deben romperse**: si alguno falla, el cambio en `_map_item` rompió algo.
 
 - [ ] **Step 6: Actualizar `CLAUDE.md`**
 
@@ -540,8 +542,8 @@ En la sección "Commands", reemplazar la línea `There are no test or lint comma
 
 ```markdown
 ```bash
-# Tests
-python -m pytest tests/ -v
+# Tests (usar el Python del venv: el del sistema no tiene firebase_admin)
+venv\Scripts\python -m pytest tests/ -v
 ```
 
 There is no lint command configured.
@@ -568,8 +570,8 @@ En "Data mapping", agregar al final:
 
 - [ ] **Step 7: Correr la suite otra vez y commitear**
 
-Run: `python -m pytest tests/ -v`
-Expected: PASS (13 passed)
+Run: `./venv/Scripts/python.exe -m pytest tests/ -v`
+Expected: PASS (36 passed)
 
 ```bash
 git add steam/liquidity.py steam/mappers.py steam/routes/market.py tests/test_liquidity.py CLAUDE.md
@@ -676,8 +678,8 @@ Con las 4 tasks completas:
 
 ```bash
 # Backend (desde LoginCsfinance/)
-python -m pytest tests/ -v        # 13 passed
-python run_dev.py                 # levantar y pegarle a /inventory con un token
+./venv/Scripts/python.exe -m pytest tests/ -v   # 36 passed
+python run_dev.py                               # levantar y pegarle a /inventory con un token
 ```
 
 El score real de tu inventario es la primera validación con datos de verdad. Lo que hay que mirar no es el número absoluto —no hay contra qué compararlo— sino **el ranking**: que las cases y las skins baratas de alta rotación queden arriba, y los knives caros y los souvenirs abajo. Si el orden tiene sentido, las constantes están bien calibradas. Si no, los cuatro números del bloque de anclas en `liquidity.py` son el lugar donde se ajusta.
