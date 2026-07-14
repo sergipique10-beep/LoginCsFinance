@@ -84,7 +84,8 @@ LoginCsFinance/
   notifications/
     repo.py           # Supabase data layer: device_tokens, notified_news (reuses steam/cap_history_repo's client)
     service.py        # register_token, send_broadcast (firebase-admin), check_and_notify_new_news
-    router.py         # APIRouter: /notifications/register-token, /internal/news-tick
+    router.py         # APIRouter: /notifications/register-token, /notifications/delete-token,
+                      #            /internal/news-tick, /internal/broadcast
 ```
 
 **Dependency order** (no circular imports):
@@ -118,6 +119,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/internal/cap-tick` | `X-Cap-Token` | Hourly capture (called by external cron). Fetches `market-index/cs2`, upserts an hour-floored snapshot of the 4 fields into Supabase. Token compared via `secrets.compare_digest`; bad/missing → 401. |
 | POST | `/notifications/register-token` | Bearer | Registra un token FCM (`{ token, platform }`) para recibir push notifications. |
 | POST | `/internal/news-tick` | `X-News-Tick-Token` | Cron horario (GitHub Actions). Detecta noticias CS2 nuevas y envía push broadcast vía FCM. Idempotente (dedup por `gid` en `notified_news`). |
+| POST | `/internal/broadcast` | `X-Broadcast-Token` | Anuncio manual (`workflow_dispatch` de GitHub Actions). Envía un push con `{title, body}` libres a todos los `device_tokens`. `data` vacío → al tocar, la app abre Home. No deduplica: no toca `notified_news`. Devuelve `{sent, failed, pruned}`. |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited |
 
@@ -177,6 +179,7 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `CAP_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/cap-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | *(empty)* | JSON completo de la service account de Firebase (Firebase Admin SDK), como string. Startup warns if missing. |
 | `NEWS_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/news-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
+| `BROADCAST_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/broadcast` (anuncio manual). Token propio, **no** se reutiliza `NEWS_TICK_TOKEN`. Must match the GitHub Actions secret of the same name. Startup warns if missing. |
 
 ## Startup validation
 
