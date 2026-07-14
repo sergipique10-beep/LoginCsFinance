@@ -19,13 +19,19 @@ Esa pregunta —velocidad de salida— es la que fija todos los pesos. Un score 
 
 ## Alcance
 
-| Superficie | Score |
-|---|---|
-| `/inventory` | Sí — payload completo vía `_map_item` |
-| `/market/items`, `/market/trending` | Sí — mismo mapper, mismos campos |
-| Topmovers (`_map_topmovers_item`) | **No** — `None` |
+| Superficie | Score | Por qué |
+|---|---|---|
+| `/inventory` | **Sí** | Sirve `_map_item` con el payload completo |
+| `/market/items` (search) | **Sí** | Sirve `_map_item`; `_MOVERS_SELECT` pide todos los campos del score |
+| `/market/trending` | **No** | Sirve filas de Supabase vía `_row_to_item`, que no lleva el score |
+| `/market/movers` | **No** | Ídem |
+| Topmovers (`_map_topmovers_item`) | **No** | Payload sin `offerVolume`/`buyOrderVolume`/`hoursToSold` |
 
-Topmovers queda fuera porque su payload no trae `offerVolume`, `buyOrderVolume` ni `hoursToSold`; el mapper los pone en `0` duro. Calcular un score con ceros produciría un número inventado que diría "ilíquido" cuando la verdad es "no hay datos".
+Topmovers queda fuera porque su payload no trae esos campos; el mapper los pone en `0` duro. Calcular un score con ceros produciría un número inventado que diría "ilíquido" cuando la verdad es "no hay datos".
+
+**Trending y movers quedan fuera por una razón distinta y estructural.** No sirven la salida de `_map_item`: sirven snapshots persistidos en Supabase, convertidos por `_row_to_item` ([market_rows.py](../../../steam/market_rows.py)). Llevar el score hasta ahí requeriría columnas nuevas en `market_trending` y `market_movers`, es decir una migración.
+
+No se hizo, y es una decisión consciente: `_row_to_item` **ya omite ~10 campos requeridos de `ISkinCard`** (`sold24h`, `offerVolume`, `hoursToSold`, `externalPrices`, `marketable`, `tradable`, `steamUrl`...). El contrato de esos dos endpoints está roto desde antes de esta feature. Repararlo entero es trabajo aparte; parchear solo el Liquidity Score encima de un contrato ya roto sería maquillaje.
 
 ## Datos de entrada
 
@@ -99,6 +105,18 @@ Si `buyOrderPrice > priceLatest × 1.05`, el bid está por encima del ask, lo cu
 
 Si `sold24h` y `sold7d` son ambos `0` pero el ítem tiene el resto de los datos de mercado, el score da un valor bajo **legítimo**: el ítem no se mueve. No es `None`. Esta distinción entre *no sé* y *no se vende* es la que hay que preservar.
 
+### Un bid de 0 es un dato, no una ausencia
+
+`buyorderprice == 0` significa "nadie te compra esto a ningún precio" — la señal más ilíquida que existe. La primera versión lo trataba como dato faltante: descartaba el haircut y repartía su 0.25 entre los demás componentes, con lo que **el ítem que nadie quiere comprar puntuaba ~18 puntos más alto que uno con un bid malo pero real**. La renormalización premiaba la ausencia de datos.
+
+Ahora solo `buyorderprice` **ausente del payload** (`None`) descarta el componente. Un `0` real fluye por la matemática normal y aterriza en haircut `0.0`.
+
+### El peso no alcanza: hace falta composición
+
+`velocity (0.30) + demand (0.10) + consistency (0.10)` suman exactamente `0.50` y pasarían la compuerta de cobertura mínima. Pero un score armado con esos tres no sabe **ni en cuánto se vende ni a qué precio real** — las dos mitades de la pregunta que el score dice responder. Sería confianza infundada.
+
+Por eso la compuerta exige dos cosas: peso disponible ≥ 0.5 **y** al menos uno de `timeToSell` o `haircut` presente (`_CORE_COMPONENTS`).
+
 ### El mismo ítem debe puntuar igual en toda la app
 
 `_MOVERS_SELECT` ([routes/market.py:39](../../../steam/routes/market.py)) ya pide `sold24h`, `sold7d`, `offervolume`, `buyordervolume`, `buyorderprice` y `hourstosold` — los seis campos del score. **Pero no pide `prices`**, que es de donde sale `externalPrices`.
@@ -106,6 +124,14 @@ Si `sold24h` y `sold7d` son ambos `0` pero el ítem tiene el resto de los datos 
 Consecuencia: sin tocar nada, el mismo ítem puntuaría distinto en el inventario (5 componentes, peso 1.00) que en el Market (4 componentes, peso 0.90 renormalizado). Un score que cambia según la pantalla en la que lo mirás es un bug, no una sutileza.
 
 **Solución: agregar `prices` a `_MOVERS_SELECT`.** Un test debe guardar esa lista contra los campos que el score necesita, igual que `test_movers_select_pide_los_campos_que_map_item_necesita` ya hace para la familia `pricereal`. Es exactamente la misma clase de bug que produjo los badges "N/A" en todo el Market.
+
+El campo es **load-bearing**: `/market/items` (search) sí sirve `_map_item` y sí calcula el score. Sin `prices` en el select, la consistencia entre mercados se descartaría ahí pero no en `/inventory`, y el mismo ítem puntuaría distinto según la pantalla.
+
+## Limitación conocida: la cuantización a centavos
+
+Por debajo de ~$0.20 el eje de precios no es continuo: está cuantizado a centavos enteros. Una case de $0.03 con 50.000 ventas diarias tiene un bid de $0.02 → haircut de 33% → el componente cae a 0.33 y le resta ~8 puntos a un ítem que es **máximamente líquido**. El ancla `_MAX_HAIRCUT = 0.50` asume implícitamente un eje continuo.
+
+Consecuencia: el score sub-rankea sistemáticamente el tramo más líquido de CS2. No se corrigió — es una nota para la calibración futura, no un bug.
 
 ## Arquitectura
 

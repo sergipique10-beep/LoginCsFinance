@@ -59,9 +59,13 @@ def test_componentes_recortados_a_cero_uno():
 def test_item_sin_ventas_puntua_bajo_pero_no_es_none():
     """Cero ventas NO es "sin datos": es "no se mueve". Un None acá sería mentir.
 
-    El único componente que sobrevive es el haircut (bid a $700 de una vitrina de
-    $1000 → perdés 30% si salís ya). Los pesos se renormalizan sobre 0.90 porque
-    no hay `prices` con dos mercados.
+    Sobreviven cuatro componentes, y ahí está la gracia: velocity, timeToSell y demand
+    valen 0.0 *legítimamente* (nadie lo compró, la cola no avanza, no hay buy orders),
+    no porque falten datos. El único que se descarta es consistency, porque con un solo
+    mercado no hay nada que comparar — por eso los pesos se renormalizan sobre 0.90.
+
+    El único componente con valor distinto de cero es el haircut: un bid de $700 contra
+    una vitrina de $1000 significa que perdés 30% si querés salir ya.
     """
     score, breakdown = compute_liquidity({
         "markethashname": "★ Kukri Knife | Stained (Factory New)",
@@ -133,6 +137,83 @@ def test_bid_por_encima_del_ask_descarta_el_haircut():
 
     assert "haircut" not in breakdown_basura
     assert breakdown_sano["haircut"]["value"] == 0.9   # 1 − (0.05 / 0.50)
+
+
+# ── Regresiones del review final ──────────────────────────────────────────────
+
+def test_sin_comprador_puntua_peor_que_con_un_bid_malo():
+    """Un bid de 0 es "nadie te compra a ningún precio", no "no hay datos".
+
+    Tratarlo como faltante descartaba el haircut y repartía su 0.25 entre los demás
+    componentes: el ítem que NADIE quiere comprar terminaba puntuando ~18 puntos MÁS
+    ALTO que uno con un bid malo pero real. La renormalización premiaba la ausencia
+    de datos. Los dos ítems son idénticos salvo por el bid.
+    """
+    base = {
+        "pricelatestsell": 100.0,
+        "sold24h": 100,
+        "sold7d": 700,
+        "offervolume": 50,
+        "buyordervolume": 300,
+        "prices": [
+            {"market": "steam", "price": 100.0, "quantity": 50},
+            {"market": "buff",  "price": 98.0,  "quantity": 20},
+        ],
+    }
+    bid_malo   = {**base, "buyorderprice": 50.0}   # 50% de haircut: horrible, pero real
+    sin_bid    = {**base, "buyorderprice": 0}      # nadie compra a ningún precio
+
+    score_bid_malo, bd_malo = compute_liquidity(bid_malo)
+    score_sin_bid, bd_sin   = compute_liquidity(sin_bid)
+
+    assert bd_malo["haircut"]["value"] == 0.0   # 1 − (50/100) / 0.50
+    assert bd_sin["haircut"]["value"] == 0.0    # el 0 real cae hasta el piso, no se descarta
+    assert score_sin_bid <= score_bid_malo, (
+        f"el ítem sin comprador ({score_sin_bid}) no puede puntuar más que "
+        f"el de bid malo ({score_bid_malo})"
+    )
+
+
+def test_sin_tiempo_ni_precio_no_hay_score():
+    """velocity + demand + consistency = 0.50 exacto: pasa la compuerta de peso.
+
+    Pero un score armado solo con esos tres no sabe ni en cuánto se vende ni a qué
+    precio real — las dos mitades de la pregunta que el score dice responder. Un
+    número ahí sería confianza infundada, así que exigimos timeToSell o haircut.
+    """
+    score, breakdown = compute_liquidity({
+        "sold24h": 50,
+        "sold7d": 350,
+        "buyordervolume": 200,
+        # sin hourstosold ni offervolume → timeToSell None
+        # sin buyorderprice            → haircut None
+        "prices": [
+            {"market": "steam", "price": 10.0, "quantity": 5},
+            {"market": "buff",  "price": 9.0,  "quantity": 3},
+        ],
+    })
+
+    assert score is None
+    assert breakdown is None
+
+
+def test_borde_exacto_de_cobertura_minima():
+    """El peso disponible cae justo en 0.50 y hay un componente core → sí hay score.
+
+    velocity (0.30) + haircut (0.25) = 0.55 con haircut presente. Fija que la compuerta
+    es `< 0.5` (no `<= 0.5`) y que basta con UNO de los dos componentes core.
+    """
+    score, breakdown = compute_liquidity({
+        "pricelatestsell": 100.0,
+        "buyorderprice": 90.0,
+        "sold24h": 50,
+        "sold7d": 350,
+        # sin offervolume → timeToSell None; sin buyordervolume → demand None
+    })
+
+    assert score is not None
+    assert set(breakdown) == {"velocity", "haircut"}
+    assert round(sum(c["weight"] for c in breakdown.values()), 4) == 1.0
 
 
 def test_map_item_expone_el_score_y_el_desglose():

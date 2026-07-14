@@ -26,6 +26,12 @@ _MAX_BID_OVER_ASK = 1.05
 # no sabemos lo suficiente para dar un número. Preferimos "N/A" a un 0% falso.
 _MIN_WEIGHT_COVERAGE = 0.5
 
+# El peso solo no alcanza: velocity + demand + consistency suman exactamente 0.50 y
+# pasarían la compuerta, dando un número con confianza sobre un ítem del que no sabemos
+# ni en cuánto se vende ni a qué precio real — las dos mitades de la pregunta que el
+# score dice responder. Exigimos al menos una de las dos.
+_CORE_COMPONENTS = ("timeToSell", "haircut")
+
 _WEIGHTS = {
     "velocity":    0.30,   # se vende mucho
     "timeToSell":  0.25,   # se vende rápido
@@ -82,11 +88,27 @@ def _time_to_sell(raw: dict) -> float | None:
 
 
 def _haircut(raw: dict) -> float | None:
-    """Cuánto perdés si querés salir ya: la distancia entre el mejor bid y la vitrina."""
-    price = _num(raw.get("pricelatestsell")) or _num(raw.get("price"))
+    """Cuánto perdés si querés salir ya: la distancia entre el mejor bid y la vitrina.
+
+    Un bid de 0 NO es un dato faltante: es "nadie te compra esto a ningún precio", la
+    señal más ilíquida que existe. Tratarlo como faltante descartaba el componente y
+    repartía su 0.25 entre los demás, con lo que un ítem sin ningún comprador puntuaba
+    MÁS ALTO que uno con un bid malo pero real. Un 0 real cae solo hasta haircut 0.0.
+
+    La cadena de precio replica la de `_map_item`: si un ítem se valora por `lowestprice`,
+    el score tiene que ver el mismo precio que el usuario ve en pantalla.
+    """
+    price = (
+        _num(raw.get("pricelatestsell")) or
+        _num(raw.get("price")) or
+        _num(raw.get("lowestprice")) or
+        _num(raw.get("priceusd"))
+    )
     bid = _num(raw.get("buyorderprice"))
-    if not price or not bid:
-        return None
+    if price is None or price <= 0:
+        return None   # sin precio de referencia no hay ratio que calcular
+    if bid is None:
+        return None   # el campo no vino: no sabemos. Distinto de que venga en 0.
     if bid > price * _MAX_BID_OVER_ASK:
         return None   # bid por encima del ask: imposible. Basura de la API, no un chollo.
     return _clamp(1.0 - ((price - bid) / price) / _MAX_HAIRCUT)
@@ -122,6 +144,8 @@ def compute_liquidity(raw: dict) -> tuple[float | None, dict | None]:
     total_weight = sum(_WEIGHTS[k] for k in available)
     if total_weight < _MIN_WEIGHT_COVERAGE:
         return None, None
+    if not any(k in available for k in _CORE_COMPONENTS):
+        return None, None   # sin tiempo ni precio, el número no responde la pregunta
 
     score = sum(_WEIGHTS[k] * v for k, v in available.items()) / total_weight * 100.0
     breakdown = {
