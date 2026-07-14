@@ -38,10 +38,10 @@ async def register_token(token: str, platform: str) -> None:
     await repo.register_device_token(token, platform)
 
 
-async def send_broadcast(title: str, body: str, data: dict[str, str]) -> None:
+async def send_broadcast(title: str, body: str, data: dict[str, str]) -> dict[str, int]:
     tokens = await repo.list_device_tokens()
     if not tokens:
-        return
+        return {"sent": 0, "failed": 0, "pruned": 0}
 
     def _do():
         message = messaging.MulticastMessage(
@@ -53,6 +53,9 @@ async def send_broadcast(title: str, body: str, data: dict[str, str]) -> None:
 
     response = await asyncio.to_thread(_do)
 
+    sent = sum(1 for r in response.responses if r.success)
+    failed = len(response.responses) - sent
+
     invalid = [
         tokens[i]
         for i, r in enumerate(response.responses)
@@ -61,6 +64,8 @@ async def send_broadcast(title: str, body: str, data: dict[str, str]) -> None:
     if invalid:
         logger.info("[notifications] pruning %d unregistered token(s)", len(invalid))
         await repo.delete_device_tokens(invalid)
+
+    return {"sent": sent, "failed": failed, "pruned": len(invalid)}
 
 
 async def _fetch_raw_news(http_client: httpx.AsyncClient, count: int = _NEWS_TICK_COUNT) -> list[dict]:

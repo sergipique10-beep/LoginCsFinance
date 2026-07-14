@@ -71,3 +71,43 @@ def test_send_broadcast_noop_with_no_tokens(monkeypatch):
     asyncio.run(notifications_service.send_broadcast("Title", "Body", {}))
 
     delete_mock.assert_not_awaited()
+
+
+def test_send_broadcast_returns_counters(monkeypatch):
+    from firebase_admin import messaging
+
+    monkeypatch.setattr(
+        notifications_service.repo, "list_device_tokens", AsyncMock(return_value=["tok-a", "tok-b", "tok-c"])
+    )
+    monkeypatch.setattr(notifications_service.repo, "delete_device_tokens", AsyncMock())
+    monkeypatch.setattr(notifications_service, "_get_firebase_app", lambda: object())
+
+    class FakeResult:
+        def __init__(self, success, exception=None):
+            self.success = success
+            self.exception = exception
+
+    fake_batch_response = type(
+        "FakeBatch",
+        (),
+        {
+            "responses": [
+                FakeResult(True),
+                FakeResult(False, messaging.UnregisteredError("gone")),
+                FakeResult(False, ValueError("boom")),
+            ]
+        },
+    )()
+    monkeypatch.setattr(messaging, "send_each_for_multicast", lambda message, app: fake_batch_response)
+
+    result = asyncio.run(notifications_service.send_broadcast("Title", "Body", {}))
+
+    assert result == {"sent": 1, "failed": 2, "pruned": 1}
+
+
+def test_send_broadcast_returns_zeros_with_no_tokens(monkeypatch):
+    monkeypatch.setattr(notifications_service.repo, "list_device_tokens", AsyncMock(return_value=[]))
+
+    result = asyncio.run(notifications_service.send_broadcast("Title", "Body", {}))
+
+    assert result == {"sent": 0, "failed": 0, "pruned": 0}
