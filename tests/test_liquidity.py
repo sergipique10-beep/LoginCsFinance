@@ -4,6 +4,8 @@ Todos los pesos salen de esa pregunta. Un score que midiera "salud del mercado"
 tendría otros. Ver docs/superpowers/specs/2026-07-14-liquidity-score-design.md.
 """
 from steam.liquidity import compute_liquidity
+from steam.mappers import _map_item, _map_topmovers_item
+from steam.routes.market import _MOVERS_SELECT
 
 
 # Ítem de alta rotación: se vende mucho, hay una montaña de compradores esperando,
@@ -131,3 +133,40 @@ def test_bid_por_encima_del_ask_descarta_el_haircut():
 
     assert "haircut" not in breakdown_basura
     assert breakdown_sano["haircut"]["value"] == 0.9   # 1 − (0.05 / 0.50)
+
+
+def test_map_item_expone_el_score_y_el_desglose():
+    item = _map_item(ITEM_LIQUIDO)
+
+    assert item["liquidityScore"] == 67.83
+    assert item["liquidityBreakdown"]["velocity"]["value"] == 0.7834
+
+
+def test_topmovers_no_inventa_un_score():
+    """El payload de topmovers no trae offervolume/buyordervolume/hourstosold.
+
+    El mapper los pone en 0 duro. Calcular el score ahí daría un número que diría
+    "ilíquido" cuando la verdad es "no hay datos".
+    """
+    item = _map_topmovers_item({
+        "markethashname": "AK-47 | Redline (Field-Tested)",
+        "price": 1.50,
+        "change24h": 0.03,
+    })
+
+    assert item["liquidityScore"] is None
+    assert item["liquidityBreakdown"] is None
+
+
+def test_movers_select_pide_los_campos_del_score():
+    """Sin `prices` en el select, el mismo ítem puntúa distinto en Market que en Inventario.
+
+    Los 4 componentes restantes se renormalizarían sobre 0.90 solo en el Market.
+    Un score que cambia según la pantalla en la que lo mirás es un bug.
+    """
+    campos = set(_MOVERS_SELECT.split(","))
+
+    assert {
+        "sold24h", "sold7d", "offervolume", "buyordervolume",
+        "buyorderprice", "hourstosold", "prices",
+    } <= campos

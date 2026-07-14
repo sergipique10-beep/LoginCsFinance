@@ -5,6 +5,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
+from steam.liquidity import compute_liquidity
+
 _STEAM_CDN = "https://community.akamai.steamstatic.com"
 
 
@@ -181,6 +183,10 @@ def _map_item(item: dict) -> dict:
     real = d.get("pricereal")
     float_data = item.get("float") or d.get("float") or {}
 
+    # Sobre `d` crudo, no sobre el dict mapeado: abajo `sold24h` y compañía colapsan
+    # None a 0, y eso borraría la diferencia entre "no hay datos" y "cero ventas".
+    liquidity_score, liquidity_breakdown = compute_liquidity(d)
+
     return {
         "id":             item.get("assetid") or item.get("id", ""),
         "name":           d.get("marketname", "") or d.get("market_hash_name", ""),
@@ -229,6 +235,8 @@ def _map_item(item: dict) -> dict:
         "buyOrderVolume": d.get("buyordervolume") or 0,
         "buyOrderPrice":  d.get("buyorderprice") or 0,
         "hoursToSold":    d.get("hourstosold") or 0,
+        "liquidityScore":     liquidity_score,
+        "liquidityBreakdown": liquidity_breakdown,
         "marketable":     bool(d.get("marketable", True)),
         "tradable":       bool(d.get("tradable", True)),
         "tradeLockDays":  d.get("markettradablerestriction"),
@@ -288,6 +296,10 @@ def _map_topmovers_item(raw: dict) -> dict:
         "buyOrderVolume": 0,
         "buyOrderPrice":  0,
         "hoursToSold":    0,
+        # El payload de topmovers no trae offervolume/buyordervolume/hourstosold.
+        # Un score calculado sobre ceros diría "ilíquido" en vez de "no hay datos".
+        "liquidityScore":     None,
+        "liquidityBreakdown": None,
         "marketable":     True,
         "tradable":       True,
         "tradeLockDays":  None,

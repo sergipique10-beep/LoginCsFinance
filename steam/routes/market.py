@@ -49,6 +49,10 @@ _MOVERS_SELECT = ",".join([
     "sold24h", "sold7d", "sold30d", "soldtotal",
     "pricesafe", "pricemin", "pricemax",
     "offervolume", "buyordervolume", "buyorderprice",
+    # `prices` alimenta el componente de consistencia entre mercados del Liquidity
+    # Score. Sin este campo, el Market renormaliza sobre 0.90 y el mismo ítem puntúa
+    # distinto que en el Inventario.
+    "prices",
     "hourstosold", "marketable", "tradable",
     "markettradablerestriction", "steamurl",
     "minfloat", "maxfloat", "paintindex",

@@ -21,7 +21,12 @@ uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 curl http://localhost:8000/
 ```
 
-There are no test or lint commands configured.
+```bash
+# Tests (usar el Python del venv: el del sistema no tiene firebase_admin)
+venv\Scripts\python -m pytest tests/ -v
+```
+
+There is no lint command configured.
 
 ## Architecture
 
@@ -63,6 +68,7 @@ LoginCsFinance/
     mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
                     #   _map_news_item, _fetch_og_image, _clean_news_content,
                     #   _delta_from_history, _best_price_from_markets, _safe_delta
+    liquidity.py    # Liquidity Score (0-100): compute_liquidity. Puro, sin deps internas.
     services.py     # Async service helpers and image-cache utilities:
                     #   _fetch_history_for_item, _enrich_prices (inventory enrichment)
                     #   _cache_images, _enrich_images_from_cache (image cache fill/lookup)
@@ -91,9 +97,10 @@ LoginCsFinance/
 **Dependency order** (no circular imports):
 
 ```
-settings.py, stores.py, middleware.py, steam/mappers.py  ← nothing internal
+settings.py, stores.py, middleware.py, steam/liquidity.py  ← nothing internal
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
+steam/mappers.py        ← steam/liquidity
 steam/services.py       ← steam/mappers, stores, settings
 steam/cap_history_repo.py ← settings (+ supabase)
 steam/routes/*          ← steam/services, steam/mappers, steam/cap_history_repo, stores,
@@ -139,6 +146,7 @@ steamwebapi.com responses are transformed in `steam/mappers.py` before being ret
 
 **Rate limiting** (`_history_limiter`, `steam/services.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched synchronously per request must fit one window — that's why `_TRENDING_LIMIT` and `_MOVERS_LIMIT` are ≤18.
 
+**Liquidity Score** (`steam/liquidity.py`): `liquidityScore` (0-100) responde "si listo este ítem hoy, ¿en cuánto se vende y a qué precio real?". Cinco componentes ponderados: velocidad de ventas (0.30), tiempo de venta (0.25), haircut contra el mejor bid (0.25), buy orders en espera (0.10), consistencia entre mercados (0.10). Cuando falta un componente sus pesos se **renormalizan** entre los disponibles; si queda menos del 50% del peso, el score es `None` → `"N/A"` (misma convención que los price deltas). `compute_liquidity` recibe el dict **crudo** de steamwebapi, no el mapeado: `_map_item` colapsa `None` a `0` y eso borraría la diferencia entre "no hay datos" y "cero ventas". `_map_topmovers_item` devuelve `None` porque su payload no trae los campos. **`_MOVERS_SELECT` debe incluir `prices`**, o el Market renormaliza sobre 0.90 y el mismo ítem puntúa distinto que en el Inventario. Ver `docs/superpowers/specs/2026-07-14-liquidity-score-design.md`.
 
 ## In-memory stores (single-worker only)
 
