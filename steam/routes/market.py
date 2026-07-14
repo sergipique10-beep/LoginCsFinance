@@ -38,8 +38,11 @@ router = APIRouter()
 
 _MOVERS_SELECT = ",".join([
     "id", "marketname", "markethashname", "slug", "image",
-    "pricelatestsell", "pricelatestsell24h",
-    "pricelatestsell7d", "pricelatestsell30d",
+    "pricelatestsell",
+    # Familia pricereal: la única con históricos reales por timeframe, de donde
+    # _map_item calcula los deltas. Sin estos campos en el select, la API no los
+    # devuelve y todos los resultados salen con badge "N/A".
+    "pricereal", "pricereal24h", "pricereal7d", "pricereal30d",
     "color", "bordercolor", "rarity", "quality",
     "isstattrak", "issouvenir", "isstar",
     "itemtype", "itemname", "tag5",

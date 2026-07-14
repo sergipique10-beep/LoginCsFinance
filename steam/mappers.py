@@ -144,17 +144,27 @@ def _weapon_category(itemtype: str | None) -> str | None:
     return key.title()
 
 
-def _inline_delta(latest: float, raw_old) -> float | None:
-    """Compute % delta from a pre-fetched historical price field.
+# Un precio histórico fuera de este rango respecto al actual es basura de la API
+# (visto: pricereal30d=0.22 para una skin de 17.57 → +7886%), no un movimiento real.
+_MAX_PLAUSIBLE_RATIO = 10.0
 
-    Returns None when the historical value is missing, zero, or identical to
-    latest — identical values mean the API plan returns the same price for all
-    timeframes (plan limitation), so 0.0 would be misleading.
+
+def _inline_delta(current: float | None, raw_old) -> float | None:
+    """Compute % delta between the current price and a historical one.
+
+    Both must come from the same `pricereal*` family: `pricelatestsell24h/7d/30d`
+    are copies of `pricelatestsell`, so any delta derived from them is always None.
+
+    Returns None when either value is missing/zero (no sales data → "N/A") or when
+    the historical value is implausibly far from the current one (API garbage).
     """
+    new = float(current or 0) or None
     old = float(raw_old or 0) or None
-    if not old or old == latest:
+    if not new or not old:
         return None
-    return _safe_delta(latest, old)
+    if not (1 / _MAX_PLAUSIBLE_RATIO <= old / new <= _MAX_PLAUSIBLE_RATIO):
+        return None
+    return _safe_delta(new, old)
 
 
 def _map_item(item: dict) -> dict:
@@ -168,6 +178,7 @@ def _map_item(item: dict) -> dict:
         d.get("priceusd") or
         0
     )
+    real = d.get("pricereal")
     float_data = item.get("float") or d.get("float") or {}
 
     return {
@@ -197,15 +208,15 @@ def _map_item(item: dict) -> dict:
         "priceSafe":      d.get("pricesafe") or 0,
         "priceMin":       d.get("pricemin") or 0,
         "priceMax":       d.get("pricemax") or 0,
-        # Compute deltas from pre-fetched price fields only when they genuinely differ
-        # from the latest price. Identical values indicate a plan limitation (Starter plan
-        # returns the same price for all timeframes), in which case None is more honest
-        # than a misleading 0.0. _enrich_prices can still override these with
-        # history-derived values for endpoints that call it (e.g. inventory).
-        "priceDelta24h":  _inline_delta(latest, d.get("pricelatestsell24h")),
-        "priceDelta7d":   _inline_delta(latest, d.get("pricelatestsell7d")),
-        "priceDelta30d":  _inline_delta(latest, d.get("pricelatestsell30d")),
-        "priceReal":      d.get("pricereal"),
+        # Deltas contra la familia pricereal, la única cuyos campos por timeframe
+        # traen valores históricos de verdad. pricelatestsell24h/7d/30d vienen
+        # siempre iguales a pricelatestsell, así que daban None → "N/A" en todo.
+        # _enrich_prices puede sobrescribirlos con valores derivados del histórico
+        # de csfloat en los endpoints que la llaman (market, trending, movers).
+        "priceDelta24h":  _inline_delta(real, d.get("pricereal24h")),
+        "priceDelta7d":   _inline_delta(real, d.get("pricereal7d")),
+        "priceDelta30d":  _inline_delta(real, d.get("pricereal30d")),
+        "priceReal":      real,
         "externalPrices": [
             {"market": p["market"], "price": p["price"], "quantity": p["quantity"]}
             for p in d.get("prices", [])
