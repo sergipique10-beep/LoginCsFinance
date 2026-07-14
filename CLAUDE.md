@@ -21,7 +21,12 @@ uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 curl http://localhost:8000/
 ```
 
-There are no test or lint commands configured.
+```bash
+# Tests (usar el Python del venv: el del sistema no tiene firebase_admin)
+venv\Scripts\python -m pytest tests/ -v
+```
+
+There is no lint command configured.
 
 ## Architecture
 
@@ -63,6 +68,7 @@ LoginCsFinance/
     mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
                     #   _map_news_item, _fetch_og_image, _clean_news_content,
                     #   _delta_from_history, _best_price_from_markets, _safe_delta
+    liquidity.py    # Liquidity Score (0-100): compute_liquidity. Puro, sin deps internas.
     services.py     # Async service helpers and image-cache utilities:
                     #   _fetch_history_for_item, _enrich_prices (inventory enrichment)
                     #   _cache_images, _enrich_images_from_cache (image cache fill/lookup)
@@ -91,9 +97,10 @@ LoginCsFinance/
 **Dependency order** (no circular imports):
 
 ```
-settings.py, stores.py, middleware.py, steam/mappers.py  ← nothing internal
+settings.py, stores.py, middleware.py, steam/liquidity.py  ← nothing internal
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
+steam/mappers.py        ← steam/liquidity
 steam/services.py       ← steam/mappers, stores, settings
 steam/cap_history_repo.py ← settings (+ supabase)
 steam/routes/*          ← steam/services, steam/mappers, steam/cap_history_repo, stores,
@@ -133,10 +140,23 @@ steamwebapi.com responses are transformed in `steam/mappers.py` before being ret
 - `_map_news_item(item, index, image_url)` — Steam news items → normalized shape; `featured: true` for index 0; includes `content` excerpt via `_clean_news_content`
 - `_fetch_og_image(client, url)` — async OG image scraper used by `/news/cs2`
 
-**Inventory enrichment** (`steam/services.py`): after `_map_item` maps the static API data, `_enrich_prices` fires one concurrent `asyncio.gather` call to `csfloat/history` per item. This overwrites `priceLatest`, `priceDelta24h`, `priceDelta7d`, `priceDelta30d` with live-history-derived values. Cached per item in `_item_history_cache`. This means a first request enriches N items = N API calls.
+**Price deltas** (`_inline_delta` in `steam/mappers.py`): deltas are computed from the **`pricereal` family** (`pricereal` vs `pricereal24h/7d/30d`). Do **not** use `pricelatestsell24h/7d/30d` — steamwebapi returns those identical to `pricelatestsell` for every item, so any delta derived from them is always `None` → `"N/A"` badges everywhere. `_inline_delta` also discards historical values more than 10× away from the current price (the API occasionally returns garbage, e.g. `pricereal30d=0.22` for a $17.57 skin → +7886%). `None` means no sales data and renders as `"N/A"`.
+
+**History-derived enrichment** (`_enrich_prices` in `steam/services.py`): fires one concurrent `csfloat/history` call per item and overwrites the deltas with history-derived values. Cached per item in `_item_history_cache`. Used by `/market/*` (trending, movers) only — **not** by `/inventory`, which would need one API call per item and blow the 18/60s limiter. Inventory therefore relies entirely on `_inline_delta`.
 
 **Rate limiting** (`_history_limiter`, `steam/services.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched synchronously per request must fit one window — that's why `_TRENDING_LIMIT` and `_MOVERS_LIMIT` are ≤18.
 
+**Liquidity Score** (`steam/liquidity.py`): `liquidityScore` (0-100) responde "si listo este ítem hoy, ¿en cuánto se vende y a qué precio real?". Cinco componentes ponderados: velocidad de ventas (0.30), tiempo de venta (0.25), haircut contra el mejor bid (0.25), buy orders en espera (0.10), consistencia entre mercados (0.10).
+
+**Dónde vive**: solo en `/inventory` y `/market/items` (search) — los dos endpoints que sirven la salida de `_map_item`. **`/market/trending` y `/market/movers` NO lo llevan**: sirven snapshots de Supabase vía `_row_to_item` (`steam/market_rows.py`), que no lo transporta. Meterlo ahí requeriría columnas nuevas en las tablas; se decidió no hacerlo, entre otras cosas porque `_row_to_item` ya omite ~10 campos requeridos de `ISkinCard` (`sold24h`, `offerVolume`, `hoursToSold`, `externalPrices`...) y ese agujero es trabajo aparte.
+
+**`_MOVERS_SELECT` debe incluir `prices`** — es load-bearing: `/market/items` sí calcula el score, y sin ese campo la consistencia entre mercados se descartaría ahí pero no en `/inventory`, con lo que el mismo ítem puntuaría distinto según la pantalla.
+
+**Faltantes vs ceros** — la distinción de la que depende todo: `compute_liquidity` recibe el dict **crudo** de steamwebapi, no el mapeado, porque `_map_item` colapsa `None` a `0` (`d.get("sold24h") or 0`) y eso borraría la diferencia entre "no hay datos" (`None` → `"N/A"`) y "no se vende" (`0` → score bajo legítimo). Cuando un componente falta, su peso se **renormaliza** entre los disponibles. Cuidado con el corolario: **descartar un componente nunca puede hacer que un ítem parezca más líquido**. Por eso `buyorderprice == 0` ("nadie compra a ningún precio") es un dato real que da haircut `0.0`, no un faltante — tratarlo como faltante hacía que el ítem sin ningún comprador puntuara ~18 puntos MÁS ALTO que uno con un bid malo.
+
+**Compuerta**: el score es `None` si el peso disponible es < 0.5 **o** si faltan a la vez `timeToSell` y `haircut` (`_CORE_COMPONENTS`) — sin tiempo ni precio, el número no responde la pregunta que dice responder.
+
+`_map_topmovers_item` devuelve `None` porque su payload no trae los campos. Ver `docs/superpowers/specs/2026-07-14-liquidity-score-design.md`.
 
 ## In-memory stores (single-worker only)
 
