@@ -224,8 +224,9 @@ def _map_item(item: dict) -> dict:
         "priceDelta30d":  _inline_delta(real, d.get("pricereal30d")),
         "priceReal":      real,
         "externalPrices": [
-            {"market": p["market"], "price": p["price"], "quantity": p["quantity"]}
+            {"market": p.get("market"), "price": p.get("price"), "quantity": p.get("quantity")}
             for p in d.get("prices", [])
+            if p.get("market")
         ],
         "sold24h":        d.get("sold24h") or 0,
         "sold7d":         d.get("sold7d") or 0,
