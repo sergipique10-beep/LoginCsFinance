@@ -189,7 +189,11 @@ def _map_item(item: dict) -> dict:
 
     return {
         "id":             item.get("assetid") or item.get("id", ""),
-        "name":           d.get("marketname", "") or d.get("market_hash_name", ""),
+        # markethashname es el nombre canónico de Steam, SIEMPRE en inglés e
+        # independiente del locale. marketname es el nombre localizado del Market y
+        # steamwebapi lo tiene mal guardado para algunos ítems (p.ej. "Solidão
+        # (Testada em Campo)" en portugués en vez de "Solitude (Field-Tested)").
+        "name":           d.get("markethashname") or d.get("marketname", ""),
         "slug":           d.get("slug", ""),
         "weaponType":     d.get("weapontype") or _weapon_category(d.get("itemtype")),
         "itemName":       d.get("itemname"),
@@ -259,7 +263,9 @@ def _map_topmovers_item(raw: dict) -> dict:
     change = float(raw.get("change24h") or 0)
     return {
         "id":             raw.get("id", "") or raw.get("markethashname", ""),
-        "name":           raw.get("marketname", "") or raw.get("markethashname", ""),
+        # markethashname siempre en inglés; marketname viene localizado y a veces
+        # mal (ver nota en _map_item).
+        "name":           raw.get("markethashname") or raw.get("marketname", ""),
         "slug":           raw.get("slug", ""),
         "weaponType":     raw.get("weapontype") or _weapon_category(raw.get("itemtype")),
         "itemName":       raw.get("itemname"),
