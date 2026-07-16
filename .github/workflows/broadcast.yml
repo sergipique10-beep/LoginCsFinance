@@ -1,0 +1,38 @@
+name: broadcast
+
+# Anuncio manual: envía una push notification con título y texto libres a todos
+# los dispositivos registrados en device_tokens. Solo se dispara a mano
+# (workflow_dispatch) — nunca en schedule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "Título de la notificación (máx. 100 caracteres)"
+        required: true
+        type: string
+      body:
+        description: "Texto de la notificación (máx. 240 caracteres)"
+        required: true
+        type: string
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /internal/broadcast
+        # El JSON se construye con jq (no interpolando strings): un título con
+        # comillas romperia el body o permitiría inyectar campos. Los inputs
+        # pasan por env, no se interpolan en el script: serían inyección de shell.
+        # Sin --max-time: Render free duerme y el primer request tarda ~30-50 s.
+        run: |
+          payload=$(jq -n --arg title "$TITLE" --arg body "$BODY" '{title: $title, body: $body}')
+          curl -sS --fail-with-body -X POST "$BASE_URL/internal/broadcast" \
+            -H "X-Broadcast-Token: $BROADCAST_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          BROADCAST_TOKEN: ${{ secrets.BROADCAST_TOKEN }}
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}

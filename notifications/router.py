@@ -3,10 +3,10 @@ import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from auth.service import require_jwt
-from settings import NEWS_TICK_TOKEN
+from settings import NEWS_TICK_TOKEN, BROADCAST_TOKEN
 from . import repo, service
 
 logger = logging.getLogger("uvicorn.error")
@@ -21,6 +21,11 @@ class RegisterTokenBody(BaseModel):
 
 class DeleteTokenBody(BaseModel):
     token: str
+
+
+class BroadcastBody(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    body: str = Field(min_length=1, max_length=240)
 
 
 @router.post("/notifications/register-token", summary="Registra un token FCM para push notifications")
@@ -41,3 +46,11 @@ async def news_tick(request: Request, x_news_tick_token: str | None = Header(def
         raise HTTPException(status_code=401, detail="Invalid or missing news-tick token")
 
     return await service.check_and_notify_new_news(request.app.state.http_client)
+
+
+@router.post("/internal/broadcast", summary="Envía una push manual a todos los dispositivos (anuncio)")
+async def broadcast(body: BroadcastBody, x_broadcast_token: str | None = Header(default=None)):
+    if not BROADCAST_TOKEN or not x_broadcast_token or not secrets.compare_digest(x_broadcast_token, BROADCAST_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid or missing broadcast token")
+
+    return await service.send_broadcast(title=body.title, body=body.body, data={})

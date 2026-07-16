@@ -80,6 +80,12 @@ async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
                 "key": STEAM_API_KEY,
                 "language": "english",
                 "limit": 5000,
+                # steamwebapi answers from its own inventory snapshot unless told not to.
+                # That snapshot can be days stale, so items acquired since then were
+                # invisible to us — including through POST /inventory/refresh, which only
+                # bypasses _inventory_cache. Our 23h cache keeps this at ~1 call/day/user,
+                # so forcing a live read costs no extra quota.
+                "no_cache": 1,
             },
         )
     except httpx.TimeoutException:

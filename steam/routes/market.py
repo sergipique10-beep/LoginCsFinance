@@ -37,14 +37,21 @@ router = APIRouter()
 
 _MOVERS_SELECT = ",".join([
     "id", "marketname", "markethashname", "slug", "image",
-    "pricelatestsell", "pricelatestsell24h",
-    "pricelatestsell7d", "pricelatestsell30d",
+    "pricelatestsell",
+    # Familia pricereal: la única con históricos reales por timeframe, de donde
+    # _map_item calcula los deltas. Sin estos campos en el select, la API no los
+    # devuelve y todos los resultados salen con badge "N/A".
+    "pricereal", "pricereal24h", "pricereal7d", "pricereal30d",
     "color", "bordercolor", "rarity", "quality",
     "isstattrak", "issouvenir", "isstar",
     "itemtype", "itemname", "tag5",
     "sold24h", "sold7d", "sold30d", "soldtotal",
     "pricesafe", "pricemin", "pricemax",
     "offervolume", "buyordervolume", "buyorderprice",
+    # `prices` alimenta el componente de consistencia entre mercados del Liquidity
+    # Score. Sin este campo, el Market renormaliza sobre 0.90 y el mismo ítem puntúa
+    # distinto que en el Inventario.
+    "prices",
     "hourstosold", "marketable", "tradable",
     "markettradablerestriction", "steamurl",
     "minfloat", "maxfloat", "paintindex",
