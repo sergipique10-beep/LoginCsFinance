@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import date, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,9 +16,14 @@ from auth.service import require_jwt, _get_client_ip, _rate_limit
 from ..mappers import _map_item
 from ..services import (
     STEAM_WEB_API,
+    STEAM_MARKET_API,
     _enrich_market_prices,
     _enrich_images_from_cache,
 )
+
+# Markets soportados por el endpoint por-market de steamwebapi (market/<m>/history).
+# Steam usa la ruta legacy (steam/api/history) sin market — se deja fuera de aquí.
+_HISTORY_MARKETS = {"buff", "csfloat"}
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -137,28 +143,46 @@ async def get_item_history(
     request: Request,
     name: str,
     interval: str = "10",
+    market: str | None = None,
+    days: int = 35,
     user: dict = Depends(require_jwt),
 ):
     _rate_limit(_get_client_ip(request))
 
-    cache_key = f"{name}:{interval}"
+    market = market.lower() if market else None
+    days = max(1, min(days, 365))  # el frontend pide por timeframe; acotar el rango
+    cache_key = f"{name}:{interval}:{market or 'steam'}:{days}"
     now = time.monotonic()
     cached = _item_history_cache.get(cache_key)
     if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL:
         return cached[0]
 
+    # Buff163/CSFloat usan el endpoint por-market (fechas + quantity); Steam usa la
+    # ruta legacy (interval + sold). Distintos hosts, params y forma de respuesta.
+    if market in _HISTORY_MARKETS:
+        today = date.today()
+        url = f"{STEAM_MARKET_API}/{market}/history"
+        params = {
+            "key": STEAM_API_KEY,
+            "market_hash_name": name,
+            "start_date": (today - timedelta(days=days)).isoformat(),
+            "end_date": today.isoformat(),
+        }
+        volume_key = "quantity"
+    else:
+        url = f"{STEAM_WEB_API}/history"
+        params = {"key": STEAM_API_KEY, "market_hash_name": name, "interval": interval, "format": "json"}
+        volume_key = "sold"
+
     try:
-        resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/history",
-            params={"key": STEAM_API_KEY, "market_hash_name": name, "interval": interval, "format": "json"},
-        )
+        resp = await request.app.state.http_client.get(url, params=params)
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Steam history request timed out")
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
 
     if resp.status_code == 402:
-        logger.warning("[item-history] daily limit reached for %s", name)
+        logger.warning("[item-history] daily limit reached for %s (%s)", name, market or "steam")
         return []
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
@@ -169,7 +193,7 @@ async def get_item_history(
             {
                 "date":   p.get("createdat", "")[:10],
                 "price":  float(p.get("price") or 0),
-                "volume": int(p.get("sold") or 0),
+                "volume": int(p.get(volume_key) or 0),
             }
             for p in raw if p.get("price")
         ],

@@ -15,8 +15,7 @@ from stores import (
 )
 from auth.service import require_jwt
 from ..cap_history_repo import insert_snapshot, fetch_range
-from ..trending_repo import replace_snapshot, fetch_snapshot
-from ..movers_repo import replace_snapshot as movers_replace, fetch_snapshot as movers_fetch
+from ..rankings_repo import trending_repo, movers_repo
 from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point, _category_rank
 from ..market_rows import _to_row, _row_to_item
 from ..services import (
@@ -179,7 +178,7 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
 
 @router.get("/market/movers", summary="Top movers del mercado CS2 (hot & cold 24 h)")
 async def get_market_movers(request: Request, user: dict = Depends(require_jwt)):
-    rows = await movers_fetch()
+    rows = await movers_repo.fetch_snapshot()
     hot  = [_row_to_item(r) for r in rows if r.get("bucket") == "hot"]
     cold = [_row_to_item(r) for r in rows if r.get("bucket") == "cold"]
     return {"hot": hot, "cold": cold}
@@ -335,7 +334,7 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
 
 @router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
 async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
-    rows = await fetch_snapshot()
+    rows = await trending_repo.fetch_snapshot()
     return [_row_to_item(row) for row in rows]
 
 
@@ -563,7 +562,7 @@ async def trending_tick(
 
     items = await _compute_trending(request.app.state.http_client)
     rows = [_to_row(item, rank) for rank, item in enumerate(items)]
-    await replace_snapshot(rows)
+    await trending_repo.replace_snapshot(rows)
     logger.info("[trending-tick] snapshot saved: %d items", len(rows))
     return {"ok": True, "count": len(rows)}
 
@@ -575,7 +574,7 @@ async def movers_tick(request: Request, x_cap_token: str | None = Header(default
     result = await _compute_movers(request.app.state.http_client)
     rows = [_to_row(item, rank, "hot")  for rank, item in enumerate(result["hot"])] \
          + [_to_row(item, rank, "cold") for rank, item in enumerate(result["cold"])]
-    await movers_replace(rows)
+    await movers_repo.replace_snapshot(rows)
     logger.info("[movers-tick] snapshot saved: %d items", len(rows))
     return {"ok": True, "count": len(rows)}
 
