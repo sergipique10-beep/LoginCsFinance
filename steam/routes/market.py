@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from settings import STEAM_API_KEY, CAP_TICK_TOKEN
 from stores import (
     MARKET_INDEX_CACHE_TTL,
-    SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL,
+    SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL, ITEM_PRICE_CACHE_TTL,
     _market_index_cache, _topmovers_raw_cache,
-    _search_cache, _market_prices_cache,
+    _search_cache, _market_prices_cache, _item_price_cache,
 )
 from auth.service import require_jwt
 from ..cap_history_repo import insert_snapshot, fetch_range
@@ -248,6 +248,77 @@ async def get_market_items(
     _search_cache[cache_key] = (result, now)
     logger.info("[market-items] q=%r → %d results", query, len(result))
     return result
+
+
+@router.get("/market/price", summary="Datos completos (con liquidez) de un item CS2 por nombre")
+async def get_market_price(
+    request: Request,
+    name: str,
+    user: dict = Depends(require_jwt),
+):
+    """Item único con el shape completo de _map_item — incluye liquidityScore,
+    liquidityBreakdown y el bloque de volumen.
+
+    Existe porque /market/trending y /market/movers sirven snapshots de Supabase
+    vía _row_to_item, que NO transporta esos campos. El detail sheet del frontend
+    llama aquí al abrirse sobre un item de trending para no depender del snapshot.
+    """
+    query = name.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    cache_key = query.lower()
+    now = time.monotonic()
+    cached = _item_price_cache.get(cache_key)
+    if cached and now - cached[1] < ITEM_PRICE_CACHE_TTL:
+        return cached[0]
+
+    try:
+        resp = await request.app.state.http_client.get(
+            f"{STEAM_WEB_API}/items",
+            params={
+                "key": STEAM_API_KEY,
+                "game": "cs2",
+                "search": query,
+                "max": _SEARCH_LIMIT,
+                "select": _MOVERS_SELECT,
+                "format": "json",
+                "production": "1",
+            },
+            timeout=15.0,
+        )
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+
+    if resp.status_code == 402:
+        raise HTTPException(status_code=429, detail="Steam API daily limit reached — try again tomorrow")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+
+    data = resp.json()
+    if not isinstance(data, list):
+        raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
+
+    # steamwebapi /items?search es fuzzy: nos quedamos con el match exacto por
+    # markethashname (el nombre canónico en inglés, el mismo que manda el frontend).
+    raw = next(
+        (r for r in data
+         if (r.get("markethashname") or r.get("marketname") or "").lower() == cache_key),
+        None,
+    )
+    if raw is None:
+        raise HTTPException(status_code=404, detail=f"Item '{query}' not found")
+
+    _cache_images([raw])
+    item = _map_item(raw)
+    (item,) = await _enrich_prices(request.app.state.http_client, [item])
+    (item,) = await _enrich_market_prices(request.app.state.http_client, [item])
+    await _fetch_static_images(request.app.state.http_client)
+    _enrich_images_from_cache([item])
+
+    _item_price_cache[cache_key] = (item, now)
+    logger.info("[market-price] name=%r → hit", query)
+    return item
 
 
 async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
