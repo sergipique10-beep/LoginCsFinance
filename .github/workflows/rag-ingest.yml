@@ -1,0 +1,21 @@
+name: rag-ingest
+
+# Cron diario que dispara la ingesta de noticias para el RAG (news feeds RSS + Steam News API).
+# Normaliza, deduplica, chunka y genera embeddings vía Gemini, guardando en Supabase.
+# Idempotente por external_id — reintentos dentro del mismo día no duplican.
+
+on:
+  schedule:
+    - cron: "20 6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /internal/rag-ingest
+        run: |
+          curl -fsS -X POST "$BASE_URL/internal/rag-ingest" -H "X-Rag-Ingest-Token: $RAG_INGEST_TOKEN"
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          RAG_INGEST_TOKEN: ${{ secrets.RAG_INGEST_TOKEN }}
