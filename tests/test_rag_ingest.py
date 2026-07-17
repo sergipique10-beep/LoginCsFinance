@@ -15,6 +15,21 @@ RSS = """<?xml version="1.0"?>
 </channel></rss>"""
 
 
+@pytest.mark.asyncio
+async def test_fetch_feeds_follows_redirects(monkeypatch):
+    # El blog oficial de CS2 hace 301 (/index.php/feed/ -> /feed/); sin
+    # follow_redirects el fetch falla y el RSS no entra al corpus.
+    monkeypatch.setattr(ingest, "RAG_FEEDS", ["http://feed"])
+    resp = MagicMock(text=RSS)
+    resp.raise_for_status = MagicMock()
+    client = MagicMock()
+    client.get = AsyncMock(return_value=resp)
+
+    await ingest._fetch_feeds(client)
+
+    assert client.get.await_args.kwargs["follow_redirects"] is True
+
+
 def test_chunk_text_short_is_single_chunk():
     assert ingest.chunk_text("hola mundo") == ["hola mundo"]
 

@@ -115,7 +115,7 @@ async def _fetch_feeds(client: httpx.AsyncClient) -> list[str]:
     xmls: list[str] = []
     for url in RAG_FEEDS:
         try:
-            resp = await client.get(url, timeout=20.0)
+            resp = await client.get(url, timeout=20.0, follow_redirects=True)
             resp.raise_for_status()
             xmls.append(resp.text)
         except httpx.HTTPError as exc:
@@ -129,6 +129,7 @@ async def _fetch_steam_news(client: httpx.AsyncClient) -> list[dict]:
             _STEAM_NEWS_URL,
             params={"appid": 730, "count": _STEAM_NEWS_COUNT, "format": "json"},
             timeout=20.0,
+            follow_redirects=True,
         )
         resp.raise_for_status()
         return parse_steam_news(resp.json())

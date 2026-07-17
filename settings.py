@@ -43,7 +43,7 @@ GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "gemini-embedding-001")
 RAG_INGEST_TOKEN = os.getenv("RAG_INGEST_TOKEN", "")
 
 # Feeds RSS a ingestar para el RAG (URLs separadas por coma).
-_raw_feeds = os.getenv("RAG_FEEDS", "https://blog.counter-strike.net/index.php/feed/")
+_raw_feeds = os.getenv("RAG_FEEDS", "https://blog.counter-strike.net/feed/")
 RAG_FEEDS: list[str] = [u.strip() for u in _raw_feeds.split(",") if u.strip()]
 
 # Similitud mínima (cosine, 0..1) para que un chunk recuperado cuente como
