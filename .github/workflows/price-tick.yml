@@ -1,0 +1,22 @@
+name: price-tick
+
+# Cron diario que captura un snapshot de precios de las skins seguidas
+# (tracked_skins) en precios_historicos. Idempotente (upsert por name+date).
+# Despierta el backend en Render (free) aunque esté dormido.
+
+on:
+  schedule:
+    - cron: "40 6 * * *"   # diario 06:40 UTC
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /internal/price-tick
+        run: |
+          curl -fsS --max-time 900 -X POST "$BASE_URL/internal/price-tick" \
+            -H "X-Price-Tick-Token: $PRICE_TICK_TOKEN"
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          PRICE_TICK_TOKEN: ${{ secrets.PRICE_TICK_TOKEN }}
