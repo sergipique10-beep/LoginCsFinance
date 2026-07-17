@@ -66,7 +66,11 @@ def parse_feed_entries(feeds_xml: list[str]) -> list[dict]:
             external_id = e.get("id") or e.get("link") or ""
             if not external_id:
                 continue
-            raw = e.get("summary") or e.get("description") or ""
+            content_list = e.get("content")
+            if content_list:
+                raw = content_list[0].get("value", "")
+            else:
+                raw = e.get("summary") or e.get("description") or ""
             content = _clean_news_content(raw, max_chars=_CLEAN_MAX)
             if not content:
                 continue

@@ -99,11 +99,15 @@ async def rag_ask(
         logger.warning("rag_ask: %s", exc)
         raise HTTPException(status_code=503, detail="El asistente no está configurado")
 
-    sources = [
-        Source(title=c.get("title", ""), url=c.get("url", ""),
-               published_at=c.get("published_at"))
-        for c in chunks
-    ]
+    sources: list[Source] = []
+    seen_urls: set[str] = set()
+    for c in chunks:
+        url = c.get("url", "")
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        sources.append(Source(title=c.get("title", ""), url=url,
+                               published_at=c.get("published_at")))
     return AskResponse(reply=reply, sources=sources)
 
 
@@ -112,6 +116,12 @@ async def rag_ingest(
     request: Request,
     x_rag_ingest_token: str = Header(default=""),
 ):
-    if not RAG_INGEST_TOKEN or not secrets.compare_digest(x_rag_ingest_token, RAG_INGEST_TOKEN):
+    try:
+        valid = bool(RAG_INGEST_TOKEN) and secrets.compare_digest(
+            x_rag_ingest_token.encode(), RAG_INGEST_TOKEN.encode()
+        )
+    except TypeError:
+        valid = False
+    if not valid:
         raise HTTPException(status_code=401, detail="Token inválido")
     return await ingest(request.app.state.http_client)

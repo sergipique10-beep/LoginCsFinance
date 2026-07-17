@@ -15,7 +15,7 @@ jobs:
     steps:
       - name: POST /internal/rag-ingest
         run: |
-          curl -fsS -X POST "$BASE_URL/internal/rag-ingest" -H "X-Rag-Ingest-Token: $RAG_INGEST_TOKEN"
+          curl -fsS --max-time 120 -X POST "$BASE_URL/internal/rag-ingest" -H "X-Rag-Ingest-Token: $RAG_INGEST_TOKEN"
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
           RAG_INGEST_TOKEN: ${{ secrets.RAG_INGEST_TOKEN }}

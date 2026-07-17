@@ -25,3 +25,19 @@ async def test_retrieve_empty_query_returns_empty(monkeypatch):
     out = await retrieval.retrieve(MagicMock(), "   ")
     assert out == []
     embed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_filters_low_similarity(monkeypatch):
+    monkeypatch.setattr(retrieval.embeddings, "embed_text",
+                        AsyncMock(return_value=[0.5] * 768))
+    match = AsyncMock(return_value=[
+        {"content": "relevante", "title": "t1", "url": "u1", "similarity": 0.8},
+        {"content": "irrelevante", "title": "t2", "url": "u2", "similarity": 0.2},
+    ])
+    monkeypatch.setattr(retrieval.repo, "match_chunks", match)
+
+    out = await retrieval.retrieve(MagicMock(), "karambit", k=5)
+
+    assert len(out) == 1
+    assert out[0]["content"] == "relevante"

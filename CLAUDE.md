@@ -129,6 +129,9 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/internal/broadcast` | `X-Broadcast-Token` | Anuncio manual (`workflow_dispatch` de GitHub Actions). Envía un push con `{title, body}` libres a todos los `device_tokens`. `data` vacío → al tocar, la app abre Home. No deduplica: no toca `notified_news`. Devuelve `{sent, failed, pruned}`. |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited |
+| POST | `/rag/chat` | Bearer | Chat con el asistente Sharky (Gemini), con historial de turnos |
+| POST | `/rag/ask` | Bearer | RAG sobre noticias CS2: recupera chunks relevantes (pgvector) y responde citando `sources` (`reply` + `sources[]`); nunca inventa — sin chunks por encima de `RAG_MIN_SIMILARITY`, `sources` queda vacío |
+| POST | `/internal/rag-ingest` | `X-Rag-Ingest-Token` | Cron diario (GitHub Actions) de ingesta RSS + Steam News → embeddings Gemini → upsert en Supabase. Idempotente por `external_id` |
 
 ## Data mapping
 
@@ -200,6 +203,10 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | *(empty)* | JSON completo de la service account de Firebase (Firebase Admin SDK), como string. Startup warns if missing. |
 | `NEWS_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/news-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
 | `BROADCAST_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/broadcast` (anuncio manual). Token propio, **no** se reutiliza `NEWS_TICK_TOKEN`. Must match the GitHub Actions secret of the same name. Startup warns if missing. |
+| `GEMINI_EMBED_MODEL` | `gemini-embedding-001` | Modelo de embeddings de Gemini usado por el RAG (768 dims vía `outputDimensionality`) |
+| `RAG_INGEST_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/rag-ingest`. Must match the GitHub Actions secret. |
+| `RAG_FEEDS` | `https://blog.counter-strike.net/index.php/feed/` | Feeds RSS a ingestar para el RAG, separados por coma |
+| `RAG_MIN_SIMILARITY` | `0.5` | Similitud mínima (cosine, 0..1) para que un chunk cuente como fuente citable en `/rag/ask` |
 
 ## Startup validation
 

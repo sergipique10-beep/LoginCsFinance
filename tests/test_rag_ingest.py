@@ -39,6 +39,28 @@ def test_parse_feed_entries_extracts_fields():
     assert "Karambit" in it["content"]
 
 
+RSS_FULL_CONTENT = """<?xml version="1.0"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel>
+  <item>
+    <title>Karambit sube</title>
+    <link>https://blog.cs/karambit</link>
+    <guid>https://blog.cs/karambit</guid>
+    <description>Teaser corto.</description>
+    <content:encoded><![CDATA[Cuerpo completo mucho mas largo que el teaser sobre el Karambit y la operacion.]]></content:encoded>
+    <pubDate>Tue, 15 Jul 2026 10:00:00 +0000</pubDate>
+  </item>
+</channel></rss>"""
+
+
+def test_parse_feed_entries_prefers_full_content_over_summary():
+    items = ingest.parse_feed_entries([RSS_FULL_CONTENT])
+    assert len(items) == 1
+    it = items[0]
+    assert "Cuerpo completo" in it["content"]
+    assert "Teaser corto" not in it["content"]
+
+
 STEAM_NEWS = {
     "appnews": {"newsitems": [
         {"gid": "555", "title": "Operación nueva", "url": "https://store.steam/op",
