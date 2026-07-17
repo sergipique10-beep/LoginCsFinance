@@ -152,11 +152,36 @@ git commit -m "feat(rag): esquema SQL rag_chunks + config (embeddings, ingest to
 
 **Files:**
 - Create: `rag/embeddings.py`
+- Create: `pytest.ini` (config de pytest-asyncio — primera tarea con tests async)
+- Modify: `requirements.txt` (añadir `pytest-asyncio`)
 - Test: `tests/test_rag_embeddings.py`
 
 **Interfaces:**
 - Consumes: `settings.GEMINI_API_KEY`, `settings.GEMINI_EMBED_MODEL`; `httpx.AsyncClient`.
 - Produces: `async def embed_text(client: httpx.AsyncClient, text: str) -> list[float]` — devuelve 768 floats. Lanza `RuntimeError` si falta la key o la respuesta viene vacía; propaga errores httpx.
+
+- [ ] **Step 0: Setup de tests async (pytest-asyncio)**
+
+El repo no tenía tests async hasta ahora. Las Tasks 2-6 los usan (`@pytest.mark.asyncio`). Configurar una sola vez:
+
+Añadir `pytest-asyncio==0.24.0` a `requirements.txt` e instalar:
+
+Run: `venv\Scripts\pip install pytest-asyncio==0.24.0`
+Expected: `Successfully installed pytest-asyncio-0.24.0`
+
+Crear `pytest.ini` en la raíz del repo:
+
+```ini
+[pytest]
+asyncio_mode = auto
+```
+
+(`asyncio_mode = auto` trata toda `async def test_*` como test async sin necesitar el marker en cada una; los markers explícitos del plan siguen funcionando.)
+
+Verificar que la suite existente sigue verde con la config nueva:
+
+Run: `venv\Scripts\python -m pytest tests/ -q`
+Expected: todos los tests previos pasan (sin errores de colección por la config nueva).
 
 - [ ] **Step 1: Escribir el test que falla**
 
@@ -254,8 +279,8 @@ Expected: PASS (2 passed).
 - [ ] **Step 5: Commit local (sin push)**
 
 ```bash
-git add rag/embeddings.py tests/test_rag_embeddings.py
-git commit -m "feat(rag): cliente de embeddings Gemini (768 dims)"
+git add rag/embeddings.py tests/test_rag_embeddings.py pytest.ini requirements.txt
+git commit -m "feat(rag): cliente de embeddings Gemini (768 dims) + setup pytest-asyncio"
 ```
 
 ---
