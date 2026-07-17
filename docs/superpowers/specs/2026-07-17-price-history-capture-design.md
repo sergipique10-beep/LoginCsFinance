@@ -45,48 +45,68 @@ entrenar. Cada día sin capturar es un día de datos perdido.
 
 | Decisión | Elección | Motivo |
 |----------|----------|--------|
-| Universo de skins | Top-N populares (set fijo) **∪** skins vistas en inventarios | Serie continua para un modelo general + cobertura de lo que los usuarios tienen. La predicción es sobre el `market_hash_name` (tipo de skin), independiente del dueño. |
-| Cómo entran las de inventario | **Auto-registro**: al servir `/inventory`, registrar sus `market_hash_name` en `tracked_skins` | No hay tabla de usuarios; se llena solo con el uso real, sin fricción ni iteración por-usuario. |
-| Precio a guardar | `priceLatest` de `_map_item` (canónico, el que ve el usuario) + `sold24h` como `volume` | No inventar otra fuente; consistencia con la app. `volume` queda para features de XGBoost. |
+| Universo de skins | **Seed curado** (~150 líquidas) **∪** skins vistas en inventarios | La API Starter **no puede** dar "top-N por volumen" (ver Hallazgo API). Un seed curado garantiza cobertura desde el día 1; el inventario lo hace crecer con el uso. La predicción es sobre el `market_hash_name`, independiente del dueño. |
+| Seed curado | Lista estática de ~150 skins icónicas/líquidas en el repo (`steam/data/tracked_seed.json`) | Estable, gratis, sin depender de un ranking de la API que no existe. Ampliable. |
+| Cómo entran las de inventario | **Auto-registro**: al servir `/inventory`, registrar sus `market_hash_name` en `tracked_skins` (best-effort) | No hay tabla de usuarios; se llena solo con el uso real, sin iteración por-usuario. Un fallo de registro nunca rompe `/inventory`. |
+| Fuente del precio | `GET {STEAM_WEB_API}/item?market_hash_name=<name>` (lookup exacto, 1 item/llamada) → precio canónico + `sold24h` | Verificado en vivo: exacto y con `sold24h` poblado para skins populares (p.ej. AK Redline FT: $43.15, 69 ventas). |
+| Precio a guardar | Precio canónico (misma lógica que `_map_item`: `pricelatestsell`/`pricereal`) + `sold24h` como `volume` | Consistencia con lo que ve el usuario; `volume` queda para features de XGBoost. |
 | Granularidad | 1 snapshot por `(market_hash_name, date)` (diario) | Horizonte de predicción semanal → diario sobra. Upsert idempotente. |
 | Cron | GitHub Actions diario → `POST /internal/price-tick` (token) | Mismo patrón que `cap-tick`; despierta el Render dormido. |
-| Rate limit | Bulk primero; nombres seguidos ausentes del bulk → lookup por-nombre con `_SlidingWindowLimiter`, **con tope por corrida** | Respeta 2k/día. |
-| Top-N inicial | ~250, configurable (`PRICE_TOP_N`) | Cabe en el rate limit; buena cobertura de las skins líquidas. |
+| Rate limit | Lookup por-nombre vía `_SlidingWindowLimiter` (≤18/60s), **priorizando la menos-recientemente-capturada** y con **tope por corrida** (`PRICE_LOOKUP_CAP`) | Respeta 2k/día. Si `tracked > cap`, se cubren todas por rotación a lo largo de los días. |
 
 ## Arquitectura
 
 ```
+Seed inicial (una vez, idempotente):
+  steam/data/tracked_seed.json (~150 nombres) → register_tracked(names, 'top_n')
+  (corre en el arranque si tracked_skins está vacía, o vía script)
+
 Auto-registro (continuo):
   GET /inventory  → (además de lo que ya hace) registra los market_hash_name
-                    en tracked_skins (source='inventory'), upsert idempotente.
-
-Seed inicial (una vez / al arrancar):
-  fetch bulk de items populares por volumen  → tracked_skins (source='top_n')
+                    en tracked_skins (source='inventory'), upsert idempotente,
+                    best-effort (un fallo nunca rompe /inventory).
 
 Captura diaria:
   GitHub Actions (cron diario)
     → POST /internal/price-tick   (X-Price-Tick-Token, secrets.compare_digest)
-        → leer tracked_skins
-        → fetch bulk de precios (pocas llamadas) → dict {name: (price, volume)}
-        → para cada tracked skin:
-             - si está en el bulk → usar ese precio
-             - si no → lookup por-nombre vía _SlidingWindowLimiter (con tope)
+        → leer tracked_skins, ordenar por última captura (menos reciente primero)
+        → tomar hasta PRICE_LOOKUP_CAP nombres
+        → para cada uno: GET /item?market_hash_name=<name> vía _SlidingWindowLimiter
+             → extraer precio canónico + sold24h
         → upsert (market_hash_name, date, price, volume, source) en precios_historicos
-        → devolver {tracked, captured, from_bulk, from_lookup, skipped}
+        → devolver {tracked, captured, skipped, errors}
 ```
+
+## Hallazgo API (verificado en vivo 2026-07-17)
+
+steamwebapi Starter **no ofrece "top-N por volumen"**: no ordena server-side
+(ningún `sort`/`order`/`sortby` cambia el orden), y el orden default de `/items`
+no es por popularidad (de los primeros 1000 items, solo 32 tienen ventas, y las
+"más vendidas" que devuelve son stickers oscuros). Por eso el set de populares
+es un **seed curado**, no un ranking de la API. En cambio, el lookup por-nombre
+`/item?market_hash_name=<name>` **sí** devuelve el ítem exacto con `sold24h`
+poblado para skins líquidas — es la fuente de precio de la captura.
 
 ### Módulos nuevos / tocados
 
 - **`steam/price_history_repo.py`** (nuevo) — capa Supabase (patrón
   `cap_history_repo.py`: cliente cacheado service_role, `asyncio.to_thread`):
   - `register_tracked(names: list[str], source: str) -> None` — upsert en
-    `tracked_skins` (no-op si vacío).
-  - `fetch_tracked() -> list[str]` — todos los `market_hash_name` seguidos.
+    `tracked_skins` (no-op si vacío; no pisa `source`/`last_captured` existentes).
+  - `fetch_tracked(limit: int) -> list[str]` — hasta `limit` nombres ordenados por
+    `last_captured` ascendente con **nulls primero** (nunca-capturadas antes).
   - `upsert_prices(rows: list[dict]) -> None` — upsert por `(market_hash_name, date)`.
-- **`steam/price_capture.py`** (nuevo) — orquesta la captura diaria: bulk fetch,
-  cruce con tracked, fallback por-nombre limitado, armado de filas, upsert.
-  Devuelve el dict de resultados. Depende de: `price_history_repo`,
-  `steam/services` (limiter), `steam/mappers` (`_map_item`/precio), `settings`.
+  - `mark_captured(names: list[str], date) -> None` — set `last_captured=date` para
+    los nombres capturados (mueve la rotación).
+  - `count_tracked() -> int` — para el seed idempotente (¿tabla vacía?).
+- **`steam/data/tracked_seed.json`** (nuevo) — lista curada de ~150
+  `market_hash_name` líquidos (AK/AWP/M4/cuchillos/guantes/cajas en wears
+  comunes). Asset estático versionado.
+- **`steam/price_capture.py`** (nuevo) — orquesta: `seed_tracked()` (lee el JSON
+  y registra si la tabla está vacía) y `capture(client)` (lee tracked ordenadas
+  por última captura, hasta `PRICE_LOOKUP_CAP`, lookup por-nombre vía limiter,
+  extrae precio+volumen, upsert). Devuelve el dict de resultados. Depende de:
+  `price_history_repo`, `steam/services` (limiter, `STEAM_WEB_API`), `settings`.
 - **`steam/routes/market.py`** o un router nuevo — `POST /internal/price-tick`
   (token). Registrar en `main.py` si es router nuevo.
 - **`steam/routes/items.py`** (`/inventory`) — tras mapear el inventario,
@@ -99,7 +119,8 @@ Captura diaria:
 create table if not exists public.tracked_skins (
     market_hash_name text primary key,
     source           text not null,            -- 'top_n' | 'inventory'
-    first_seen       timestamptz not null default now()
+    first_seen       timestamptz not null default now(),
+    last_captured    date                       -- null = nunca capturada (prioridad máxima)
 );
 alter table public.tracked_skins enable row level security;
 
@@ -125,8 +146,9 @@ que `market_cap_history`.
 | Variable | Default | Notas |
 |----------|---------|-------|
 | `PRICE_TICK_TOKEN` | *(vacío)* | Protege `POST /internal/price-tick`. Igual en GitHub Actions. Startup warns si falta. |
-| `PRICE_TOP_N` | `250` | Tamaño del set fijo de populares a seguir. |
-| `PRICE_LOOKUP_CAP` | `300` | Tope de lookups por-nombre por corrida (protege los 2k/día). |
+| `PRICE_LOOKUP_CAP` | `400` | Tope de lookups por-nombre por corrida (protege los 2k/día). Si `tracked > cap`, se cubren por rotación (menos-recientemente-capturada primero). |
+
+(Ya no hay `PRICE_TOP_N`: el set de populares es el seed curado `tracked_seed.json`, no un ranking de la API.)
 
 ## Cron
 
@@ -137,21 +159,25 @@ que `market_cap_history`.
 
 ## Tests (pytest, mocks)
 
-- `register_tracked` / `fetch_tracked` / `upsert_prices` con Supabase mockeado
-  (no-op en vacío, upsert con on_conflict correcto).
-- `price_capture`: bulk cubre a una skin (sin lookup), otra ausente del bulk va
-  al lookup; el tope `PRICE_LOOKUP_CAP` corta; armado de filas `(name, date,
-  price, volume)`; el limiter se respeta (mockeado).
+- `register_tracked` / `fetch_tracked` / `upsert_prices` / `mark_captured` /
+  `count_tracked` con Supabase mockeado (no-op en vacío, on_conflict correcto,
+  orden `last_captured` nulls-first, límite aplicado).
+- `seed_tracked`: registra desde el JSON solo si `count_tracked()==0` (idempotente).
+- `price_capture.capture`: respeta `PRICE_LOOKUP_CAP` (toma N nombres); lookup
+  por-nombre mockeado → extrae precio canónico + `sold24h`; arma filas `(name,
+  date, price, volume)`; llama `mark_captured`; un error de una skin no aborta el
+  resto (best-effort, cuenta en `errors`).
 - `/internal/price-tick`: token faltante/incorrecto → 401; válido → corre y
   devuelve el dict.
 - `/inventory` sigue funcionando aunque `register_tracked` falle (best-effort).
 
 ## Verificación en implementación
 
-Un único punto a confirmar contra la API viva (no afecta la arquitectura): los
-params exactos de `{STEAM_WEB_API}/items` para traer el **top-N por volumen**
-(steamwebapi cambia nombres de params: `sort`/`order`/`sortby`…). El plan debe
-incluir un paso de exploración con la API real antes de fijar la llamada.
+Ya resuelto contra la API viva (ver Hallazgo API): no hay top-N por volumen; la
+fuente de precio es `GET {STEAM_WEB_API}/item?market_hash_name=<name>`. El
+implementador debe confirmar los **nombres exactos de los campos** de precio en
+la respuesta de `/item` (`pricelatestsell`, `pricereal`, `sold24h`) y mapear el
+precio canónico con la misma prioridad que `_map_item`.
 
 ## Fuera de alcance
 
