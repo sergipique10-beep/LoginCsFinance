@@ -80,6 +80,12 @@ async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
     await _fetch_static_images(app.state.http_client)
 
+    try:
+        from steam.price_capture import seed_tracked
+        await seed_tracked()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[price] seed inicial falló: %s", exc)
+
     yield
 
     await app.state.http_client.aclose()

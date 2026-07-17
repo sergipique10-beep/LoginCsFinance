@@ -111,6 +111,16 @@ async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
     items = [_map_item(item) for item in data]
     items = await _enrich_market_prices(request.app.state.http_client, items)
     _enrich_images_from_cache(items)
+
+    # Auto-registro para la captura de precios (best-effort: nunca romper /inventory)
+    try:
+        from steam.price_history_repo import register_tracked
+        names = [i.get("name") for i in items if i.get("name")]
+        if names:
+            await register_tracked(names, "inventory")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[price] auto-registro de inventario falló: %s", exc)
+
     return items
 
 

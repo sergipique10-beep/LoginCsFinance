@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from settings import STEAM_API_KEY, CAP_TICK_TOKEN
+from settings import STEAM_API_KEY, CAP_TICK_TOKEN, PRICE_TICK_TOKEN
 from stores import (
     MARKET_INDEX_CACHE_TTL,
     SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL, ITEM_PRICE_CACHE_TTL,
@@ -30,6 +30,7 @@ from ..services import (
     _fetch_static_images,
     _build_movers_from_topmovers,
 )
+from steam.price_capture import capture as price_capture_run
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -655,6 +656,18 @@ async def movers_tick(request: Request, x_cap_token: str | None = Header(default
     await movers_repo.replace_snapshot(rows)
     logger.info("[movers-tick] snapshot saved: %d items", len(rows))
     return {"ok": True, "count": len(rows)}
+
+
+@router.post("/internal/price-tick", summary="Captura diaria de precios por-skin (cron)")
+async def price_tick(
+    request: Request,
+    x_price_tick_token: str = Header(default=""),
+):
+    if not PRICE_TICK_TOKEN or not secrets.compare_digest(
+        x_price_tick_token.encode(), PRICE_TICK_TOKEN.encode()
+    ):
+        raise HTTPException(status_code=401, detail="Token inválido")
+    return await price_capture_run(request.app.state.http_client)
 
 
 @router.get("/market/providers", summary="Lista de markets soportados como price providers")
