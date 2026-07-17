@@ -36,6 +36,16 @@ BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 
+# Modelo de embeddings de Gemini para el RAG (768 dims vía outputDimensionality).
+GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "gemini-embedding-001")
+
+# Token que protege POST /internal/rag-ingest (cron externo de GitHub Actions).
+RAG_INGEST_TOKEN = os.getenv("RAG_INGEST_TOKEN", "")
+
+# Feeds RSS a ingestar para el RAG (URLs separadas por coma).
+_raw_feeds = os.getenv("RAG_FEEDS", "https://blog.counter-strike.net/index.php/feed/")
+RAG_FEEDS: list[str] = [u.strip() for u in _raw_feeds.split(",") if u.strip()]
+
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.
 # Separar múltiples valores con coma en .env.
 # Debe incluir la URL web y el scheme nativo de Android.
