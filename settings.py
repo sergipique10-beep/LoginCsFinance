@@ -31,6 +31,11 @@ NEWS_TICK_TOKEN = os.getenv("NEWS_TICK_TOKEN", "")
 # Token que protege POST /internal/broadcast (anuncio manual, workflow_dispatch).
 BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN", "")
 
+# Gemini (Google AI Studio) — chat del asistente Sharky (POST /rag/chat).
+# La key vive SOLO en el backend; el frontend nunca la ve.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.
 # Separar múltiples valores con coma en .env.
 # Debe incluir la URL web y el scheme nativo de Android.

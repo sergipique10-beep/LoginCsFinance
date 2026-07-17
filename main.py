@@ -11,12 +11,14 @@ from settings import (
     SUPABASE_URL, SUPABASE_SERVICE_KEY, CAP_TICK_TOKEN,
     REVIEW_USER, REVIEW_PASSWORD, REVIEW_STEAM_ID,
     FIREBASE_SERVICE_ACCOUNT_JSON, NEWS_TICK_TOKEN, BROADCAST_TOKEN,
+    GEMINI_API_KEY,
 )
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
 from steam.routes import router as steam_router
 from steam.services import _fetch_static_images
 from notifications.router import router as notifications_router
+from rag.router import router as rag_router
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -60,6 +62,11 @@ async def lifespan(app: FastAPI):
             "BROADCAST_TOKEN no está configurada — "
             "el anuncio manual (POST /internal/broadcast) no funcionará"
         )
+    if not GEMINI_API_KEY:
+        logger.warning(
+            "GEMINI_API_KEY no está configurada — "
+            "el chat de Sharky (POST /rag/chat) no funcionará"
+        )
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
     await _fetch_static_images(app.state.http_client)
 
@@ -81,6 +88,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_router)
 app.include_router(steam_router)
 app.include_router(notifications_router)
+app.include_router(rag_router)
 
 
 @app.get("/")
