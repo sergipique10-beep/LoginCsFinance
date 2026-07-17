@@ -11,7 +11,7 @@ from settings import (
     SUPABASE_URL, SUPABASE_SERVICE_KEY, CAP_TICK_TOKEN,
     REVIEW_USER, REVIEW_PASSWORD, REVIEW_STEAM_ID,
     FIREBASE_SERVICE_ACCOUNT_JSON, NEWS_TICK_TOKEN, BROADCAST_TOKEN,
-    GEMINI_API_KEY, RAG_INGEST_TOKEN,
+    GEMINI_API_KEY, RAG_INGEST_TOKEN, PRICE_TICK_TOKEN,
 )
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
@@ -71,6 +71,11 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "RAG_INGEST_TOKEN no está configurada — "
             "la ingesta de noticias del RAG (POST /internal/rag-ingest) no funcionará"
+        )
+    if not PRICE_TICK_TOKEN:
+        logger.warning(
+            "PRICE_TICK_TOKEN no está configurada — "
+            "la captura de precios históricos (POST /internal/price-tick) no funcionará"
         )
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
     await _fetch_static_images(app.state.http_client)

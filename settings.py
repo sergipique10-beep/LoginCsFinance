@@ -65,3 +65,7 @@ _raw_cors = os.getenv("ALLOWED_CORS_ORIGINS", FRONTEND_URL)
 _cors_set = {o.strip() for o in _raw_cors.split(",") if o.strip()}
 _cors_set.add("https://localhost")
 ALLOWED_CORS_ORIGINS: list[str] = list(_cors_set)
+
+# Captura de precios históricos por-skin (POST /internal/price-tick, cron diario).
+PRICE_TICK_TOKEN = os.getenv("PRICE_TICK_TOKEN", "")
+PRICE_LOOKUP_CAP = int(os.getenv("PRICE_LOOKUP_CAP", "400"))
