@@ -34,7 +34,7 @@ BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN", "")
 # Gemini (Google AI Studio) — chat del asistente Sharky (POST /rag/chat).
 # La key vive SOLO en el backend; el frontend nunca la ve.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.
 # Separar múltiples valores con coma en .env.
