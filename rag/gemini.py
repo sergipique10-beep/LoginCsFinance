@@ -81,3 +81,63 @@ async def generate_reply(
     if not text:
         raise RuntimeError("Respuesta vacía de Gemini")
     return text
+
+
+_RAG_SYSTEM_PROMPT = (
+    "Eres Sharky 🦈, asistente de CS-FINANCE experto en el mercado de skins de "
+    "Counter-Strike 2. Respondes en español, claro y conciso. Usa ÚNICAMENTE la "
+    "información del CONTEXTO para responder. Si el contexto no contiene la "
+    "respuesta, dilo explícitamente en vez de inventar."
+)
+
+
+def _format_context(chunks: list[dict]) -> str:
+    if not chunks:
+        return "(No hay noticias relevantes en la base.)"
+    blocks = []
+    for c in chunks:
+        title = c.get("title") or "(sin título)"
+        url = c.get("url") or ""
+        content = c.get("content") or ""
+        blocks.append(f"### {title}\n{content}\nFuente: {url}")
+    return "\n\n".join(blocks)
+
+
+async def generate_with_context(
+    client: httpx.AsyncClient,
+    question: str,
+    chunks: list[dict],
+) -> str:
+    """Genera una respuesta usando los chunks recuperados como contexto.
+
+    Lanza RuntimeError si falta la key o la respuesta viene vacía/bloqueada;
+    propaga los errores httpx.
+    """
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY no configurada")
+
+    prompt = (
+        f"CONTEXTO:\n{_format_context(chunks)}\n\n"
+        f"PREGUNTA DEL USUARIO:\n{question}"
+    )
+    body = {
+        "systemInstruction": {"parts": [{"text": _RAG_SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+    }
+    url = f"{_GEMINI_BASE}/{GEMINI_MODEL}:generateContent"
+    resp = await client.post(
+        url,
+        headers={"x-goog-api-key": GEMINI_API_KEY},
+        json=body,
+        timeout=_GEMINI_TIMEOUT,
+    )
+    resp.raise_for_status()
+
+    candidates = resp.json().get("candidates", [])
+    if not candidates:
+        raise RuntimeError("Gemini no devolvió respuesta (posible bloqueo de seguridad)")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text = "".join(p.get("text", "") for p in parts).strip()
+    if not text:
+        raise RuntimeError("Respuesta vacía de Gemini")
+    return text
