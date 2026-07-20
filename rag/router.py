@@ -50,6 +50,12 @@ async def rag_chat(
     context_chunks: list[dict] = []
     try:
         context_chunks = await retrieve(client, message)
+        if context_chunks:
+            top = max(c.get("similarity", 0) for c in context_chunks)
+            logger.info("rag_chat: %d chunks de contexto inyectados (sim máx %.3f)",
+                        len(context_chunks), top)
+        else:
+            logger.info("rag_chat: 0 chunks — respuesta sin contexto RAG")
     except Exception as exc:  # noqa: BLE001 — el RAG es best-effort, nunca tumba el chat
         logger.warning("rag_chat: retrieve falló, se responde sin contexto: %s", exc)
 
