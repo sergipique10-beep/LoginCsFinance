@@ -42,36 +42,6 @@ def test_ask_rejects_empty_question(client):
     assert resp.status_code == 400
 
 
-def test_chat_passes_retrieved_context(client, monkeypatch):
-    chunks = [{"title": "CS2 Update", "url": "https://u", "content": "Cache vuelve."}]
-    monkeypatch.setattr(rag_router, "retrieve", AsyncMock(return_value=chunks))
-    gen = AsyncMock(return_value="Cache volvió al Active Duty.")
-    monkeypatch.setattr(rag_router, "generate_reply", gen)
-
-    resp = client.post("/rag/chat", json={"message": "¿por qué volvió Cache?", "history": []})
-
-    assert resp.status_code == 200
-    assert resp.json()["reply"] == "Cache volvió al Active Duty."
-    assert gen.await_args.kwargs["context_chunks"] == chunks
-
-
-def test_chat_degrades_when_retrieve_fails(client, monkeypatch):
-    monkeypatch.setattr(rag_router, "retrieve", AsyncMock(side_effect=RuntimeError("supabase caído")))
-    gen = AsyncMock(return_value="Respuesta general.")
-    monkeypatch.setattr(rag_router, "generate_reply", gen)
-
-    resp = client.post("/rag/chat", json={"message": "hola", "history": []})
-
-    assert resp.status_code == 200                       # no se cae por el fallo del RAG
-    assert resp.json()["reply"] == "Respuesta general."
-    assert gen.await_args.kwargs["context_chunks"] == []  # degradó sin contexto
-
-
-def test_chat_rejects_empty_message(client):
-    resp = client.post("/rag/chat", json={"message": "   ", "history": []})
-    assert resp.status_code == 400
-
-
 def test_rag_ingest_requires_token(client, monkeypatch):
     monkeypatch.setattr(rag_router, "RAG_INGEST_TOKEN", "secret123")
     resp = client.post("/internal/rag-ingest")

@@ -1,16 +1,17 @@
-"""Tests de rag/gemini.py: generate_with_tools — flujo function calling mockeado."""
+"""Tests de chat/agent.py: generate_with_tools — flujo function calling mockeado."""
 
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from rag import gemini
+from chat import agent
+from llm import gemini as llm_gemini
 
 
 @pytest.fixture(autouse=True)
 def _fake_key(monkeypatch):
-    monkeypatch.setattr(gemini, "GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(gemini, "GEMINI_MODEL", "gemini-flash-latest")
+    monkeypatch.setattr(llm_gemini, "GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(llm_gemini, "GEMINI_MODEL", "gemini-flash-latest")
 
 
 def _mock_client(response_data: dict) -> MagicMock:
@@ -40,7 +41,7 @@ class TestGenerateWithTools:
         client = _mock_client({
             "candidates": [{"content": {"parts": [{"text": "Hola, soy Sharky."}]}}]
         })
-        result = await gemini.generate_with_tools(
+        result = await agent.generate_with_tools(
             client, "hola", [], tools=None,
         )
         assert result == "Hola, soy Sharky."
@@ -62,7 +63,7 @@ class TestGenerateWithTools:
             return tool_result
 
         with patch("tools.registry.execute_tool", side_effect=fake_tool) as mock_exec:
-            result = await gemini.generate_with_tools(
+            result = await agent.generate_with_tools(
                 client, "cuánto vale?", [], tools=[{"name": "test_tool"}],
             )
 
@@ -86,7 +87,7 @@ class TestGenerateWithTools:
             return [{"name": "AK Redline"}]
 
         with patch("tools.registry.execute_tool", side_effect=fake_tool) as mock_exec:
-            result = await gemini.generate_with_tools(
+            result = await agent.generate_with_tools(
                 client, "ver mi inventario", [],
                 tools=[{"name": "ver_inventario"}],
                 tool_context={"steam_id": "76561198000000000"},
@@ -111,7 +112,7 @@ class TestGenerateWithTools:
         ])
 
         with patch("tools.registry.execute_tool", side_effect=KeyError("bad_tool")):
-            result = await gemini.generate_with_tools(
+            result = await agent.generate_with_tools(
                 client, "algo", [], tools=[{"name": "bad_tool"}],
             )
 
@@ -123,13 +124,13 @@ class TestGenerateWithTools:
     async def test_sin_candidates_raises(self):
         client = _mock_client({"candidates": []})
         with pytest.raises(RuntimeError, match="posible bloqueo"):
-            await gemini.generate_with_tools(client, "x", [])
+            await agent.generate_with_tools(client, "x", [])
 
     @pytest.mark.asyncio
     async def test_sin_api_key_raises(self):
-        gemini.GEMINI_API_KEY = ""
+        llm_gemini.GEMINI_API_KEY = ""
         with pytest.raises(RuntimeError, match="no configurada"):
-            await gemini.generate_with_tools(MagicMock(), "x", [])
+            await agent.generate_with_tools(MagicMock(), "x", [])
 
     @pytest.mark.asyncio
     async def test_thought_signature_preserved(self):
@@ -148,7 +149,7 @@ class TestGenerateWithTools:
             return {"ok": True}
 
         with patch("tools.registry.execute_tool", side_effect=fake_tool):
-            await gemini.generate_with_tools(
+            await agent.generate_with_tools(
                 client, "test", [], tools=[{"name": "test_tool"}],
             )
 

@@ -19,6 +19,7 @@ from steam.routes import router as steam_router
 from steam.services import _fetch_static_images
 from notifications.router import router as notifications_router
 from rag.router import router as rag_router
+from chat.router import router as chat_router
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -105,6 +106,7 @@ app.include_router(auth_router)
 app.include_router(steam_router)
 app.include_router(notifications_router)
 app.include_router(rag_router)
+app.include_router(chat_router)
 
 
 @app.get("/")
