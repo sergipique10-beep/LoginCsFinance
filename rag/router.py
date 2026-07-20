@@ -45,8 +45,16 @@ async def rag_chat(
         raise HTTPException(status_code=400, detail="El mensaje está vacío")
 
     history = [t.model_dump() for t in payload.history]
+
+    client = request.app.state.http_client
+    context_chunks: list[dict] = []
     try:
-        reply = await generate_reply(request.app.state.http_client, message, history)
+        context_chunks = await retrieve(client, message)
+    except Exception as exc:  # noqa: BLE001 — el RAG es best-effort, nunca tumba el chat
+        logger.warning("rag_chat: retrieve falló, se responde sin contexto: %s", exc)
+
+    try:
+        reply = await generate_reply(client, message, history, context_chunks=context_chunks)
     except httpx.HTTPStatusError as exc:
         logger.warning("Gemini devolvió %s: %s", exc.response.status_code, exc.response.text[:300])
         raise HTTPException(status_code=502, detail="El asistente no está disponible ahora mismo")
