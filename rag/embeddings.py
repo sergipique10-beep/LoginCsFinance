@@ -1,7 +1,7 @@
 """Cliente mínimo de embeddings de Gemini (REST) para el RAG.
 
 Reutiliza el httpx.AsyncClient compartido de la app, sin SDK de Google —
-mismo patrón que rag/gemini.py. Produce vectores de 768 dims.
+mismo patrón que llm/gemini.py. Produce vectores de 768 dims.
 """
 import httpx
 
