@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from auth.service import require_jwt, _get_client_ip, _rate_limit
 from settings import RAG_INGEST_TOKEN
 from .retrieval import retrieve
-from .gemini import generate_reply, generate_with_context, generate_with_tools
+from .gemini import generate_with_tools   # /rag/chat aún aquí (se mueve en Task 3)
+from .generation import generate_with_context   # /rag/ask ya desde generation
 from .ingest import ingest
 
 # ── Tool registry (se registra una vez al importar el módulo) ────────────────
