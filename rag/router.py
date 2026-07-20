@@ -8,8 +8,18 @@ from pydantic import BaseModel
 from auth.service import require_jwt, _get_client_ip, _rate_limit
 from settings import RAG_INGEST_TOKEN
 from .retrieval import retrieve
-from .gemini import generate_reply, generate_with_context
+from .gemini import generate_reply, generate_with_context, generate_with_tools
 from .ingest import ingest
+
+# ── Tool registry (se registra una vez al importar el módulo) ────────────────
+from tools.registry import get_declarations
+from tools.market_tools import register_market_tools
+from tools.inventory_tools import register_inventory_tools
+from tools.predict_tools import register_predict_tools
+
+register_market_tools()
+register_inventory_tools()
+register_predict_tools()
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -45,8 +55,17 @@ async def rag_chat(
         raise HTTPException(status_code=400, detail="El mensaje está vacío")
 
     history = [t.model_dump() for t in payload.history]
+    steam_id: str = _claims["sub"]
+    tools = get_declarations()
+
     try:
-        reply = await generate_reply(request.app.state.http_client, message, history)
+        reply = await generate_with_tools(
+            request.app.state.http_client,
+            message,
+            history,
+            tools=tools if tools else None,
+            tool_context={"steam_id": steam_id},
+        )
     except httpx.HTTPStatusError as exc:
         logger.warning("Gemini devolvió %s: %s", exc.response.status_code, exc.response.text[:300])
         raise HTTPException(status_code=502, detail="El asistente no está disponible ahora mismo")
