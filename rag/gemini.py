@@ -25,15 +25,30 @@ _GEMINI_TIMEOUT = 30.0
 _SYSTEM_PROMPT = (
     "Eres Sharky 🦈, el asistente de CS-FINANCE, experto en el mercado de "
     "skins de Counter-Strike 2 (precios, tendencias, liquidez, noticias). "
-    "Respondes en español, de forma clara y concisa. Si no tienes datos "
-    "suficientes para responder con certeza, dilo en lugar de inventar."
+    "Respondes en español, de forma clara y concisa. "
+    "Cuando el CONTEXTO contenga información relevante, básate en ella para "
+    "responder; si no aplica, responde con tu conocimiento general. "
+    "Si no tienes datos suficientes para responder con certeza, dilo en lugar "
+    "de inventar."
 )
+
+
+def _build_user_text(message: str, context_chunks: list[dict] | None) -> str:
+    """Turno del usuario: con contexto RAG inyectado si lo hay, si no el mensaje pelado."""
+    if context_chunks:
+        return (
+            "CONTEXTO (noticias recientes; úsalo si es relevante, ignóralo si no aplica):\n"
+            f"{_format_context(context_chunks)}\n\n"
+            f"MENSAJE DEL USUARIO:\n{message}"
+        )
+    return message
 
 
 async def generate_reply(
     client: httpx.AsyncClient,
     message: str,
     history: list[dict],
+    context_chunks: list[dict] | None = None,
 ) -> str:
     """Envía la conversación a Gemini y devuelve el texto de la respuesta.
 
@@ -51,7 +66,7 @@ async def generate_reply(
             continue
         role = "model" if turn.get("role") == "assistant" else "user"
         contents.append({"role": role, "parts": [{"text": text}]})
-    contents.append({"role": "user", "parts": [{"text": message}]})
+    contents.append({"role": "user", "parts": [{"text": _build_user_text(message, context_chunks)}]})
 
     body = {
         "systemInstruction": {"parts": [{"text": _SYSTEM_PROMPT}]},
