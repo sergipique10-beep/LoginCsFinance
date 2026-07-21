@@ -68,6 +68,32 @@ async def upsert_prices(rows: list[dict]) -> None:
     await asyncio.to_thread(_do)
 
 
+async def fetch_prices(name: str, limit: int = 400) -> list[dict]:
+    """Serie histórica de una skin, ascendente por fecha.
+
+    Devuelve `[{"date": str, "price": float, "volume": int|None}, ...]` — la
+    misma forma que `_fetch_history_for_item`, para que los consumidores
+    (predicción, histórico) puedan alternar entre ambas fuentes sin traducir.
+    """
+    def _do() -> list[dict]:
+        resp = (get_supabase().table(_PRICES)
+                .select("date,price,volume")
+                .eq("market_hash_name", name)
+                .order("date", desc=False)
+                .limit(limit)
+                .execute())
+        return [
+            {
+                "date": r["date"],
+                "price": float(r["price"]),
+                "volume": r.get("volume"),
+            }
+            for r in (resp.data or [])
+        ]
+
+    return await asyncio.to_thread(_do)
+
+
 async def mark_captured(names: list[str], date_iso: str) -> None:
     """Marca last_captured=date_iso para los nombres dados. No-op si vacío."""
     if not names:
