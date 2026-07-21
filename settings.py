@@ -31,6 +31,11 @@ NEWS_TICK_TOKEN = os.getenv("NEWS_TICK_TOKEN", "")
 # Token que protege POST /internal/broadcast (anuncio manual, workflow_dispatch).
 BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN", "")
 
+# Precarga del contexto RAG en el system prompt de cada mensaje del chat.
+# Cuesta una llamada de embedding por turno; con `false` el modelo sigue
+# pudiendo pedir el contexto vía la tool `buscar_contexto_rag`.
+CHAT_RAG_PRELOAD = os.getenv("CHAT_RAG_PRELOAD", "true").lower() not in ("false", "0", "no")
+
 # Gemini (Google AI Studio) — chat del asistente Sharky (POST /rag/chat).
 # La key vive SOLO en el backend; el frontend nunca la ve.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -47,9 +52,9 @@ _raw_feeds = os.getenv("RAG_FEEDS", "https://blog.counter-strike.net/feed/")
 RAG_FEEDS: list[str] = [u.strip() for u in _raw_feeds.split(",") if u.strip()]
 
 # Similitud mínima (cosine, 0..1) para que un chunk recuperado cuente como
-# fuente citable en /rag/ask. Por debajo de esto, generate_with_context ya
-# contesta "no tengo datos" — pero sin este filtro el chunk irrelevante
-# igualmente aparecía en `sources`. Ver spec: "nunca inventa".
+# fuente citable en /rag/chat. `retrieve` descarta lo que quede por debajo, así
+# que un chunk irrelevante no llega ni al system prompt ni a `sources`.
+# Ver spec: "nunca inventa".
 RAG_MIN_SIMILARITY = float(os.getenv("RAG_MIN_SIMILARITY", "0.5"))
 
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.

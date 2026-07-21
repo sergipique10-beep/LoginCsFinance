@@ -5,16 +5,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from auth.service import require_jwt, _get_client_ip, _rate_limit
-from chat.agent import generate_with_tools
+from chat.agent import generate_with_sources
 
 from tools.registry import get_declarations
 from tools.market_tools import register_market_tools
 from tools.inventory_tools import register_inventory_tools
 from tools.predict_tools import register_predict_tools
+from tools.rag_tools import register_rag_tools
 
 register_market_tools()
 register_inventory_tools()
 register_predict_tools()
+register_rag_tools()
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -33,8 +35,18 @@ class ChatRequest(BaseModel):
     history: list[ChatTurn] = []
 
 
+class Source(BaseModel):
+    title: str = ""
+    url: str = ""
+    published_at: str | None = None
+
+
 class ChatResponse(BaseModel):
     reply: str
+    # Fuentes del contexto RAG recuperado para este mensaje. Sustituye al
+    # `sources[]` que antes solo daba /rag/ask: el dato viaja estructurado, sin
+    # depender de que el modelo lo cite en prosa. Vacío si no hubo contexto.
+    sources: list[Source] = []
 
 
 @router.post("/rag/chat", response_model=ChatResponse, summary="Chat con Sharky (Gemini)")
@@ -54,7 +66,7 @@ async def rag_chat(
     tools = get_declarations()
 
     try:
-        reply = await generate_with_tools(
+        reply, fragmentos = await generate_with_sources(
             request.app.state.http_client, message, history,
             tools=tools if tools else None,
             tool_context={"steam_id": steam_id},
@@ -68,4 +80,13 @@ async def rag_chat(
         logger.warning("rag_chat: %s", exc)
         raise HTTPException(status_code=503, detail="El asistente no está configurado")
 
-    return ChatResponse(reply=reply)
+    sources: list[Source] = []
+    seen_urls: set[str] = set()
+    for c in fragmentos:
+        url = c.get("url", "")
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        sources.append(Source(title=c.get("title", ""), url=url,
+                              published_at=c.get("published_at")))
+    return ChatResponse(reply=reply, sources=sources)

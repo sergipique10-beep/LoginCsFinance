@@ -3,43 +3,10 @@ from unittest.mock import AsyncMock
 from rag import router as rag_router
 
 
-def test_ask_returns_reply_and_sources(client, monkeypatch):
-    monkeypatch.setattr(rag_router, "retrieve", AsyncMock(return_value=[
-        {"title": "Op nueva", "url": "https://u", "published_at": "2026-07-15T00:00:00Z",
-         "content": "Nueva operación."}
-    ]))
-    monkeypatch.setattr(rag_router, "generate_with_context",
-                        AsyncMock(return_value="Subió por la operación."))
-
+def test_ask_endpoint_eliminado(client):
+    """/rag/ask se retiró: su función la cubre /rag/chat (retrieval + sources)."""
     resp = client.post("/rag/ask", json={"question": "por que sube el karambit?"})
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["reply"] == "Subió por la operación."
-    assert data["sources"] == [
-        {"title": "Op nueva", "url": "https://u", "published_at": "2026-07-15T00:00:00Z"}
-    ]
-
-
-def test_ask_dedups_sources_by_url(client, monkeypatch):
-    monkeypatch.setattr(rag_router, "retrieve", AsyncMock(return_value=[
-        {"title": "Op nueva", "url": "https://u", "published_at": "2026-07-15T00:00:00Z",
-         "content": "Parte 1."},
-        {"title": "Op nueva", "url": "https://u", "published_at": "2026-07-15T00:00:00Z",
-         "content": "Parte 2."},
-    ]))
-    monkeypatch.setattr(rag_router, "generate_with_context",
-                        AsyncMock(return_value="Subió por la operación."))
-
-    resp = client.post("/rag/ask", json={"question": "por que sube el karambit?"})
-
-    assert resp.status_code == 200
-    assert len(resp.json()["sources"]) == 1
-
-
-def test_ask_rejects_empty_question(client):
-    resp = client.post("/rag/ask", json={"question": "   "})
-    assert resp.status_code == 400
+    assert resp.status_code == 404
 
 
 def test_rag_ingest_requires_token(client, monkeypatch):
