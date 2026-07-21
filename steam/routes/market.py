@@ -64,6 +64,36 @@ _MOVERS_SELECT = ",".join([
 _TRENDING_LIMIT = 18
 _SEARCH_LIMIT = 30
 
+# Suelo de precio para entrar en los rankings (USD; ~10 EUR a 1.08 USD/EUR).
+# Por debajo, el movimiento porcentual es ruido de granularidad: los precios de
+# Steam se mueven de centavo en centavo, así que en un item de $0.10 un solo tick
+# ya es un +10% que ni el spread ni las comisiones (~15%) dejan capturar. Medido
+# en producción: el 61% del trending eran items de ~$0.11 con volatilidad
+# aparente 3.6x la de los de $2-10, y el agente los presentaba como "en auge".
+_PRECIO_MIN_RANKING = 10.80
+
+# Cuántos items pedir a /items. El endpoint ordena por unidades vendidas, y la
+# cola barata es larguísima: la mediana de los 150 primeros es $0.20, así que con
+# max=150 solo 2 items superaban los $10.80 y los rankings salían vacíos. Medido:
+#   max=1000 →   7 items ≥$10.80    max=2000 →  47
+#   max=1500 →  19                  max=5000 → 287
+# Es UNA sola petición sea cual sea el valor: subirlo no consume más cuota del
+# plan Starter (20 req/60s por endpoint). El coste es el payload (~9 MB) y la
+# latencia (~1 s), ambos asumibles. No se sube más porque el cuello de botella
+# está después: _enrich_prices hace una llamada por item con limiter 18/60s, y
+# la lista ya se recorta a _TRENDING_LIMIT / _MOVERS_LIMIT antes de enriquecer.
+_ITEMS_FETCH_MAX = 2000
+
+
+def _turnover(item: dict) -> float:
+    """Facturación 24h estimada: precio × unidades vendidas.
+
+    Criterio de relevancia para los rankings, en vez de las unidades sueltas.
+    Ordenar por unidades premia lo barato por construcción — una Galil de $0.10
+    vende más piezas que una AK de $28 aunque mueva 17x menos dinero.
+    """
+    return (item.get("priceLatest") or 0) * (item.get("sold24h") or 0)
+
 _VALID_MARKETS = frozenset({
     "buff", "skinport", "skinbaron", "dmarket", "waxpeer",
     "bitskins", "csgotm", "haloskins", "tradeit", "skinbid",
@@ -87,7 +117,7 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
                 "key": STEAM_API_KEY,
                 "game": "cs2",
                 "sort_by": "soldZa",
-                "max": 200,
+                "max": _ITEMS_FETCH_MAX,
                 "select": _MOVERS_SELECT,
                 "format": "json",
                 "production": "1",
@@ -107,12 +137,14 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
             for raw in data:
                 latest = float(raw.get("pricelatestsell") or 0)
                 volume = int(raw.get("sold24h") or 0)
-                if latest > 0 and volume >= 5 and "sticker slab" not in (raw.get("marketname") or "").lower():
+                if (latest >= _PRECIO_MIN_RANKING and volume >= 5
+                        and "sticker slab" not in (raw.get("marketname") or "").lower()):
                     mapped.append(_map_item(raw))
-            # Sort by price descending — higher-priced items tend to have more price movement.
-            # Cap at 20 (= _MOVERS_LIMIT * 2): exactly the number of items displayed,
-            # and safe within the Starter plan's 20 req/min rate limit.
-            mapped.sort(key=lambda x: x["priceLatest"], reverse=True)
+            # Ordenar por turnover (precio × unidades), no por precio suelto: mide
+            # qué mueve dinero de verdad. Cap at 20 (= _MOVERS_LIMIT * 2): exactly
+            # the number of items displayed, and safe within the Starter plan's
+            # 20 req/min rate limit.
+            mapped.sort(key=_turnover, reverse=True)
             candidates = mapped[:_MOVERS_LIMIT * 2]
             logger.info("[market-movers] candidates: %d (capped from %d)", len(candidates), len(mapped))
             candidates = await _enrich_prices(client, candidates)
@@ -337,7 +369,7 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
                 "key": STEAM_API_KEY,
                 "game": "cs2",
                 "sort_by": "soldZa",
-                "max": 150,
+                "max": _ITEMS_FETCH_MAX,
                 "select": _MOVERS_SELECT,
                 "format": "json",
                 "production": "1",
@@ -357,11 +389,14 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
             for raw in data:
                 latest = float(raw.get("pricelatestsell") or 0)
                 volume = int(raw.get("sold24h") or 0)
-                if latest > 0 and volume >= 1:
+                if latest >= _PRECIO_MIN_RANKING and volume >= 1:
                     result.append(_map_item(raw))
+            # Dentro de cada categoría, por turnover (precio × unidades) en vez de
+            # por unidades: ordenar por piezas vendidas premia lo barato por
+            # construcción y llenaba la lista de items de céntimos.
             result = sorted(
                 result,
-                key=lambda x: (_category_rank(x.get("weaponType")), -(x.get("sold24h") or 0)),
+                key=lambda x: (_category_rank(x.get("weaponType")), -_turnover(x)),
             )[:_TRENDING_LIMIT]
             result = await _enrich_prices(client, result)
             result = await _enrich_market_prices(client, result)

@@ -29,16 +29,57 @@ _CAMPOS_LLM = (
 # una tool de listado ocupa ~1 KB, así que tres vueltas caben de sobra.
 _TOP_ITEMS_LLM = 8
 
+# Tick mínimo del mercado de Steam: los precios se mueven de centavo en centavo.
+_TICK_USD = 0.01
+# Suelo de precio (USD; ~10 EUR) para que un item llegue al modelo. Alineado con
+# _PRECIO_MIN_RANKING de steam/routes/market.py: los rankings ya se capturan
+# filtrados, esto es la segunda barrera para lo que venga de otras fuentes
+# (búsqueda, inventario) y para los snapshots capturados antes del cambio.
+_PRECIO_MIN_LLM = 10.80
+# Cuántos ticks debe superar el movimiento para considerarse señal. Con 1, un
+# item de $0.10 necesita >9.7% (su propio tick) y uno de $6 pasa con un 0.17%.
+# Subirlo a 2 dejaba fuera movimientos legítimos de items de precio medio: una
+# AK Ice Coaled a $6 con +0.25% es señal real y no llegaba al 0.33% exigido.
+_TICKS_MIN_SENAL = 1
+
+
+def _tiene_senal(item: dict) -> bool:
+    """¿El movimiento de este item significa algo, o es ruido de granularidad?
+
+    Una Galil a $0.10 que "sube un 11%" ha subido un centavo — el tick mínimo.
+    Ese movimiento no se puede capturar: el spread y las comisiones (~15%) se lo
+    comen varias veces. Presentarlo junto a un movimiento real de una AK de $28
+    invita a leer como tendencia lo que solo es la resolución del mercado.
+    """
+    precio = item.get("priceLatest") or 0
+    if precio < _PRECIO_MIN_LLM:
+        return False
+
+    delta = item.get("priceDelta24h")
+    if delta is None:  # sin datos de movimiento: que decida el modelo con el resto
+        return True
+
+    umbral_pct = _TICKS_MIN_SENAL * 100 * _TICK_USD / precio
+    return abs(delta) > umbral_pct
+
 
 def _para_llm(items: list[dict], limite: int = _TOP_ITEMS_LLM) -> list[dict]:
-    """Proyecta los items a los campos que el modelo usa, y los recorta.
+    """Filtra el ruido, proyecta a los campos que el modelo usa y recorta.
 
-    Sin esto, `ver_movers` mete 20 items × 29 campos (17 KB) en el contexto y
-    ahí se quedan para todas las vueltas siguientes del loop de tools.
+    Sin la proyección, `ver_movers` mete 20 items × 29 campos (17 KB) en el
+    contexto y ahí se quedan para todas las vueltas siguientes del loop.
+
+    Sin el filtro, el modelo recibe items de céntimos ordenados por volumen y no
+    tiene alternativa que ofrecer: describe fielmente lo que le llega. El sesgo
+    está en la fuente, no en el prompt.
     """
+    con_senal = [it for it in items if _tiene_senal(it)]
+    # Si el filtro deja la lista vacía, es mejor devolver los items crudos que
+    # hacer creer al modelo que no hay mercado: que lo explique él con los datos.
+    elegidos = con_senal or items
     return [
         {k: it[k] for k in _CAMPOS_LLM if it.get(k) is not None}
-        for it in items[:limite]
+        for it in elegidos[:limite]
     ]
 
 
