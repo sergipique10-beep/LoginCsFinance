@@ -73,4 +73,16 @@ ALLOWED_CORS_ORIGINS: list[str] = list(_cors_set)
 
 # Captura de precios históricos por-skin (POST /internal/price-tick, cron diario).
 PRICE_TICK_TOKEN = os.getenv("PRICE_TICK_TOKEN", "")
-PRICE_LOOKUP_CAP = int(os.getenv("PRICE_LOOKUP_CAP", "400"))
+# Tope de skins por corrida. El límite real no es la cuota diaria de steamwebapi
+# (151 llamadas de ~2000) sino el reloj: cada lookup pasa por _history_limiter,
+# capado a 18/60s, y el curl del workflow corta a los 900 s.
+#     200 skins / 18 por minuto ≈ 11 min  → 74% del timeout
+#     270 skins                 ≈ 15 min  → justo en el límite
+#     400 (default anterior)    ≈ 22 min  → el curl corta a media corrida
+# `tracked_skins` crece sola (auto-registro desde /inventory: ya son 151 frente a
+# las 50 del seed), así que sin tope esto revienta solo con el tiempo. Y revienta
+# mal: el backend sigue procesando cuando curl ya se ha ido, dejando la corrida a
+# medias sin decir cuántas skins quedaron fuera.
+# Como fetch_tracked ordena por last_captured ascendente (nulls primero), lo que
+# no entra hoy entra mañana: la rotación se reparte sola sin perder ninguna.
+PRICE_LOOKUP_CAP = int(os.getenv("PRICE_LOOKUP_CAP", "200"))
