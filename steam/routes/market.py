@@ -16,7 +16,7 @@ from stores import (
 from auth.service import require_jwt
 from ..cap_history_repo import insert_snapshot, fetch_range
 from ..rankings_repo import trending_repo, movers_repo
-from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point, _category_rank
+from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point
 from ..market_rows import _to_row, _row_to_item
 from ..services import (
     STEAM_WEB_API,
@@ -82,7 +82,59 @@ _PRECIO_MIN_RANKING = 10.80
 # latencia (~1 s), ambos asumibles. No se sube más porque el cuello de botella
 # está después: _enrich_prices hace una llamada por item con limiter 18/60s, y
 # la lista ya se recorta a _TRENDING_LIMIT / _MOVERS_LIMIT antes de enriquecer.
-_ITEMS_FETCH_MAX = 2000
+_ITEMS_FETCH_MAX = 5000
+
+# Cuántos items como mucho de una misma categoría en el ranking. `_category_rank`
+# ordena por prioridad de categoría, lo que AGOTA la primera antes de pasar a la
+# siguiente: con "Rifle" en cabeza, los 18 huecos salían todos rifles (4 variantes
+# de la misma skin incluidas). El material para diversificar existe — con
+# max=5000 hay 113 rifles, 47 pistolas, 41 snipers, 18 SMG, 6 cuchillos — solo
+# había que repartir en vez de ordenar.
+_MAX_POR_CATEGORIA = 4
+
+# Variantes de desgaste de una misma skin (Crane Flight FT/MW/WW/BS) son el mismo
+# activo a efectos de "qué está pasando en el mercado". Tope aparte del de
+# categoría, que no las distingue.
+_MAX_POR_SKIN = 2
+
+
+def _skin_base(nombre: str) -> str:
+    """Nombre sin el desgaste: 'AK-47 | Crane Flight (Field-Tested)' → sin '(...)'."""
+    return nombre.split(" (")[0].strip().lower()
+
+
+def _diversificar(items: list[dict], limite: int) -> list[dict]:
+    """Reparte el ranking entre categorías en vez de agotarlas por prioridad.
+
+    Recorre los candidatos ya ordenados por relevancia y va aceptando mientras la
+    categoría (y la skin base) no hayan llenado su cuota. Si al final sobran
+    huecos —porque no hay bastante variedad— se rellenan con los descartados en
+    orden, para no devolver una lista más corta de lo pedido.
+    """
+    aceptados: list[dict] = []
+    # Solo se reservan para relleno los descartados por cuota de CATEGORÍA: una
+    # lista corta es peor que una con dos rifles de más. Las variantes de desgaste
+    # de una misma skin no vuelven nunca — cuatro Crane Flight no dicen nada que
+    # no diga una, y ocupan el hueco de un activo distinto.
+    relleno: list[dict] = []
+    por_categoria: dict[str, int] = {}
+    por_skin: dict[str, int] = {}
+
+    for it in items:
+        cat = it.get("weaponType") or "?"
+        base = _skin_base(it.get("name") or "")
+        if por_skin.get(base, 0) >= _MAX_POR_SKIN:
+            continue
+        if por_categoria.get(cat, 0) >= _MAX_POR_CATEGORIA:
+            relleno.append(it)
+            continue
+        por_categoria[cat] = por_categoria.get(cat, 0) + 1
+        por_skin[base] = por_skin.get(base, 0) + 1
+        aceptados.append(it)
+        if len(aceptados) >= limite:
+            return aceptados
+
+    return (aceptados + relleno)[:limite]
 
 
 def _turnover(item: dict) -> float:
@@ -145,7 +197,10 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
             # the number of items displayed, and safe within the Starter plan's
             # 20 req/min rate limit.
             mapped.sort(key=_turnover, reverse=True)
-            candidates = mapped[:_MOVERS_LIMIT * 2]
+            # Diversificar ANTES de enriquecer: _enrich_prices gasta una llamada
+            # por item (limiter 18/60s), así que descartar después sería tirar
+            # cuota en items que no se van a mostrar.
+            candidates = _diversificar(mapped, _MOVERS_LIMIT * 2)
             logger.info("[market-movers] candidates: %d (capped from %d)", len(candidates), len(mapped))
             candidates = await _enrich_prices(client, candidates)
             with_delta = sorted(
@@ -394,10 +449,12 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
             # Dentro de cada categoría, por turnover (precio × unidades) en vez de
             # por unidades: ordenar por piezas vendidas premia lo barato por
             # construcción y llenaba la lista de items de céntimos.
-            result = sorted(
-                result,
-                key=lambda x: (_category_rank(x.get("weaponType")), -_turnover(x)),
-            )[:_TRENDING_LIMIT]
+            # Por relevancia (turnover) y luego se reparte entre categorías. Antes
+            # se ordenaba por _category_rank primero, lo que agotaba "Rifle" antes
+            # de llegar a ninguna otra categoría.
+            result = _diversificar(
+                sorted(result, key=_turnover, reverse=True), _TRENDING_LIMIT
+            )
             result = await _enrich_prices(client, result)
             result = await _enrich_market_prices(client, result)
             # steamwebapi /items no devuelve `image` en este plan → el cache estático
