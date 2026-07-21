@@ -12,6 +12,9 @@ from llm import gemini as llm_gemini
 def _fake_key(monkeypatch):
     monkeypatch.setattr(llm_gemini, "GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(llm_gemini, "GEMINI_MODEL", "gemini-flash-latest")
+    # Estos tests ejercitan el loop de tools, no el retrieval: sin precarga RAG
+    # la secuencia de responses mockeados corresponde 1:1 con las llamadas.
+    monkeypatch.setattr("settings.CHAT_RAG_PRELOAD", False)
 
 
 def _mock_client(response_data: dict) -> MagicMock:

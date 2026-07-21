@@ -15,6 +15,32 @@ from tools.registry import register_tool
 
 logger = logging.getLogger("uvicorn.error")
 
+# Campos que el modelo necesita para razonar sobre un item. El resto (image,
+# slug, colores, ids, floats...) son de presentación: los pinta el frontend
+# desde sus propios endpoints, no salen de aquí.
+_CAMPOS_LLM = (
+    "name", "priceLatest", "priceDelta24h", "priceDelta7d", "priceDelta30d",
+    "sold24h", "liquidityScore", "rarity", "itemType",
+)
+
+# Tope de items por tool de listado. El payload se acumula en `contents` vuelta
+# a vuelta del loop de tools, y Gemini devuelve 503 por encima de ~20 KB
+# (medido: 7 KB → 200 en 3.6s; 20 KB → 503 tras 115s). Con 8 items proyectados
+# una tool de listado ocupa ~1 KB, así que tres vueltas caben de sobra.
+_TOP_ITEMS_LLM = 8
+
+
+def _para_llm(items: list[dict], limite: int = _TOP_ITEMS_LLM) -> list[dict]:
+    """Proyecta los items a los campos que el modelo usa, y los recorta.
+
+    Sin esto, `ver_movers` mete 20 items × 29 campos (17 KB) en el contexto y
+    ahí se quedan para todas las vueltas siguientes del loop de tools.
+    """
+    return [
+        {k: it[k] for k in _CAMPOS_LLM if it.get(k) is not None}
+        for it in items[:limite]
+    ]
+
 
 # ── consultar_precio_skin ─────────────────────────────────────────────────────
 
@@ -106,7 +132,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     now = time.monotonic()
     cached = _search_cache.get(cache_key)
     if cached and now - cached[1] < SEARCH_CACHE_TTL:
-        return cached[0]
+        return _para_llm(cached[0])
 
     resp = await client.get(
         f"{STEAM_WEB_API}/items",
@@ -138,8 +164,10 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     result = await _enrich_market_prices(client, result)
     _enrich_images_from_cache(result)
 
+    # El cache guarda el item completo (lo consumen otros callers); la proyección
+    # es solo para lo que ve el modelo.
     _search_cache[cache_key] = (result, now)
-    return result
+    return _para_llm(result)
 
 
 # ── ver_trending ──────────────────────────────────────────────────────────────
@@ -150,7 +178,7 @@ async def _ver_trending(*, client: httpx.AsyncClient) -> list[dict]:
     from steam.market_rows import _row_to_item
 
     rows = await trending_repo.fetch_snapshot()
-    return [_row_to_item(row) for row in rows]
+    return _para_llm([_row_to_item(row) for row in rows])
 
 
 # ── ver_movers ────────────────────────────────────────────────────────────────
@@ -161,8 +189,8 @@ async def _ver_movers(*, client: httpx.AsyncClient) -> dict:
     from steam.market_rows import _row_to_item
 
     rows = await movers_repo.fetch_snapshot()
-    hot = [_row_to_item(r) for r in rows if r.get("bucket") == "hot"]
-    cold = [_row_to_item(r) for r in rows if r.get("bucket") == "cold"]
+    hot = _para_llm([_row_to_item(r) for r in rows if r.get("bucket") == "hot"])
+    cold = _para_llm([_row_to_item(r) for r in rows if r.get("bucket") == "cold"])
     return {"hot": hot, "cold": cold}
 
 
