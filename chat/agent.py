@@ -48,6 +48,11 @@ _TEMAS_RAG = (
     "cambio", "cambiar", "nerf", "buff", "mapa", "map pool", "active duty",
     "por que", "por qué", "porque", "anunci", "salió", "salio", "lanz",
     "armory", "reciente",
+    # Intención de compra/inversión: "¿qué compro hoy?" no menciona noticias,
+    # pero un parche o una colección retirada de la Armería es justo el contexto
+    # que separa una recomendación informada de una lista de deltas sueltos.
+    "comprar", "compra", "compro", "recomiend", "oportunidad", "invertir",
+    "inversión", "inversion", "merece la pena", "vale la pena", "conviene",
     # Ojo con los adjetivos temporales sueltos: "último"/"pasado" casan con
     # "el último mes" o "el mes pasado", que son preguntas de precio, no de
     # noticias. Van solo acompañados del sustantivo que sí fija el tema.

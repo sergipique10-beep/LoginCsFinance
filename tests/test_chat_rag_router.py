@@ -48,6 +48,23 @@ def test_adjetivos_temporales_no_disparan_retrieval(mensaje):
     assert necesita_rag(mensaje, []) is False
 
 
+@pytest.mark.parametrize("mensaje", [
+    "¿Qué ítems recomiendas comprar ahora mismo?",
+    "¿Qué recomendarías comprar hoy?",
+    "¿Merece la pena invertir en cajas?",
+    "¿Qué oportunidades ves en el mercado?",
+    "¿Me conviene comprar una AK ahora?",
+])
+def test_preguntas_de_compra_recuperan_contexto(mensaje):
+    """Un "¿qué compro?" no menciona noticias, pero las necesita.
+
+    Un parche o una colección retirada de la Armería cambia la lectura de los
+    mismos números. Sin retrieval, el agente responde solo con deltas sueltos:
+    fue lo que pasó en producción al preguntarle qué comprar.
+    """
+    assert necesita_rag(mensaje, []) is True
+
+
 def test_seguimiento_con_deictico_hereda_el_tema():
     """"¿Y eso afecta a las AK?" no contiene el tema: lo lleva el turno previo."""
     history = [{"role": "user", "content": "¿Cuáles son las últimas novedades de CS2?"}]
