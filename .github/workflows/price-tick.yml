@@ -4,15 +4,24 @@ name: price-tick
 # (tracked_skins) en precios_historicos. Idempotente (upsert por name+date).
 # Despierta el backend en Render (free) aunque esté dormido.
 #
-# La serie es UNA fila por skin y día, así que una skin que no entre en la
-# corrida pierde el punto de hoy para siempre — y la predicción necesita 20
-# puntos = 20 días de calendario. Por eso el cap tiene que cubrir toda la
-# población seguida, no rotarla.
+# La serie es UNA fila por skin y día, así que una skin que no entre pierde el
+# punto de hoy para siempre — y la predicción necesita 20 puntos = 20 días de
+# calendario. Por eso hay que cubrir toda la población, no rotarla.
 #
-# --max-time va emparejado con PRICE_LOOKUP_CAP (settings.py): cada lookup pasa
-# por _history_limiter (18/60s), así que 400 skins ≈ 22 min. El test
-# tests/test_price_cap_timeout.py comprueba que (cap/18)*60 ≤ 0.80*max-time;
-# si subes uno sin el otro, el test falla antes de que lo haga el cron.
+# TROCEADO — por qué este workflow tiene un bucle en vez de un solo curl:
+# Render free corta las peticiones HTTP largas por su cuenta. Medido en
+# producción: 200 skins (~11 min) pasaba; 400 (~22 min) devolvía 502 y se
+# perdía la corrida ENTERA (0 puntos escritos ese día, el upsert va al final).
+# Ampliar --max-time no arregla nada porque quien cierra es el proxy de Render,
+# no curl.
+#
+# Cada llamada captura un lote de PRICE_LOOKUP_CAP skins (150 ≈ 8 min) y
+# devuelve `pendientes`. El bucle repite hasta que llega a 0. Cada lote escribe
+# sus puntos antes de responder, así que un fallo en el lote 3 no tira los dos
+# primeros.
+#
+# El _history_limiter (18/60s) es global: mientras corre, /inventory y el chat
+# van lentos. De ahí la hora (06:40 UTC) y el sleep entre lotes.
 
 on:
   schedule:
@@ -22,11 +31,42 @@ on:
 jobs:
   tick:
     runs-on: ubuntu-latest
+    # ~10 lotes × 8 min + margen. El default de GitHub son 360 min.
+    timeout-minutes: 120
     steps:
-      - name: POST /internal/price-tick
+      - name: Capturar precios por lotes
         run: |
-          curl -fsS --max-time 1800 -X POST "$BASE_URL/internal/price-tick" \
-            -H "X-Price-Tick-Token: $PRICE_TICK_TOKEN"
+          # Tope de seguridad: si `pendientes` no baja (bug o skins que fallan
+          # el lookup siempre), esto corta en vez de girar hasta el timeout.
+          MAX_LOTES=12
+          lote=0
+
+          while [ "$lote" -lt "$MAX_LOTES" ]; do
+            lote=$((lote + 1))
+            echo "── Lote $lote ──"
+
+            # --max-time 900: un lote de 150 tarda ~8 min. Si se pasa de 15 es
+            # que Render se durmió o el lote está mal dimensionado.
+            RESP=$(curl -fsS --max-time 900 -X POST "$BASE_URL/internal/price-tick" \
+              -H "X-Price-Tick-Token: $PRICE_TICK_TOKEN") || {
+              echo "::error::El lote $lote falló. Los lotes anteriores sí se guardaron."
+              exit 1
+            }
+            echo "$RESP"
+
+            PENDIENTES=$(echo "$RESP" | grep -o '"pendientes":[0-9]*' | cut -d: -f2)
+            if [ "${PENDIENTES:-0}" -eq 0 ]; then
+              echo "✓ Población cubierta en $lote lote(s)."
+              exit 0
+            fi
+
+            echo "  quedan $PENDIENTES skins"
+            # Respiro para que el limiter global no quede saturado de continuo.
+            sleep 10
+          done
+
+          echo "::error::Tras $MAX_LOTES lotes aún quedan $PENDIENTES skins. ¿El lookup falla siempre para algunas? Revisa `errors` en los responses de arriba."
+          exit 1
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
           PRICE_TICK_TOKEN: ${{ secrets.PRICE_TICK_TOKEN }}

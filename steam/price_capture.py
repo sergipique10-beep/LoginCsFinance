@@ -65,19 +65,40 @@ async def _lookup_item(client: httpx.AsyncClient, name: str) -> dict:
 
 
 async def capture(client: httpx.AsyncClient) -> dict:
-    """Snapshotea hasta PRICE_LOOKUP_CAP skins seguidas. Best-effort por skin."""
-    names = await repo.fetch_tracked(PRICE_LOOKUP_CAP)
+    """Captura UN LOTE de hasta PRICE_LOOKUP_CAP skins pendientes del día.
+
+    Es una corrida completa e independiente: escribe sus puntos y marca
+    `last_captured` antes de devolver. El workflow la llama repetidamente hasta
+    que `pendientes` llega a 0 — Render free corta las peticiones largas, así
+    que una sola corrida sobre toda la población da 502 y pierde el trabajo
+    entero.
+
+    Best-effort por skin: un fallo de lookup no aborta el lote.
+    """
     today = date.today().isoformat()
 
+    # Solo las que aún no se han capturado HOY: es lo que hace que la llamada
+    # N+1 avance en vez de repetir el mismo lote. fetch_tracked ya ordena por
+    # last_captured ascendente (nulls primero), así que basta con excluir las
+    # de hoy para que el orden natural haga de cursor.
+    pendientes = await repo.count_pending(today)
+    names = await repo.fetch_tracked(PRICE_LOOKUP_CAP, before=today)
+
     rows: list[dict] = []
-    captured_names: list[str] = []
+    # Todas las intentadas, con o sin éxito: se marcan igual para que la rueda
+    # avance POR INTENTO. Si solo se marcaran las capturadas, una skin que falla
+    # el lookup siempre (nombre inválido, delistada) seguiría "pendiente" para
+    # siempre y el bucle del workflow la reintentaría lote tras lote sin que
+    # `pendientes` bajara nunca. Mismo criterio que enrich-tick con enriched_at.
+    intentadas: list[str] = []
     skipped = 0
     errors = 0
 
     for name in names:
+        intentadas.append(name)
         try:
             item = await _lookup_item(client, name)
-        except Exception as exc:  # noqa: BLE001 — best-effort: un fallo no aborta la corrida
+        except Exception as exc:  # noqa: BLE001 — best-effort: un fallo no aborta el lote
             errors += 1
             logger.warning("[price] lookup falló para %r: %s", name, exc)
             continue
@@ -95,10 +116,18 @@ async def capture(client: httpx.AsyncClient) -> dict:
             "volume": int(volume) if volume is not None else None,
             "source": "steamwebapi",
         })
-        captured_names.append(name)
 
     await repo.upsert_prices(rows)
-    await repo.mark_captured(captured_names, today)
+    await repo.mark_captured(intentadas, today)
+
+    # Lo que queda para el siguiente lote. El workflow repite mientras sea > 0.
+    restantes = max(pendientes - len(intentadas), 0)
+    logger.info(
+        "[price] lote: %d pedidas, %d capturadas, %d saltadas, %d errores | "
+        "quedan %d pendientes",
+        len(names), len(rows), skipped, errors, restantes,
+    )
 
     return {"tracked_run": len(names), "captured": len(rows),
-            "skipped": skipped, "errors": errors}
+            "skipped": skipped, "errors": errors,
+            "pendientes": restantes}

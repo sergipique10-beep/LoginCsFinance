@@ -73,24 +73,26 @@ ALLOWED_CORS_ORIGINS: list[str] = list(_cors_set)
 
 # Captura de precios históricos por-skin (POST /internal/price-tick, cron diario).
 PRICE_TICK_TOKEN = os.getenv("PRICE_TICK_TOKEN", "")
-# Tope de skins por corrida. El límite real no es la cuota diaria de steamwebapi
-# sino el reloj: cada lookup pasa por _history_limiter (18/60s), así que el
-# tiempo lo fija el número de skins. La restricción va SIEMPRE en pareja con el
-# `--max-time` del curl en .github/workflows/price-tick.yml:
-#     (n / 18) * 60 s  ≤  0.80 * max-time     ← tests/test_price_cap_timeout.py
-#     200 skins ≈ 11 min      400 skins ≈ 22 min      600 skins ≈ 33 min
-# Con max-time=1800 el techo son 540 skins; 400 deja margen.
+# Skins por LOTE, no por día: el workflow llama al tick varias veces seguidas
+# hasta cubrir la población (ver price-tick.yml).
 #
-# Por qué 400 y no menos: la serie es UNA fila por skin y día
-# (unique market_hash_name,date), así que una skin que no entra hoy pierde el
-# punto de hoy para siempre — y la predicción necesita 20 puntos = 20 días. Con
-# 320 skins seguidas y cap 200, 120 se quedaban fuera cada día y la vuelta
-# tardaba 1,6 días. El cap tiene que cubrir la población entera, no rotarla.
+# El troceado no es una optimización, es obligatorio: Render free corta las
+# peticiones HTTP largas por su cuenta, y ampliar el --max-time del curl no
+# sirve porque quien cierra la conexión es el proxy de Render, no curl. Medido:
+#     200 skins ≈ 11 min → OK          400 skins ≈ 22 min → 502
+# El corte está entre ambos. 150 (~8 min) deja margen sin disparar el número de
+# llamadas.
 #
-# Ojo al crecimiento: tracked_skins se llena sola desde /inventory (270 de las
-# 320 actuales) y ahora también desde el trending (TRENDING_TRACK_TOP). Si la
-# población supera el cap, vuelve la rotación y con ella los huecos en la serie.
-PRICE_LOOKUP_CAP = int(os.getenv("PRICE_LOOKUP_CAP", "400"))
+# Cada lote es una corrida completa e independiente: escribe sus puntos y marca
+# `last_captured` antes de devolver. Si el lote 3 de 3 falla, los dos primeros
+# ya están guardados — a diferencia de la corrida única, donde un 502 a los 20
+# minutos tiraba el trabajo entero (medido: 0 puntos escritos ese día).
+#
+# `fetch_tracked` ordena por last_captured ascendente con nulls primero, así que
+# la llamada N+1 continúa donde acabó la N sin repetir ni saltarse ninguna.
+#
+# El reloj lo fija _history_limiter (18/60s): (n/18)*60 s por lote.
+PRICE_LOOKUP_CAP = int(os.getenv("PRICE_LOOKUP_CAP", "150"))
 
 # Cuántos items del trending se registran en tracked_skins en cada captura.
 # Sin esto, los items del ranking no tienen serie propia y toda predicción sobre

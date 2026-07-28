@@ -42,15 +42,37 @@ async def register_tracked(names: list[str], source: str) -> None:
     await asyncio.to_thread(_do)
 
 
-async def fetch_tracked(limit: int) -> list[str]:
-    """Hasta `limit` nombres, menos-recientemente-capturados primero (nulls primero)."""
+async def fetch_tracked(limit: int, before: str | None = None) -> list[str]:
+    """Hasta `limit` nombres, menos-recientemente-capturados primero (nulls primero).
+
+    `before` (fecha ISO) excluye las ya capturadas ese día. Es lo que hace que
+    el price-tick pueda trocearse: cada llamada devuelve el siguiente lote de
+    pendientes en vez de repetir siempre las mismas. Sin él, la llamada N+1
+    volvería a traer el lote de la N (que ya tiene last_captured = hoy pero
+    sigue siendo de las más antiguas si el resto también lo es).
+    """
     def _do() -> list[str]:
-        resp = (get_supabase().table(_TRACKED)
-                .select("market_hash_name")
-                .order("last_captured", desc=False, nullsfirst=True)
-                .limit(limit)
-                .execute())
+        q = (get_supabase().table(_TRACKED)
+             .select("market_hash_name")
+             .order("last_captured", desc=False, nullsfirst=True)
+             .limit(limit))
+        if before is not None:
+            # `or` de PostgREST: null (nunca capturada) o anterior a `before`.
+            q = q.or_(f"last_captured.is.null,last_captured.lt.{before}")
+        resp = q.execute()
         return [r["market_hash_name"] for r in (resp.data or [])]
+
+    return await asyncio.to_thread(_do)
+
+
+async def count_pending(before: str) -> int:
+    """Skins sin capturar en la fecha `before` (ISO). Cursor del troceado."""
+    def _do() -> int:
+        resp = (get_supabase().table(_TRACKED)
+                .select("market_hash_name", count="exact")
+                .or_(f"last_captured.is.null,last_captured.lt.{before}")
+                .execute())
+        return resp.count or 0
 
     return await asyncio.to_thread(_do)
 

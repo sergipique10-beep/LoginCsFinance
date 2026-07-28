@@ -184,7 +184,14 @@ Las tablas de ranking **no** tienen FK a `tracked_skins` a propósito: no todo �
 - **Correr el price-tick más veces al día no da más puntos** — refina el precio de hoy sobre la misma fila. Los 20 puntos que exige `predict/service.py` son 20 **días** de calendario, sin atajo. (Un backfill desde el histórico de CSFloat sí los daría de golpe; no está hecho.)
 - **La skin que no entra en la corrida pierde el punto de ese día para siempre.** Por eso `PRICE_LOOKUP_CAP` (400) debe cubrir *toda* la población seguida, no rotarla: con 320 skins y cap 200 se quedaban 120 fuera cada día. Ojo, `tracked_skins` crece sola (270 de 320 vienen de `/inventory`, y ahora también del trending): si la población supera el cap, vuelven los huecos.
 
-⚠️ **`PRICE_LOOKUP_CAP` y el `--max-time` del workflow son un par.** Cada lookup pasa por `_history_limiter` (18/60s) → `(cap/18)*60 s` de corrida. `tests/test_price_cap_timeout.py` obliga a que quepa en el 80% del timeout; subir uno sin el otro rompe el test antes que el cron.
+**El tick captura UN LOTE, no toda la población.** `PRICE_LOOKUP_CAP` (150) es el tamaño del lote; el workflow llama al endpoint **en bucle** hasta que el response trae `pendientes: 0`. Con ~391 skins son 3 llamadas de ~8 min.
+
+⚠️ **El troceado es obligatorio, no una optimización: Render free corta las peticiones HTTP largas.** Medido en producción: 200 skins (~11 min) pasaba, 400 (~22 min) devolvió **502 y se perdió la corrida entera** — 0 puntos escritos ese día, porque `upsert_prices` va al final. Ampliar el `--max-time` del curl no arregla nada; quien cierra la conexión es el proxy de Render. `tests/test_price_cap_timeout.py` protege el tamaño del lote contra esa cota.
+
+Dos invariantes del troceado, ambos load-bearing:
+
+- **`fetch_tracked(limit, before=hoy)`** excluye las ya capturadas hoy (`or(last_captured.is.null, last_captured.lt.hoy)`). Sin ese filtro, cada lote devolvería el mismo conjunto y el bucle no avanzaría.
+- **`mark_captured` marca las intentadas, no las capturadas.** Una skin que falla el lookup siempre (delistada, nombre inválido) quedaría "pendiente" para siempre y el bucle la reintentaría lote tras lote sin que `pendientes` bajara. Mismo criterio que `enrich_tick` con `enriched_at`.
 
 `POST /internal/price-tick` (cron diario, `.github/workflows/price-tick.yml`) recorre las skins **menos-recientemente-capturadas primero** (`last_captured` asc, nulls primero) hasta `PRICE_LOOKUP_CAP`, hace lookup por-nombre vía el `_history_limiter` compartido, y hace upsert idempotente por `(market_hash_name, date)`. Best-effort: un fallo por skin no aborta la corrida. El seed inicial sale de `steam/data/tracked_seed.json`.
 
@@ -266,7 +273,7 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `CHAT_RAG_PRELOAD` | `true` | Precarga el contexto RAG en el system prompt de cada mensaje del chat (cuesta un embedding por turno). Con `false`, el modelo solo obtiene contexto si llama a la tool `buscar_contexto_rag` |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Modelo de generación del chat. El alias `-latest` resuelve a un modelo concreto que Google mueve sin avisar (hoy `gemini-3.5-flash`); en free tier la cuota es **20 req/día por proyecto y modelo**, así que conviene fijarlo a una versión explícita para que el gasto sea predecible. |
 | `PRICE_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/price-tick` (captura diaria de precios por skin). Must match the GitHub Actions secret. Startup warns if missing. |
-| `PRICE_LOOKUP_CAP` | `400` | Tope de skins por corrida del price-tick. **Va en pareja con `--max-time` en `price-tick.yml`** (1800 s): `(cap/18)*60` debe caber en el 80% del timeout. Debe cubrir toda la población de `tracked_skins`, no rotarla. |
+| `PRICE_LOOKUP_CAP` | `150` | Skins por **lote** del price-tick (el workflow repite hasta `pendientes: 0`). ~8 min por lote. No subirlo sin más: a ~22 min Render free devuelve 502 y se pierde la corrida. |
 | `TRENDING_TRACK_TOP` | `80` | Cuántos ítems del trending (top por turnover) se registran en `tracked_skins` en cada captura horaria. `0` desactiva el registro. Súbelo solo si `PRICE_LOOKUP_CAP` tiene margen sobre la población seguida. |
 
 **Cuidado con los valores multilínea**: `python-dotenv` corta un valor que ocupe
