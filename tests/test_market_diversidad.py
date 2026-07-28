@@ -62,6 +62,54 @@ class TestCuotaPorSkin:
         assert len(cranes) <= _MAX_POR_SKIN
 
 
+class TestCuotasEscalanConElLimite:
+    """Las cuotas se calibraron para 18 huecos; a 500 descartarían de más.
+
+    `_MAX_POR_SKIN` descarta PERMANENTE (no va a relleno), así que con 5
+    desgastes por skin un tope fijo de 2 tiraba el 60% de las variantes — items
+    que a 500 huecos caben de sobra.
+    """
+
+    def test_a_limites_pequenos_no_cambia_nada(self):
+        """18 (fallback trending) y 20 (movers) deben dar las cuotas de siempre.
+
+        Con material de sobra en cada categoría, las cuotas gobiernan la lista
+        entera (no hace falta tirar de `relleno`), así que el reparto tiene que
+        ser exactamente el de antes: _MAX_POR_CATEGORIA por categoría.
+        """
+        cats_disponibles = ["Rifle", "Sniper Rifle", "Pistol", "SMG", "Knife"]
+        items = [
+            _item(f"{c} | Skin{i} (FT)", c)
+            for c in cats_disponibles for i in range(20)
+        ]
+
+        for limite in (18, 20):
+            cats = [i["weaponType"] for i in _diversificar(items, limite)]
+            for c in cats_disponibles:
+                assert cats.count(c) <= _MAX_POR_CATEGORIA, (limite, c)
+
+    def test_a_500_no_tira_las_variantes_de_desgaste(self):
+        desgastes = ["Field-Tested", "Minimal Wear", "Well-Worn",
+                     "Battle-Scarred", "Factory New"]
+        items = [
+            _item(f"AK-47 | Skin{i} ({w})", "Rifle")
+            for i in range(80) for w in desgastes
+        ]
+        r = _diversificar(items, 500)
+        # Con _MAX_POR_SKIN fijo a 2 saldrían ~160 de los 400.
+        assert len(r) == 400
+
+    def test_a_500_sigue_repartiendo_la_cabecera(self):
+        """Escalar las cuotas no puede degenerar en "no diversificar nada"."""
+        items = [_item(f"AK-47 | Skin{i} (FT)", "Rifle") for i in range(400)]
+        items += [_item(f"AWP | Skin{i} (FT)", "Sniper Rifle") for i in range(400)]
+        cabecera = [i["weaponType"] for i in _diversificar(items, 500)[:100]]
+        assert len(set(cabecera)) == 2
+
+    def test_lista_vacia_con_limite_grande(self):
+        assert _diversificar([], 500) == []
+
+
 class TestRelleno:
     def test_no_devuelve_lista_corta_si_falta_variedad(self):
         """Sin variedad suficiente, es peor una lista a medias que una repetida."""

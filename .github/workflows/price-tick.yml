@@ -3,6 +3,16 @@ name: price-tick
 # Cron diario que captura un snapshot de precios de las skins seguidas
 # (tracked_skins) en precios_historicos. Idempotente (upsert por name+date).
 # Despierta el backend en Render (free) aunque esté dormido.
+#
+# La serie es UNA fila por skin y día, así que una skin que no entre en la
+# corrida pierde el punto de hoy para siempre — y la predicción necesita 20
+# puntos = 20 días de calendario. Por eso el cap tiene que cubrir toda la
+# población seguida, no rotarla.
+#
+# --max-time va emparejado con PRICE_LOOKUP_CAP (settings.py): cada lookup pasa
+# por _history_limiter (18/60s), así que 400 skins ≈ 22 min. El test
+# tests/test_price_cap_timeout.py comprueba que (cap/18)*60 ≤ 0.80*max-time;
+# si subes uno sin el otro, el test falla antes de que lo haga el cron.
 
 on:
   schedule:
@@ -15,7 +25,7 @@ jobs:
     steps:
       - name: POST /internal/price-tick
         run: |
-          curl -fsS --max-time 900 -X POST "$BASE_URL/internal/price-tick" \
+          curl -fsS --max-time 1800 -X POST "$BASE_URL/internal/price-tick" \
             -H "X-Price-Tick-Token: $PRICE_TICK_TOKEN"
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}

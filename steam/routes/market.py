@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from settings import STEAM_API_KEY, CAP_TICK_TOKEN, PRICE_TICK_TOKEN
+from settings import STEAM_API_KEY, CAP_TICK_TOKEN, PRICE_TICK_TOKEN, TRENDING_TRACK_TOP
 from stores import (
     MARKET_INDEX_CACHE_TTL,
     SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL, ITEM_PRICE_CACHE_TTL,
@@ -58,11 +58,29 @@ _MOVERS_SELECT = ",".join([
     "minfloat", "maxfloat", "paintindex",
 ])
 
-# Capped to fit one 60s rate-limit window: _enrich_prices fires one csfloat/history
-# call per item, throttled to 18/60s by _history_limiter. A higher limit would make
-# the first (cold-cache) request block for minutes waiting on the limiter.
-_TRENDING_LIMIT = 18
+# Solo lo usa el fallback de topmovers (cuando /items falla), que trae ~20 items
+# de un payload ya descargado. El ranking normal usa _TRENDING_CAPTURE_LIMIT.
+_TRENDING_FALLBACK_LIMIT = 18
 _SEARCH_LIMIT = 30
+
+# Cuántos items persiste el trending-tick. NO cuesta cuota extra: /items es UNA
+# petición sea cual sea el número de items que se guarden después (ver
+# _ITEMS_FETCH_MAX). El coste lineal —una llamada a csfloat/history por item— ya
+# no vive aquí: se separó a /internal/enrich-tick, que enriquece _ENRICH_BATCH
+# por pasada avanzando como una rueda sobre la tabla. Los items todavía sin
+# enriquecer conservan los deltas de _inline_delta (familia `pricereal`, gratis
+# en el payload de /items), así que ninguna tarjeta se queda sin badge.
+# 500 es el techo, no la expectativa: con max=5000 hay ~287 items ≥$10.80.
+_TRENDING_CAPTURE_LIMIT = 500
+
+# Cuántos items enriquece cada enrich-tick. Sigue siendo 18 porque es el límite
+# del _history_limiter (18/60s) y una pasada tiene que caber en una ventana.
+_ENRICH_BATCH = 18
+
+# Días sin aparecer en una captura antes de purgar la fila. Sustituye al DELETE
+# del replace-all; la ventana da margen a los items que entran y salen del
+# ranking por fluctuaciones normales sin perder su enriquecimiento.
+_TRENDING_STALE_DAYS = 7
 
 # Suelo de precio para entrar en los rankings (USD; ~10 EUR a 1.08 USD/EUR).
 # Por debajo, el movimiento porcentual es ruido de granularidad: los precios de
@@ -79,9 +97,7 @@ _PRECIO_MIN_RANKING = 10.80
 #   max=1500 →  19                  max=5000 → 287
 # Es UNA sola petición sea cual sea el valor: subirlo no consume más cuota del
 # plan Starter (20 req/60s por endpoint). El coste es el payload (~9 MB) y la
-# latencia (~1 s), ambos asumibles. No se sube más porque el cuello de botella
-# está después: _enrich_prices hace una llamada por item con limiter 18/60s, y
-# la lista ya se recorta a _TRENDING_LIMIT / _MOVERS_LIMIT antes de enriquecer.
+# latencia (~1 s), ambos asumibles.
 _ITEMS_FETCH_MAX = 5000
 
 # Cuántos items como mucho de una misma categoría en el ranking. `_category_rank`
@@ -120,12 +136,22 @@ def _diversificar(items: list[dict], limite: int) -> list[dict]:
     por_categoria: dict[str, int] = {}
     por_skin: dict[str, int] = {}
 
+    # Las cuotas se calibraron para 18 huecos, donde su trabajo era evitar que
+    # "Rifle" agotara la lista entera. A 500 esas mismas cifras descartarían
+    # items que sí caben: con _MAX_POR_SKIN=2 y 5 desgastes por skin se tiraba
+    # el 60% de las variantes. Escalan con el límite porque la diversificación
+    # solo tiene que proteger la CABECERA, que es lo que se ve sin scroll.
+    # A limite=18 (fallback) y limite=20 (movers) dan exactamente (4, 2) — el
+    # comportamiento de hoy, sin regresión.
+    max_categoria = max(_MAX_POR_CATEGORIA, limite // 8)
+    max_skin = max(_MAX_POR_SKIN, limite // 100)
+
     for it in items:
         cat = it.get("weaponType") or "?"
         base = _skin_base(it.get("name") or "")
-        if por_skin.get(base, 0) >= _MAX_POR_SKIN:
+        if por_skin.get(base, 0) >= max_skin:
             continue
-        if por_categoria.get(cat, 0) >= _MAX_POR_CATEGORIA:
+        if por_categoria.get(cat, 0) >= max_categoria:
             relleno.append(it)
             continue
         por_categoria[cat] = por_categoria.get(cat, 0) + 1
@@ -453,9 +479,15 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
             # se ordenaba por _category_rank primero, lo que agotaba "Rifle" antes
             # de llegar a ninguna otra categoría.
             result = _diversificar(
-                sorted(result, key=_turnover, reverse=True), _TRENDING_LIMIT
+                sorted(result, key=_turnover, reverse=True), _TRENDING_CAPTURE_LIMIT
             )
-            result = await _enrich_prices(client, result)
+            # Sin _enrich_prices a propósito: es una llamada a csfloat/history
+            # POR ITEM, el único coste que escala. Vive ahora en
+            # /internal/enrich-tick, que rota sobre la tabla en pasadas de 18.
+            # Hasta que a un item le toque la rueda, sus deltas son los de
+            # _inline_delta (familia `pricereal`), que ya vienen en el payload.
+            # _enrich_market_prices sí se queda: son 2 peticiones fijas y
+            # cacheadas, no escalan con el número de items.
             result = await _enrich_market_prices(client, result)
             # steamwebapi /items no devuelve `image` en este plan → el cache estático
             # (ByMykel) es la única fuente. Igual que en /market/items (search).
@@ -494,7 +526,7 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
             await _fetch_static_images(client)
             result = [_map_topmovers_item(item) for item in combined]
             _enrich_images_from_cache(result)
-            result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_LIMIT]
+            result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_FALLBACK_LIMIT]
             result = await _enrich_market_prices(client, result)
             logger.info("[market-trending] serving from topmovers (%d items)", len(result))
             return result
@@ -505,7 +537,10 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
 
 @router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
 async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
-    rows = await trending_repo.fetch_snapshot()
+    # Por turnover y no por `rank`: con upsert, un item que no aparece en una
+    # captura conserva su rank viejo y ocuparía una posición alta como fantasma
+    # hasta que la purga se lo lleve. El turnover se actualiza en cada captura.
+    rows = await trending_repo.fetch_ranked()
     return [_row_to_item(row) for row in rows]
 
 
@@ -732,10 +767,88 @@ async def trending_tick(
         raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
 
     items = await _compute_trending(request.app.state.http_client)
-    rows = [_to_row(item, rank) for rank, item in enumerate(items)]
-    await trending_repo.replace_snapshot(rows)
-    logger.info("[trending-tick] snapshot saved: %d items", len(rows))
-    return {"ok": True, "count": len(rows)}
+    seen_at = datetime.now(timezone.utc).isoformat()
+    # Upsert, no replace-all: el DELETE borraría el enriquecimiento que el
+    # enrich-tick va acumulando en price_delta_* / enriched_at. Estas filas no
+    # llevan esas dos claves, así que PostgREST no las toca.
+    rows = [{**_to_row(item, rank), "seen_at": seen_at}
+            for rank, item in enumerate(items)]
+    await trending_repo.upsert_rows(rows)
+    # Sin el DELETE, los items que salen del ranking se quedarían para siempre.
+    purged = await trending_repo.purge_stale(_TRENDING_STALE_DAYS)
+
+    # Los items del ranking no tenían serie propia en precios_historicos, así
+    # que cualquier predicción sobre ellos caía a CSFloat. Registrar el top N
+    # por turnover (`items` ya viene ordenado así desde _diversificar) los mete
+    # en la rueda del price-tick. Es un upsert con ignore_duplicates: repetirlo
+    # cada hora no pisa `first_seen` ni `last_captured`.
+    # Best-effort como en /inventory: que falle el registro no puede tumbar la
+    # captura del ranking, que es lo que sirve la pantalla.
+    tracked = 0
+    try:
+        from steam.price_history_repo import register_tracked
+        nombres = [i["name"] for i in items[:TRENDING_TRACK_TOP] if i.get("name")]
+        if nombres:
+            await register_tracked(nombres, "trending")
+            tracked = len(nombres)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[trending-tick] register_tracked falló: %s", exc)
+
+    logger.info("[trending-tick] upserted=%d purged=%d tracked=%d",
+                len(rows), purged, tracked)
+    return {"ok": True, "count": len(rows), "purged": purged, "tracked": tracked}
+
+
+@router.post("/internal/enrich-tick", summary="Enriquece deltas del trending con histórico csfloat (cron interno)")
+async def enrich_tick(request: Request, x_cap_token: str | None = Header(default=None)):
+    """Avanza la rueda de enriquecimiento: coge los N items menos-recientemente
+    enriquecidos y les recalcula los deltas desde el histórico de csfloat.
+
+    Es el único coste que escala con el número de items (1 req por item), por
+    eso está separado de la captura y capado a _ENRICH_BATCH por pasada.
+    """
+    if not CAP_TICK_TOKEN or not x_cap_token or not secrets.compare_digest(x_cap_token, CAP_TICK_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
+
+    names = await trending_repo.fetch_stalest(_ENRICH_BATCH)
+    if not names:
+        return {"ok": True, "count": 0, "with_deltas": 0}
+
+    # _enrich_prices solo lee item["name"] y sobrescribe los tres deltas, así
+    # que no hace falta cargar la fila entera de Supabase.
+    stubs = [{"name": n, "priceDelta24h": None, "priceDelta7d": None, "priceDelta30d": None}
+             for n in names]
+    enriched = await _enrich_prices(request.app.state.http_client, stubs)
+
+    enriched_at = datetime.now(timezone.utc).isoformat()
+    con_deltas: list[dict] = []
+    sin_deltas: list[dict] = []
+    for e in enriched:
+        # Si csfloat no devolvió histórico, _enrich_prices deja el stub intacto
+        # y los tres deltas siguen a None. Escribirlos pisaría con null el delta
+        # bueno que _inline_delta dejó en la captura — así que en ese caso solo
+        # se marca la fila como intentada.
+        if e["priceDelta24h"] is None and e["priceDelta7d"] is None and e["priceDelta30d"] is None:
+            sin_deltas.append({"name": e["name"], "enriched_at": enriched_at})
+        else:
+            con_deltas.append({
+                "name": e["name"],
+                "price_delta_24h": e["priceDelta24h"],
+                "price_delta_7d": e["priceDelta7d"],
+                "price_delta_30d": e["priceDelta30d"],
+                "enriched_at": enriched_at,
+            })
+
+    # Dos llamadas y no una: PostgREST rellena con null las claves que falten en
+    # unas filas y estén en otras del mismo lote. Mezclarlas borraría deltas.
+    await trending_repo.upsert_rows(con_deltas)
+    await trending_repo.upsert_rows(sin_deltas)
+
+    # enriched_at se escribe SIEMPRE, con o sin datos: si no, un item sin
+    # histórico en csfloat se quedaría con enriched_at null para siempre y
+    # acapararía la rueda cada 15 min, quemando la cuota en los mismos muertos.
+    logger.info("[enrich-tick] intentados=%d con_deltas=%d", len(names), len(con_deltas))
+    return {"ok": True, "count": len(names), "with_deltas": len(con_deltas)}
 
 
 @router.post("/internal/movers-tick", summary="Captura el ranking hot/cold del mercado CS2 (cron interno)")

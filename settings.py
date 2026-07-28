@@ -74,15 +74,29 @@ ALLOWED_CORS_ORIGINS: list[str] = list(_cors_set)
 # Captura de precios históricos por-skin (POST /internal/price-tick, cron diario).
 PRICE_TICK_TOKEN = os.getenv("PRICE_TICK_TOKEN", "")
 # Tope de skins por corrida. El límite real no es la cuota diaria de steamwebapi
-# (151 llamadas de ~2000) sino el reloj: cada lookup pasa por _history_limiter,
-# capado a 18/60s, y el curl del workflow corta a los 900 s.
-#     200 skins / 18 por minuto ≈ 11 min  → 74% del timeout
-#     270 skins                 ≈ 15 min  → justo en el límite
-#     400 (default anterior)    ≈ 22 min  → el curl corta a media corrida
-# `tracked_skins` crece sola (auto-registro desde /inventory: ya son 151 frente a
-# las 50 del seed), así que sin tope esto revienta solo con el tiempo. Y revienta
-# mal: el backend sigue procesando cuando curl ya se ha ido, dejando la corrida a
-# medias sin decir cuántas skins quedaron fuera.
-# Como fetch_tracked ordena por last_captured ascendente (nulls primero), lo que
-# no entra hoy entra mañana: la rotación se reparte sola sin perder ninguna.
-PRICE_LOOKUP_CAP = int(os.getenv("PRICE_LOOKUP_CAP", "200"))
+# sino el reloj: cada lookup pasa por _history_limiter (18/60s), así que el
+# tiempo lo fija el número de skins. La restricción va SIEMPRE en pareja con el
+# `--max-time` del curl en .github/workflows/price-tick.yml:
+#     (n / 18) * 60 s  ≤  0.80 * max-time     ← tests/test_price_cap_timeout.py
+#     200 skins ≈ 11 min      400 skins ≈ 22 min      600 skins ≈ 33 min
+# Con max-time=1800 el techo son 540 skins; 400 deja margen.
+#
+# Por qué 400 y no menos: la serie es UNA fila por skin y día
+# (unique market_hash_name,date), así que una skin que no entra hoy pierde el
+# punto de hoy para siempre — y la predicción necesita 20 puntos = 20 días. Con
+# 320 skins seguidas y cap 200, 120 se quedaban fuera cada día y la vuelta
+# tardaba 1,6 días. El cap tiene que cubrir la población entera, no rotarla.
+#
+# Ojo al crecimiento: tracked_skins se llena sola desde /inventory (270 de las
+# 320 actuales) y ahora también desde el trending (TRENDING_TRACK_TOP). Si la
+# población supera el cap, vuelve la rotación y con ella los huecos en la serie.
+PRICE_LOOKUP_CAP = int(os.getenv("PRICE_LOOKUP_CAP", "400"))
+
+# Cuántos items del trending se registran en tracked_skins en cada captura.
+# Sin esto, los items del ranking no tienen serie propia y toda predicción sobre
+# ellos cae a CSFloat (predict/service.py). Se cogen los N primeros por turnover
+# (precio × volumen 24h), que es el orden con el que ya se sirve la lista.
+# El registro es un upsert con ignore_duplicates → re-registrar cada hora es
+# un no-op barato y no pisa `first_seen` ni `last_captured`.
+# 80 ≈ el margen que deja PRICE_LOOKUP_CAP sobre las ~320 skins ya seguidas.
+TRENDING_TRACK_TOP = int(os.getenv("TRENDING_TRACK_TOP", "80"))

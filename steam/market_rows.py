@@ -8,7 +8,15 @@ de movers hot/cold.
 
 
 def _row_to_item(row: dict) -> dict:
-    """Convierte una fila de market_trending (snake_case) al shape ISkinCard (camelCase)."""
+    """Convierte una fila de market_trending (snake_case) al shape ISkinCard (camelCase).
+
+    OJO — `liquidityBreakdown` NO se emite aquí, y es deliberado: el detail
+    sheet del frontend lo usa como señal de "esto es un snapshot pobre, pide el
+    item completo a /market/price" (skin-detail-sheet.component.ts). Si algún
+    día se añade la columna `liquidity_breakdown` y se devuelve aquí, esa
+    heurística deja de dispararse EN SILENCIO y el bloque de liquidez se queda
+    vacío para siempre. El self-check de abajo lo protege.
+    """
     return {
         "id": row["name"],
         "name": row["name"],
@@ -39,6 +47,14 @@ def _row_to_item(row: dict) -> dict:
         "priceDelta24h": row.get("price_delta_24h"),
         "priceDelta7d": row.get("price_delta_7d"),
         "priceDelta30d": row.get("price_delta_30d"),
+        "priceReal": row.get("price_real"),
+        "sold24h": row.get("sold_24h") or 0,
+        "sold7d": row.get("sold_7d") or 0,
+        "sold30d": row.get("sold_30d") or 0,
+        "soldTotal": 0,
+        "offerVolume": row.get("offer_volume") or 0,
+        "hoursToSold": row.get("hours_to_sold") or 0,
+        "steamUrl": row.get("steam_url"),
     }
 
 
@@ -74,6 +90,16 @@ def _to_row(item: dict, rank: int, bucket: str | None = None) -> dict:
         "price_delta_24h": item.get("priceDelta24h"),
         "price_delta_7d": item.get("priceDelta7d"),
         "price_delta_30d": item.get("priceDelta30d"),
+        "price_real": item.get("priceReal"),
+        "sold_24h": int(item.get("sold24h") or 0),
+        "sold_7d": int(item.get("sold7d") or 0),
+        "sold_30d": int(item.get("sold30d") or 0),
+        "offer_volume": int(item.get("offerVolume") or 0),
+        "hours_to_sold": item.get("hoursToSold"),
+        "steam_url": item.get("steamUrl"),
+        # Precalculado para poder ordenar en SQL sin recomputar. Es el mismo
+        # criterio que _turnover en routes/market.py.
+        "turnover": (item.get("priceLatest") or 0) * (item.get("sold24h") or 0),
     }
     if bucket is not None:
         row["bucket"] = bucket
@@ -106,6 +132,13 @@ if __name__ == "__main__":
         "priceDelta24h": 1.2,
         "priceDelta7d": -3.4,
         "priceDelta30d": 5.6,
+        "priceReal": 12.1,
+        "sold24h": 340,
+        "sold7d": 2100,
+        "sold30d": 9000,
+        "offerVolume": 812,
+        "hoursToSold": 1.7,
+        "steamUrl": "https://steamcommunity.com/market/listings/730/AK-47",
     }
 
     row_hot = _to_row(sample_item, 2, "hot")
@@ -116,9 +149,24 @@ if __name__ == "__main__":
     row_plain = _to_row(sample_item, 0)
     assert "bucket" not in row_plain
 
+    # turnover = precio × volumen 24h, el criterio de orden de /market/trending.
+    assert row_plain["turnover"] == 12.5 * 340
+
     round_tripped = _row_to_item(_to_row(sample_item, 0))
     assert round_tripped["name"] == sample_item["name"]
     assert round_tripped["weaponType"] == sample_item["weaponType"]
     assert round_tripped["priceDelta7d"] == sample_item["priceDelta7d"]
+    assert round_tripped["sold24h"] == sample_item["sold24h"]
+    assert round_tripped["offerVolume"] == sample_item["offerVolume"]
+
+    # Volumen ausente → 0, no None: la tarjeta concatena el valor sin guarda
+    # ('Vol: ' + item.sold24h) y un None pintaría "Vol: None/24h".
+    assert _row_to_item({"name": "x"})["sold24h"] == 0
+
+    # NO TOCAR sin leer el docstring de _row_to_item: el detail sheet detecta
+    # los snapshots pobres con `liquidityBreakdown === undefined`. Si esta clave
+    # empieza a viajar, el sheet deja de pedir /market/price sin dar ningún
+    # error y el bloque de liquidez se queda vacío para siempre.
+    assert "liquidityBreakdown" not in round_tripped
 
     print("OK: market_rows self-check passed")

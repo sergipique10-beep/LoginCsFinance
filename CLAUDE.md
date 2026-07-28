@@ -81,8 +81,11 @@ LoginCsFinance/
       items.py      #   /me, /inventory, /item/history
       market.py     #   /market/movers, /market/items, /market/trending, /market/index,
                     #   /market/cap-history, /market/providers, /market/prices,
-                    #   /internal/cap-tick. Constants: _MOVERS_SELECT, _TRENDING_LIMIT,
-                    #   _CAP_TF_MAP, _CAP_BUCKET_MAP; helper _downsample.
+                    #   /internal/cap-tick, /internal/trending-tick,
+                    #   /internal/enrich-tick, /internal/movers-tick.
+                    #   Constants: _MOVERS_SELECT, _TRENDING_CAPTURE_LIMIT,
+                    #   _ENRICH_BATCH, _TRENDING_STALE_DAYS, _CAP_TF_MAP,
+                    #   _CAP_BUCKET_MAP; helper _downsample.
       news.py       #   /news/cs2
   notifications/
     repo.py           # Supabase data layer: device_tokens, notified_news (reuses steam/cap_history_repo's client)
@@ -121,6 +124,8 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | GET | `/market/index` | Bearer | Market index: `turnover24h`, `sold24h`, `delta24h`, `hottestItem`, `history[]` |
 | GET | `/market/cap-history` | Bearer | CS2 price-index history from Supabase, downsampled per `?tf=` (`7d`/`1m`/`3m`/`6m`/`1y`/`3y`). Returns `[{ ts, v, priceindex, realpriceindex, buyorderpriceindex, turnover24h }]`; `v = priceindex` (frontend contract). Invalid `tf` → 400. |
 | POST | `/internal/cap-tick` | `X-Cap-Token` | Hourly capture (called by external cron). Fetches `market-index/cs2`, upserts an hour-floored snapshot of the 4 fields into Supabase. Token compared via `secrets.compare_digest`; bad/missing → 401. |
+| POST | `/internal/trending-tick` | `X-Cap-Token` | Cron **horario** (`market-tick.yml`). Captura ~`_TRENDING_CAPTURE_LIMIT` items con 1 request a `/items` y hace **upsert por `name`** (no replace-all: borraría el enriquecimiento acumulado). Marca `seen_at` y purga las filas con >`_TRENDING_STALE_DAYS` sin aparecer. Devuelve `{ok, count, purged}`. |
+| POST | `/internal/enrich-tick` | `X-Cap-Token` | Cron **cada 15 min** (`market-tick.yml`). Rueda progresiva: coge los `_ENRICH_BATCH` items con `enriched_at` más antiguo (nulls primero) y les recalcula los deltas desde `csfloat/history`. Escribe `enriched_at` **siempre**, con datos o sin ellos — si no, un item sin histórico acapararía la rueda para siempre. Devuelve `{ok, count, with_deltas}`. |
 | POST | `/notifications/register-token` | Bearer | Registra un token FCM (`{ token, platform }`) para recibir push notifications. |
 | POST | `/internal/news-tick` | `X-News-Tick-Token` | Cron horario (GitHub Actions). Detecta noticias CS2 nuevas y envía push broadcast vía FCM. Idempotente (dedup por `gid` en `notified_news`). |
 | POST | `/internal/broadcast` | `X-Broadcast-Token` | Anuncio manual (`workflow_dispatch` de GitHub Actions). Envía un push con `{title, body}` libres a todos los `device_tokens`. `data` vacío → al tocar, la app abre Home. No deduplica: no toca `notified_news`. Devuelve `{sent, failed, pruned}`. |
@@ -143,7 +148,17 @@ steamwebapi.com responses are transformed in `steam/mappers.py` before being ret
 
 **History-derived enrichment** (`_enrich_prices` in `steam/services.py`): fires one concurrent `csfloat/history` call per item and overwrites the deltas with history-derived values. Cached per item in `_item_history_cache`. Used by `/market/*` (trending, movers) only — **not** by `/inventory`, which would need one API call per item and blow the 18/60s limiter. Inventory therefore relies entirely on `_inline_delta`.
 
-**Rate limiting** (`_history_limiter`, `steam/services.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched synchronously per request must fit one window — that's why `_TRENDING_LIMIT` and `_MOVERS_LIMIT` are ≤18.
+**Rate limiting** (`_history_limiter`, `steam/services.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched **in one pass** must fit one window — de ahí `_MOVERS_LIMIT` ≤18 y `_ENRICH_BATCH = 18`.
+
+**Cuáles son los costes de verdad** — solo una llamada escala con el número de items:
+
+| Llamada | Coste | ¿Escala? |
+|---|---|---|
+| `GET /items` (`max=_ITEMS_FETCH_MAX`) | 1 req | **No** — trae hasta 5000 items en una petición |
+| `GET /{market}/prices` ×2 (`_enrich_market_prices`) | 2 req, cacheadas | **No** |
+| `GET csfloat/history` (`_enrich_prices`) | 1 req **por item** | **Sí** ← el único |
+
+Por eso el trending está partido en dos ticks: **captura** (`/internal/trending-tick`, horario, ~500 items por 1 req) y **enriquecimiento** (`/internal/enrich-tick`, cada 15 min, 18 items). Los items aún sin enriquecer conservan los deltas de `_inline_delta`, que ya vienen gratis en el payload de `/items` — ninguna tarjeta se queda sin badge, solo con un delta algo menos preciso hasta que le toque la rueda.
 
 **Liquidity Score** (`steam/liquidity.py`): `liquidityScore` (0-100) responde "si listo este ítem hoy, ¿en cuánto se vende y a qué precio real?". Cinco componentes ponderados: velocidad de ventas (0.30), tiempo de venta (0.25), haircut contra el mejor bid (0.25), buy orders en espera (0.10), consistencia entre mercados (0.10).
 
@@ -160,9 +175,22 @@ La predicción es **determinista, no la hace el LLM**: se expone como tool y el 
 
 Tablas `tracked_skins` (qué seguimos) y `precios_historicos` (la serie) — SQL en `docs/sql/precios_historicos.sql`. **Ojo: hay que ejecutarlo en Supabase; si la tabla no existe, la predicción cae silenciosamente a CSFloat.**
 
+**Es la única relación declarada del esquema**: `precios_historicos.market_hash_name` → `tracked_skins.market_hash_name`, `ON DELETE CASCADE`. Formaliza lo que el código ya hacía — `capture()` inserta solo nombres que acaba de leer de `tracked_skins` — y cubre la ventana entre esa lectura y el upsert, que dura minutos por el `_history_limiter`. ⚠️ **Con `CASCADE`, cualquier limpieza que se añada a `tracked_skins` se lleva su serie histórica por delante.** Es lo deseable (dejar de seguir una skin debe borrar sus datos), pero conviene saberlo antes de escribir un `purge_stale` para skins como el que ya existe para `market_trending`.
+
+Las tablas de ranking **no** tienen FK a `tracked_skins` a propósito: no todo ítem del ranking se sigue. Pero el `trending-tick` sí registra el **top `TRENDING_TRACK_TOP` por turnover** (`register_tracked(..., "trending")`), para que los ítems más relevantes acumulen serie propia en vez de que toda predicción sobre ellos caiga a CSFloat. Es best-effort: un fallo ahí no tumba la captura del ranking.
+
+**La serie es UNA fila por skin y día** (`unique (market_hash_name, date)`). Dos consecuencias que gobiernan todo lo demás:
+
+- **Correr el price-tick más veces al día no da más puntos** — refina el precio de hoy sobre la misma fila. Los 20 puntos que exige `predict/service.py` son 20 **días** de calendario, sin atajo. (Un backfill desde el histórico de CSFloat sí los daría de golpe; no está hecho.)
+- **La skin que no entra en la corrida pierde el punto de ese día para siempre.** Por eso `PRICE_LOOKUP_CAP` (400) debe cubrir *toda* la población seguida, no rotarla: con 320 skins y cap 200 se quedaban 120 fuera cada día. Ojo, `tracked_skins` crece sola (270 de 320 vienen de `/inventory`, y ahora también del trending): si la población supera el cap, vuelven los huecos.
+
+⚠️ **`PRICE_LOOKUP_CAP` y el `--max-time` del workflow son un par.** Cada lookup pasa por `_history_limiter` (18/60s) → `(cap/18)*60 s` de corrida. `tests/test_price_cap_timeout.py` obliga a que quepa en el 80% del timeout; subir uno sin el otro rompe el test antes que el cron.
+
 `POST /internal/price-tick` (cron diario, `.github/workflows/price-tick.yml`) recorre las skins **menos-recientemente-capturadas primero** (`last_captured` asc, nulls primero) hasta `PRICE_LOOKUP_CAP`, hace lookup por-nombre vía el `_history_limiter` compartido, y hace upsert idempotente por `(market_hash_name, date)`. Best-effort: un fallo por skin no aborta la corrida. El seed inicial sale de `steam/data/tracked_seed.json`.
 
-**Dónde vive**: solo en `/inventory` y `/market/items` (search) — los dos endpoints que sirven la salida de `_map_item`. **`/market/trending` y `/market/movers` NO lo llevan**: sirven snapshots de Supabase vía `_row_to_item` (`steam/market_rows.py`), que no lo transporta. Meterlo ahí requeriría columnas nuevas en las tablas; se decidió no hacerlo, entre otras cosas porque `_row_to_item` ya omite ~10 campos requeridos de `ISkinCard` (`sold24h`, `offerVolume`, `hoursToSold`, `externalPrices`...) y ese agujero es trabajo aparte.
+**Dónde vive**: solo en `/inventory` y `/market/items` (search) — los dos endpoints que sirven la salida de `_map_item`. **`/market/trending` y `/market/movers` NO lo llevan**: sirven snapshots de Supabase vía `_row_to_item` (`steam/market_rows.py`), que no lo transporta.
+
+⚠️ **`liquidity_breakdown` NO puede añadirse a las tablas de ranking sin tocar el frontend a la vez.** El detail sheet (`skin-detail-sheet.component.ts`) detecta "esto es un snapshot pobre, pide el item completo a `/market/price`" con `liquidityBreakdown === undefined`, y es la única señal que le queda: el snapshot ya transporta volumen (`sold24h`, `offerVolume`, `hoursToSold`, `priceReal`, `steamUrl` — se añadieron para arreglar el `"Vol: undefined/24h"` que salía en todas las tarjetas). Si `_row_to_item` empieza a emitir `liquidityBreakdown`, el sheet deja de enriquecer **en silencio** y el bloque de liquidez queda vacío para siempre. El invariante está protegido por un assert en el self-check de `steam/market_rows.py` (`python -m steam.market_rows`).
 
 **`_MOVERS_SELECT` debe incluir `prices`** — es load-bearing: `/market/items` sí calcula el score, y sin ese campo la consistencia entre mercados se descartaría ahí pero no en `/inventory`, con lo que el mismo ítem puntuaría distinto según la pantalla.
 
@@ -186,6 +214,23 @@ All stores live in `stores.py`. **TODO:** replace with Redis before running mult
 | `_inventory_cache` | steam_id → (data, cached_at) | 23 h cache |
 | `_market_index_cache` | tf → (data, cached_at) | 23 h cache; keyed by timeframe |
 | `_item_history_cache` | `name:interval` → (data, cached_at) | 23 h cache; shared by `/item/history` and `_enrich_prices` |
+
+## Rankings de mercado (`market_trending` / `market_movers`)
+
+DDL en **`docs/sql/market_rankings.sql`** — **hay que ejecutarla a mano en Supabase**; si faltan las columnas, los ticks fallan. Capa de datos: `steam/rankings_repo.py` (`RankingRepo`, una instancia por tabla).
+
+Las dos tablas usan estrategias distintas y no hay que confundirlas:
+
+- **`market_movers`** — replace-all (`replace_snapshot`: DELETE + INSERT). Son 20 items que se recalculan enteros cada 15 min, no acumulan nada.
+- **`market_trending`** — upsert por `name` (`upsert_rows`). ~500 items capturados cada hora y enriquecidos en pasadas de 18 por un tick aparte. El DELETE no sirve aquí porque **borraría el enriquecimiento acumulado en cada captura**.
+
+Del upsert salen tres consecuencias:
+
+1. **`seen_at` + `purge_stale`** sustituyen al DELETE: sin ellos, un item que sale del ranking se quedaría en la tabla para siempre.
+2. **`enriched_at`** es la rueda: `fetch_stalest` ordena por él, nulls primero. Mismo patrón que `last_captured` en `price_history_repo`.
+3. **El orden ya no es `rank`** sino `turnover` desc (`fetch_ranked`): con upsert, un item que no aparece en una captura conserva el rank viejo y ocuparía una posición alta como fantasma. `rank` se sigue escribiendo, pero es informativo.
+
+⚠️ **PostgREST rellena con `null` las claves que falten si las filas de un mismo lote no son homogéneas.** Por eso captura y enriquecimiento van en llamadas separadas, y `enrich-tick` hace además dos upserts (los que tienen deltas y los que no) — mezclarlos borraría los deltas buenos que `_inline_delta` dejó en la captura.
 
 ## Market cap history (Supabase, persistent)
 
@@ -221,6 +266,8 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `CHAT_RAG_PRELOAD` | `true` | Precarga el contexto RAG en el system prompt de cada mensaje del chat (cuesta un embedding por turno). Con `false`, el modelo solo obtiene contexto si llama a la tool `buscar_contexto_rag` |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Modelo de generación del chat. El alias `-latest` resuelve a un modelo concreto que Google mueve sin avisar (hoy `gemini-3.5-flash`); en free tier la cuota es **20 req/día por proyecto y modelo**, así que conviene fijarlo a una versión explícita para que el gasto sea predecible. |
 | `PRICE_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/price-tick` (captura diaria de precios por skin). Must match the GitHub Actions secret. Startup warns if missing. |
+| `PRICE_LOOKUP_CAP` | `400` | Tope de skins por corrida del price-tick. **Va en pareja con `--max-time` en `price-tick.yml`** (1800 s): `(cap/18)*60` debe caber en el 80% del timeout. Debe cubrir toda la población de `tracked_skins`, no rotarla. |
+| `TRENDING_TRACK_TOP` | `80` | Cuántos ítems del trending (top por turnover) se registran en `tracked_skins` en cada captura horaria. `0` desactiva el registro. Súbelo solo si `PRICE_LOOKUP_CAP` tiene margen sobre la población seguida. |
 
 **Cuidado con los valores multilínea**: `python-dotenv` corta un valor que ocupe
 varias líneas sin comillas — se queda con la primera. `FIREBASE_SERVICE_ACCOUNT_JSON`
