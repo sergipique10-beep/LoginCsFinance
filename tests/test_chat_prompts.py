@@ -52,3 +52,29 @@ def test_recorta_chunks_largos():
 
 def test_prohibe_escribir_urls_en_la_respuesta():
     assert "No escribas URLs" in _SYSTEM_PROMPT_TOOLS
+
+
+def test_acota_el_uso_de_tools_a_datos_vivos():
+    """Cada tool es una vuelta extra del loop = otra llamada a Gemini.
+
+    Medido en producción: 'hola' (0 tools, 1 llamada) tarda 2.5-4.6 s, mientras
+    que una pregunta de precio (1 tool, 2 llamadas) se va a 21 s. Los casos de
+    charla y de concepto general deben responderse de memoria.
+    """
+    assert "CUÁNDO USAR HERRAMIENTAS:" in _SYSTEM_PROMPT_TOOLS
+    assert "quién eres" in _SYSTEM_PROMPT_TOOLS
+    assert "qué es el float" in _SYSTEM_PROMPT_TOOLS
+
+
+def test_pide_respuestas_cortas_por_defecto():
+    """Salida más corta = menos tokens generados = menos latencia por vuelta."""
+    assert "2-4 frases" in _SYSTEM_PROMPT_TOOLS
+
+
+def test_sigue_permitiendo_tools_para_datos_de_mercado():
+    """Contrapeso del recorte: un precio o una predicción SÍ exigen la tool.
+
+    Sin esto, acotar el uso de tools se convierte en un modelo que responde
+    precios de memoria — exactamente lo que el resto del prompt prohíbe.
+    """
+    assert "un precio, un movimiento, el inventario, una predicción" in _SYSTEM_PROMPT_TOOLS

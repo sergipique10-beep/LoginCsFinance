@@ -21,7 +21,7 @@ curl http://localhost:8000/
 
 ```bash
 # Tests (usar el Python del venv: el del sistema no tiene firebase_admin)
-venv\Scripts\python -m pytest tests/ -v
+venv\Scripts\python -m pytest tests/ -v      # 226 tests, todos en verde
 ```
 
 There is no lint command configured.
@@ -117,16 +117,25 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | GET | `/auth/steam/callback` | — | Validates nonce + Steam, emits one-time auth code |
 | POST | `/auth/token` | — | Exchanges auth code → access token + refresh cookie |
 | POST | `/auth/dev-token` | — | **Only active when `DEBUG=true`** — emits tokens without Steam |
+| POST | `/auth/review-login` | — | Credenciales fijas (`REVIEW_USER`/`REVIEW_PASSWORD`) para la revisión de Google Play, sin pasar por Steam. 404 si las tres vars no están puestas. |
 | POST | `/auth/refresh` | cookie | Rotates refresh token |
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
 | GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item` + enrichment below) |
+| POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio en `stores.py`). |
+| GET | `/market/movers` | Bearer | Top gainers/losers 24 h (hot & cold), servido del snapshot de `market_movers`. |
+| GET | `/market/items` | Bearer | **Búsqueda** por nombre — `?q=` es obligatorio (400 si falta). No es un listado. |
+| GET | `/market/price` | Bearer | Datos completos de un item (incluye `liquidityBreakdown`). |
+| GET | `/market/prices` | Bearer | Precios en tiempo real de un item por mercado. |
+| GET | `/market/providers` | Bearer | Mercados soportados como price provider. |
 | GET | `/market/index` | Bearer | Market index: `turnover24h`, `sold24h`, `delta24h`, `hottestItem`, `history[]` |
 | GET | `/market/cap-history` | Bearer | CS2 price-index history from Supabase, downsampled per `?tf=` (`7d`/`1m`/`3m`/`6m`/`1y`/`3y`). Returns `[{ ts, v, priceindex, realpriceindex, buyorderpriceindex, turnover24h }]`; `v = priceindex` (frontend contract). Invalid `tf` → 400. |
 | POST | `/internal/cap-tick` | `X-Cap-Token` | Hourly capture (called by external cron). Fetches `market-index/cs2`, upserts an hour-floored snapshot of the 4 fields into Supabase. Token compared via `secrets.compare_digest`; bad/missing → 401. |
 | POST | `/internal/trending-tick` | `X-Cap-Token` | Cron **horario** (`market-tick.yml`). Captura ~`_TRENDING_CAPTURE_LIMIT` items con 1 request a `/items` y hace **upsert por `name`** (no replace-all: borraría el enriquecimiento acumulado). Marca `seen_at` y purga las filas con >`_TRENDING_STALE_DAYS` sin aparecer. Devuelve `{ok, count, purged}`. |
 | POST | `/internal/enrich-tick` | `X-Cap-Token` | Cron **cada 15 min** (`market-tick.yml`). Rueda progresiva: coge los `_ENRICH_BATCH` items con `enriched_at` más antiguo (nulls primero) y les recalcula los deltas desde `csfloat/history`. Escribe `enriched_at` **siempre**, con datos o sin ellos — si no, un item sin histórico acapararía la rueda para siempre. Devuelve `{ok, count, with_deltas}`. |
+| POST | `/internal/movers-tick` | `X-Cap-Token` | Cron **cada 15 min** (`market-tick.yml`). Captura el ranking hot/cold en `market_movers` — replace-all (DELETE+INSERT): son 20 items que se recalculan enteros, no acumulan nada. |
 | POST | `/notifications/register-token` | Bearer | Registra un token FCM (`{ token, platform }`) para recibir push notifications. |
+| POST | `/notifications/delete-token` | Bearer | Borra un token FCM. Lo llama el frontend en logout, **antes** de invalidar el access token (si no, el POST saldría sin Bearer y fallaría en silencio). |
 | POST | `/internal/news-tick` | `X-News-Tick-Token` | Cron horario (GitHub Actions). Detecta noticias CS2 nuevas y envía push broadcast vía FCM. Idempotente (dedup por `gid` en `notified_news`). |
 | POST | `/internal/broadcast` | `X-Broadcast-Token` | Anuncio manual (`workflow_dispatch` de GitHub Actions). Envía un push con `{title, body}` libres a todos los `device_tokens`. `data` vacío → al tocar, la app abre Home. No deduplica: no toca `notified_news`. Devuelve `{sent, failed, pruned}`. |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
@@ -238,6 +247,18 @@ Del upsert salen tres consecuencias:
 3. **El orden ya no es `rank`** sino `turnover` desc (`fetch_ranked`): con upsert, un item que no aparece en una captura conserva el rank viejo y ocuparía una posición alta como fantasma. `rank` se sigue escribiendo, pero es informativo.
 
 ⚠️ **PostgREST rellena con `null` las claves que falten si las filas de un mismo lote no son homogéneas.** Por eso captura y enriquecimiento van en llamadas separadas, y `enrich-tick` hace además dos upserts (los que tienen deltas y los que no) — mezclarlos borraría los deltas buenos que `_inline_delta` dejó en la captura.
+
+## Push notifications — tablas (`device_tokens` / `notified_news`)
+
+DDL en **`docs/sql/device_tokens.sql`** — **hay que ejecutarlo a mano en Supabase**,
+igual que el resto del esquema. `device_tokens` (token FCM + plataforma) y
+`notified_news` (dedup por `gid`, lo que hace idempotente al news-tick). Sin
+`steam_id` a propósito: el contenido es broadcast, no personalizado por usuario.
+
+⚠️ Estas dos tablas se crearon vía el MCP de Supabase (`apply_migration`) y **su DDL
+nunca se versionó** — vivía solo dentro de un plan de implementación histórico. Se
+reconstruyó el 2026-09-14. Si el proyecto Supabase se recrea desde cero sin aplicarlo,
+el registro de token devuelve error y el news-tick no tiene dónde deduplicar.
 
 ## Market cap history (Supabase, persistent)
 

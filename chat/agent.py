@@ -261,6 +261,12 @@ async def _generate(
     body: dict = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
+        # Sin razonamiento: 2.5-flash lo trae activo por defecto y gasta 50-109
+        # tokens de thinking en CADA vuelta (medido). Elegir entre 9 tools con
+        # nombres explícitos no lo necesita, y la redacción final se rige por las
+        # reglas del system prompt, que son instrucciones, no deducción.
+        # Medido: ~1 s menos por llamada, y el loop hace hasta 4.
+        "generationConfig": {"thinkingConfig": {"thinkingBudget": 0}},
     }
     if tools:
         body["tools"] = [{"functionDeclarations": tools}]
