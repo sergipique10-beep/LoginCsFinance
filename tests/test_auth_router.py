@@ -13,6 +13,7 @@ import jwt
 import pytest
 
 import auth.router as auth_router
+import auth.service as auth_service
 from settings import JWT_SECRET
 from stores import CODE_TTL, TOKEN_AUDIENCE, _auth_codes, _refresh_store
 
@@ -294,3 +295,80 @@ def test_review_login_rejects_non_string_credentials(client, review_configured):
     resp = client.post("/auth/review-login", json={"user": 12345, "password": ["lista"]})
 
     assert resp.status_code == 401
+
+
+# ── SEC-01: el flag Secure de la cookie de refresh sale de COOKIE_SECURE ──────
+
+@pytest.mark.parametrize("secure", [True, False])
+def test_refresh_cookie_secure_flag_follows_the_setting(client, monkeypatch, secure):
+    """El flag no está hardcodeado: sigue a COOKIE_SECURE en los dos sentidos.
+
+    `_set_refresh_cookie` vive en `auth.service`, que importa COOKIE_SECURE por
+    valor — de ahí el setattr sobre ese módulo y no sobre `settings`.
+    """
+    monkeypatch.setattr(auth_service, "COOKIE_SECURE", secure)
+
+    resp = client.post("/auth/token", json={"code": _seed_code()})
+
+    assert resp.status_code == 200
+    assert ("secure" in resp.headers["set-cookie"].lower()) is secure
+
+
+@pytest.mark.parametrize("secure", [True, False])
+def test_logout_cookie_secure_flag_follows_the_setting(client, monkeypatch, secure):
+    """El logout borra la cookie con los mismos atributos con que se emitió.
+
+    Si no coinciden, el navegador no la considera la misma cookie y el borrado
+    no surte efecto.
+    """
+    monkeypatch.setattr(auth_router, "COOKIE_SECURE", secure)
+
+    resp = client.post("/auth/logout")
+
+    assert resp.status_code == 200
+    assert ("secure" in resp.headers["set-cookie"].lower()) is secure
+
+
+def test_cookie_secure_defaults_to_true_when_unset(monkeypatch):
+    """El invariante de SEC-01: sin la env var definida, Secure=True.
+
+    Un despliegue que olvide configurarla tiene que fallar hacia "no funciona
+    en local por HTTP", nunca hacia "va inseguro en producción".
+
+    Hay que neutralizar también el `.env`: `settings` llama a `load_dotenv()` al
+    importarse, y el `.env` de desarrollo trae `COOKIE_SECURE=false`. Sin esto
+    el test mediría el `.env` del worktree en vez del default del código, que es
+    justo lo que un despliegue sin la variable ejercitaría.
+    """
+    import importlib
+
+    import dotenv
+
+    import settings
+
+    monkeypatch.delenv("COOKIE_SECURE", raising=False)
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
+    monkeypatch.setattr(settings, "load_dotenv", lambda *a, **k: False)
+    reloaded = importlib.reload(settings)
+
+    try:
+        assert reloaded.COOKIE_SECURE is True
+    finally:
+        monkeypatch.undo()
+        importlib.reload(settings)
+
+
+@pytest.mark.parametrize("valor", ["false", "False", "0", "no", "NO"])
+def test_cookie_secure_accepts_the_documented_falsy_values(monkeypatch, valor):
+    """Los valores que apagan el flag son exactamente los documentados."""
+    import importlib
+
+    import settings
+
+    monkeypatch.setenv("COOKIE_SECURE", valor)
+    reloaded = importlib.reload(settings)
+
+    try:
+        assert reloaded.COOKIE_SECURE is False
+    finally:
+        importlib.reload(settings)

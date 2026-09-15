@@ -8,7 +8,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from settings import JWT_SECRET
+from settings import COOKIE_SECURE, JWT_SECRET
 from stores import (
     NONCE_TTL, CODE_TTL,
     RATE_LIMIT_CALLS, RATE_LIMIT_WINDOW,
@@ -108,7 +108,7 @@ def _set_refresh_cookie(response: JSONResponse, refresh_token: str) -> None:
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=False,  # TODO prod: change to True (see CLAUDE.md § Pendiente para producción)
+        secure=COOKIE_SECURE,
         samesite="strict",
         max_age=int(REFRESH_TOKEN_TTL.total_seconds()),
         path="/",  # "/" because the Angular proxy rewrites /api/auth/* → /auth/*

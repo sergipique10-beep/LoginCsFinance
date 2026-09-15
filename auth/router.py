@@ -12,6 +12,7 @@ import jwt
 from settings import (
     ALLOWED_REDIRECT_ORIGINS,
     BASE_URL,
+    COOKIE_SECURE,
     FRONTEND_URL,
     JWT_SECRET,
     REVIEW_PASSWORD,
@@ -243,7 +244,7 @@ async def logout(
         key="refresh_token",
         path="/",
         httponly=True,
-        secure=False,  # TODO prod: change to True (see CLAUDE.md § Pendiente para producción)
+        secure=COOKIE_SECURE,
         samesite="strict",
     )
     return response

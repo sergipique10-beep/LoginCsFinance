@@ -9,6 +9,12 @@ STEAM_API_KEY = os.getenv("STEAM_API_KEY", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "change-this-secret")
 STEAM_GAME = os.getenv("STEAM_GAME", "cs2")
 
+# Flag `Secure` de la cookie de refresh (SEC-01). Default `true` a propósito:
+# si alguien olvida la variable, el fallo es "no funciona en local por HTTP",
+# no "va inseguro en producción" — el error cae del lado seguro.
+# En dev local se pone COOKIE_SECURE=false en el .env.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() not in ("false", "0", "no")
+
 # Supabase: histórico persistente del índice de precio CS2.
 # El backend usa la service_role key (bypassa RLS) — nunca la anon/publishable.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")

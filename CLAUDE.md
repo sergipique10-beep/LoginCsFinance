@@ -281,6 +281,7 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `STEAM_GAME` | `cs2` | Game ID passed to the steamwebapi.com inventory endpoint |
 | `ALLOWED_REDIRECT_ORIGINS` | *(value of FRONTEND_URL)* | Comma-separated whitelist of allowed post-login redirect origins (add `myapp://` for Android) |
 | `DEBUG` | `false` | Set `true` to activate `POST /auth/dev-token` |
+| `COOKIE_SECURE` | `true` | Flag `Secure` de la cookie de refresh. Default seguro a propósito: olvidarla rompe el login local por HTTP, nunca expone la cookie en prod. En local: `false`. |
 | `SUPABASE_URL` | *(empty)* | URL of the `cs-finance` Supabase project. Startup warns if missing. |
 | `SUPABASE_SERVICE_KEY` | *(empty)* | service_role key (bypasses RLS) — never the anon/publishable key. Startup warns if missing. |
 | `CAP_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/cap-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
@@ -317,7 +318,7 @@ The lifespan also creates a shared `httpx.AsyncClient` stored in `app.state.http
 
 Before any production deployment:
 
-- `auth/service.py` `_set_refresh_cookie` and `auth/router.py` `logout`: `secure=False` → `secure=True`
+- ~~`auth/service.py` `_set_refresh_cookie` and `auth/router.py` `logout`: `secure=False` → `secure=True`~~ — resuelto (SEC-01): ahora sale de `COOKIE_SECURE`, que por defecto es `true`. No dejar `COOKIE_SECURE=false` en el entorno de producción.
 - `.env`: `BASE_URL` and `FRONTEND_URL` → `https://` URLs
 - uvicorn: add `--ssl-certfile` / `--ssl-keyfile` (or terminate TLS at a reverse proxy)
 - Replace `stores.py` in-memory dicts with Redis before running multiple workers
