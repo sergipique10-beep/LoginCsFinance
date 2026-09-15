@@ -149,6 +149,11 @@ async def dev_token(request: Request):
     return response
 
 
+def _eq(a: str, b: str) -> bool:
+    """Comparación de tiempo constante que admite cualquier str (SEC-04)."""
+    return secrets.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
 @router.post("/auth/review-login", summary="Acceso de revisión (Google Play) sin Steam")
 async def review_login(request: Request):
     _rate_limit(_get_client_ip(request))
@@ -159,12 +164,13 @@ async def review_login(request: Request):
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid request body")
-    # Coerce to str: non-str / non-ASCII JSON values make compare_digest raise
-    # TypeError → 500, reachable pre-auth by any anonymous caller.
+    # compare_digest sobre `str` sólo admite ASCII: un acento lanzaba TypeError
+    # → 500 alcanzable pre-auth por cualquier anónimo (SEC-04). Sobre `bytes` no
+    # tiene esa restricción y sigue siendo de tiempo constante, así que una
+    # credencial no-ASCII acaba en 401, que es la respuesta correcta.
     user = str(body.get("user", ""))
     password = str(body.get("password", ""))
-    if not (secrets.compare_digest(user, REVIEW_USER)
-            and secrets.compare_digest(password, REVIEW_PASSWORD)):
+    if not (_eq(user, REVIEW_USER) and _eq(password, REVIEW_PASSWORD)):
         raise HTTPException(status_code=401, detail="Invalid review credentials")
 
     access_token, refresh_token = _issue_tokens(REVIEW_STEAM_ID)

@@ -11,6 +11,7 @@ Eso vale también para el dev-token: desde SEC-02 el router lee
 tiene efecto — hay que parchear `auth.router.DEV_TOKEN_ENABLED`. La combinatoria
 DEBUG × ENV se prueba aparte, sobre `settings.py` directamente.
 """
+import secrets
 import time
 
 import jwt
@@ -299,26 +300,60 @@ def test_review_login_rejects_a_password_prefix(client, review_configured):
     assert resp.status_code == 401
 
 
-def test_review_login_uses_a_constant_time_comparison(client, review_configured):
-    """Prueba de mutación de CAL-01: detecta `compare_digest` → `==`.
+def test_review_login_uses_a_constant_time_comparison(client, review_configured, monkeypatch):
+    """Prueba de mutación: detecta `compare_digest` → `==`.
 
-    `secrets.compare_digest` sobre `str` sólo admite ASCII; con un carácter
-    fuera de ese rango lanza `TypeError`. La app no tiene handler para él, así
-    que TestClient lo propaga en vez de devolver una respuesta.
+    Antes de SEC-04 esto se afirmaba vía el `TypeError` que lanza
+    `compare_digest` sobre un `str` no-ASCII. Esa huella ya no existe: ahora se
+    compara sobre `bytes`, que aceptan cualquier carácter (y ese era justo el
+    bug — un anónimo tumbaba el endpoint con un acento).
 
-    Ese `TypeError` es la huella observable de la comparación en tiempo
-    constante: `==` compara cualquier str sin quejarse y devolvería un 401
-    normal. Por eso el test afirma la excepción y no un código de estado — si
-    alguien sustituye `compare_digest` por `==`, aquí deja de haber excepción y
-    el test falla.
-
-    Ojo: esto documenta el comportamiento actual, no lo bendice. Un anónimo
-    puede provocar el TypeError pre-auth mandando `user` con un acento. Es un
-    500 (o un crash del worker) alcanzable sin credenciales — ver nota en
-    docs/handoff.md.
+    La vía de recambio es un espía: se envuelve `secrets.compare_digest` y se
+    exige que el endpoint pase por él. Sustituirlo por `==` deja el contador a
+    cero y el test falla, que es lo que tiene que seguir cazando.
     """
-    with pytest.raises(TypeError, match="non-ASCII"):
-        client.post("/auth/review-login", json={"user": "revisör", "password": "clave-secreta"})
+    llamadas = []
+    real = secrets.compare_digest
+
+    def espia(a, b):
+        llamadas.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(auth_router.secrets, "compare_digest", espia)
+
+    resp = client.post("/auth/review-login", json={"user": "revisor", "password": "clave-secreta"})
+
+    assert resp.status_code == 200
+    assert llamadas, "review-login no pasó por secrets.compare_digest"
+    # Sobre bytes: es lo que quita la restricción ASCII sin perder el tiempo constante.
+    assert all(isinstance(a, bytes) and isinstance(b, bytes) for a, b in llamadas)
+
+
+def test_review_login_rejects_non_ascii_credentials_with_401(client, review_configured):
+    """SEC-04: el bug original — un acento provocaba un TypeError → 500 pre-auth.
+
+    Es una credencial equivocada, no un error del servidor: 401.
+    """
+    resp = client.post("/auth/review-login", json={"user": "revisör", "password": "clave-secreta"})
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid review credentials"
+
+
+def test_review_login_accepts_non_ascii_correct_credentials(client, monkeypatch):
+    """El reverso: si las credenciales configuradas llevan acento, deben colar.
+
+    Comparar bytes no sólo evita el 500 — hace que una credencial no-ASCII
+    legítima funcione, cosa que con `str` era imposible.
+    """
+    monkeypatch.setattr(auth_router, "REVIEW_USER", "revisör")
+    monkeypatch.setattr(auth_router, "REVIEW_PASSWORD", "cläve-secreta")
+    monkeypatch.setattr(auth_router, "REVIEW_STEAM_ID", STEAM_ID)
+
+    resp = client.post("/auth/review-login", json={"user": "revisör", "password": "cläve-secreta"})
+
+    assert resp.status_code == 200
+    assert _decode(resp.json()["access_token"])["sub"] == STEAM_ID
 
 
 def test_review_login_rejects_non_string_credentials(client, review_configured):
