@@ -1,4 +1,3 @@
-import os
 import re
 import secrets
 import time
@@ -13,6 +12,7 @@ from settings import (
     ALLOWED_REDIRECT_ORIGINS,
     BASE_URL,
     COOKIE_SECURE,
+    DEV_TOKEN_ENABLED,
     FRONTEND_URL,
     JWT_SECRET,
     REVIEW_PASSWORD,
@@ -132,8 +132,9 @@ async def exchange_token(request: Request):
 
 @router.post("/auth/dev-token", summary="[DEV ONLY] Emite tokens para un steam_id sin pasar por Steam OpenID")
 async def dev_token(request: Request):
-    # Only active when DEBUG=true in .env — returns 404 in any other environment
-    if os.getenv("DEBUG", "false").lower() != "true":
+    # Exige DEBUG=true Y ENV!=production (SEC-02): un DEBUG colado en Render no
+    # basta para revivir el endpoint. 404 en cualquier otro caso.
+    if not DEV_TOKEN_ENABLED:
         raise HTTPException(status_code=404, detail="Not found")
 
     body = await request.json()

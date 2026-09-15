@@ -15,6 +15,15 @@ STEAM_GAME = os.getenv("STEAM_GAME", "cs2")
 # En dev local se pone COOKIE_SECURE=false en el .env.
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() not in ("false", "0", "no")
 
+# Entorno de ejecución y modo debug (SEC-02).
+ENV = os.getenv("ENV", "development")  # development | production
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+# POST /auth/dev-token emite tokens para cualquier SteamID sin pasar por Steam.
+# Exige AMBAS cosas: DEBUG activo Y no estar en producción. Con ENV=production
+# fijo en Render, el endpoint queda muerto pase lo que pase con DEBUG.
+DEV_TOKEN_ENABLED = DEBUG and ENV != "production"
+
 # Supabase: histórico persistente del índice de precio CS2.
 # El backend usa la service_role key (bypassa RLS) — nunca la anon/publishable.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")

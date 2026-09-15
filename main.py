@@ -12,6 +12,7 @@ from settings import (
     REVIEW_USER, REVIEW_PASSWORD, REVIEW_STEAM_ID,
     FIREBASE_SERVICE_ACCOUNT_JSON, NEWS_TICK_TOKEN, BROADCAST_TOKEN,
     GEMINI_API_KEY, RAG_INGEST_TOKEN, PRICE_TICK_TOKEN,
+    COOKIE_SECURE, DEV_TOKEN_ENABLED, ENV,
 )
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
@@ -26,6 +27,17 @@ logger = logging.getLogger("uvicorn.error")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if DEV_TOKEN_ENABLED:
+        logger.warning(
+            "[startup] /auth/dev-token ACTIVO (DEBUG=true, ENV=%s) — emite tokens "
+            "para cualquier SteamID sin pasar por Steam. NUNCA en producción.",
+            ENV,
+        )
+    if not COOKIE_SECURE:
+        logger.warning(
+            "[startup] COOKIE_SECURE=false — la cookie de refresh viaja sin el "
+            "flag Secure. Correcto sólo en local por HTTP."
+        )
     if JWT_SECRET == "change-this-secret":
         logger.warning(
             "JWT_SECRET es el valor por defecto inseguro — "

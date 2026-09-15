@@ -60,7 +60,7 @@ LoginCsFinance/
                     #               _issue_tokens, _set_refresh_cookie, require_jwt
     router.py       # APIRouter: /auth/steam, /auth/steam/callback, /auth/token,
                     #            /auth/dev-token, /auth/refresh, /auth/logout
-                    # Note: reads DEBUG via os.getenv() directly, not settings.py
+                    # Note: /auth/dev-token gated by settings.DEV_TOKEN_ENABLED (DEBUG and ENV != production)
   steam/
     mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
                     #   _map_news_item, _fetch_og_image, _clean_news_content,
@@ -116,7 +116,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | GET | `/auth/steam` | — | Rate-limited; accepts `?platform=android` for Android redirect origin |
 | GET | `/auth/steam/callback` | — | Validates nonce + Steam, emits one-time auth code |
 | POST | `/auth/token` | — | Exchanges auth code → access token + refresh cookie |
-| POST | `/auth/dev-token` | — | **Only active when `DEBUG=true`** — emits tokens without Steam |
+| POST | `/auth/dev-token` | — | **Only active when `DEBUG=true` AND `ENV != production`** — emits tokens without Steam. Startup logs a loud warning when enabled. |
 | POST | `/auth/review-login` | — | Credenciales fijas (`REVIEW_USER`/`REVIEW_PASSWORD`) para la revisión de Google Play, sin pasar por Steam. 404 si las tres vars no están puestas. |
 | POST | `/auth/refresh` | cookie | Rotates refresh token |
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
@@ -280,7 +280,8 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. |
 | `STEAM_GAME` | `cs2` | Game ID passed to the steamwebapi.com inventory endpoint |
 | `ALLOWED_REDIRECT_ORIGINS` | *(value of FRONTEND_URL)* | Comma-separated whitelist of allowed post-login redirect origins (add `myapp://` for Android) |
-| `DEBUG` | `false` | Set `true` to activate `POST /auth/dev-token` |
+| `DEBUG` | `false` | Set `true` to activate `POST /auth/dev-token`. No basta por sí sola: también hace falta `ENV != production`. |
+| `ENV` | `development` | `development` \| `production`. En Render va **siempre** `production`: mata `/auth/dev-token` aunque `DEBUG` se cuele a `true`. |
 | `COOKIE_SECURE` | `true` | Flag `Secure` de la cookie de refresh. Default seguro a propósito: olvidarla rompe el login local por HTTP, nunca expone la cookie en prod. En local: `false`. |
 | `SUPABASE_URL` | *(empty)* | URL of the `cs-finance` Supabase project. Startup warns if missing. |
 | `SUPABASE_SERVICE_KEY` | *(empty)* | service_role key (bypasses RLS) — never the anon/publishable key. Startup warns if missing. |
@@ -319,6 +320,7 @@ The lifespan also creates a shared `httpx.AsyncClient` stored in `app.state.http
 Before any production deployment:
 
 - ~~`auth/service.py` `_set_refresh_cookie` and `auth/router.py` `logout`: `secure=False` → `secure=True`~~ — resuelto (SEC-01): ahora sale de `COOKIE_SECURE`, que por defecto es `true`. No dejar `COOKIE_SECURE=false` en el entorno de producción.
+- `.env` de producción: `ENV=production` (SEC-02) — desactiva `/auth/dev-token` de forma permanente
 - `.env`: `BASE_URL` and `FRONTEND_URL` → `https://` URLs
 - uvicorn: add `--ssl-certfile` / `--ssl-keyfile` (or terminate TLS at a reverse proxy)
 - Replace `stores.py` in-memory dicts with Redis before running multiple workers

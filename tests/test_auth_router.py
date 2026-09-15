@@ -4,8 +4,12 @@ Ojo con cómo se parchea la configuración aquí: `auth/router.py` hace
 `from settings import REVIEW_USER, ...`, que copia el **valor** en el namespace
 del módulo al importarlo. Parchear `settings.REVIEW_USER` (o un `setenv`) no
 tiene ningún efecto sobre el router; hay que parchear `auth.router.REVIEW_USER`.
-`DEBUG` es la excepción: el router lo lee con `os.getenv()` en cada request, así
-que ahí sí vale `monkeypatch.setenv`.
+
+Eso vale también para el dev-token: desde SEC-02 el router lee
+`DEV_TOKEN_ENABLED` (constante calculada en `settings.py` a partir de `DEBUG` y
+`ENV`), no `os.getenv("DEBUG")` en cada request. Un `monkeypatch.setenv` ya no
+tiene efecto — hay que parchear `auth.router.DEV_TOKEN_ENABLED`. La combinatoria
+DEBUG × ENV se prueba aparte, sobre `settings.py` directamente.
 """
 import time
 
@@ -178,24 +182,16 @@ def test_logout_without_cookie_still_succeeds(client):
 
 # ── /auth/dev-token: 404 fuera de DEBUG ───────────────────────────────────────
 
-def test_dev_token_is_404_when_debug_is_false(client, monkeypatch):
-    monkeypatch.setenv("DEBUG", "false")
+def test_dev_token_is_404_when_disabled(client, monkeypatch):
+    monkeypatch.setattr(auth_router, "DEV_TOKEN_ENABLED", False)
 
     resp = client.post("/auth/dev-token", json={"steam_id": STEAM_ID})
 
     assert resp.status_code == 404
 
 
-def test_dev_token_is_404_when_debug_is_unset(client, monkeypatch):
-    monkeypatch.delenv("DEBUG", raising=False)
-
-    resp = client.post("/auth/dev-token", json={"steam_id": STEAM_ID})
-
-    assert resp.status_code == 404
-
-
-def test_dev_token_issues_tokens_when_debug_is_true(client, monkeypatch):
-    monkeypatch.setenv("DEBUG", "true")
+def test_dev_token_issues_tokens_when_enabled(client, monkeypatch):
+    monkeypatch.setattr(auth_router, "DEV_TOKEN_ENABLED", True)
 
     resp = client.post("/auth/dev-token", json={"steam_id": STEAM_ID})
 
@@ -204,11 +200,46 @@ def test_dev_token_issues_tokens_when_debug_is_true(client, monkeypatch):
 
 
 def test_dev_token_rejects_a_malformed_steam_id(client, monkeypatch):
-    monkeypatch.setenv("DEBUG", "true")
+    monkeypatch.setattr(auth_router, "DEV_TOKEN_ENABLED", True)
 
     resp = client.post("/auth/dev-token", json={"steam_id": "123"})
 
     assert resp.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "env, debug, enabled",
+    [
+        ("production", "true", False),   # SEC-02: el guardarraíl que importa
+        ("production", "false", False),
+        ("development", "true", True),
+        ("development", "false", False),
+        (None, "true", True),            # ENV sin definir → development
+        ("production", None, False),
+    ],
+)
+def test_dev_token_enabled_requires_debug_and_non_production(monkeypatch, env, debug, enabled):
+    """La combinatoria DEBUG x ENV, sobre `settings.py` (donde se calcula).
+
+    El caso que da sentido a SEC-02 es el primero: un DEBUG=true colado en
+    Render no basta para revivir el endpoint si ENV=production.
+    """
+    import importlib
+
+    import settings
+
+    for name, value in (("ENV", env), ("DEBUG", debug)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    # load_dotenv() no pisa lo que ya está en el entorno, así que el setenv manda.
+    reloaded = importlib.reload(settings)
+
+    try:
+        assert reloaded.DEV_TOKEN_ENABLED is enabled
+    finally:
+        importlib.reload(settings)
 
 
 # ── /auth/review-login: 404 sin configurar, 401 con credenciales malas ────────
