@@ -117,3 +117,14 @@ PRICE_LOOKUP_CAP = int(os.getenv("PRICE_LOOKUP_CAP", "150"))
 # un no-op barato y no pisa `first_seen` ni `last_captured`.
 # 80 ≈ el margen que deja PRICE_LOOKUP_CAP sobre las ~320 skins ya seguidas.
 TRENDING_TRACK_TOP = int(os.getenv("TRENDING_TRACK_TOP", "80"))
+
+# Alertas de precio por skin (POST /internal/alerts-tick, cron horario).
+ALERTS_TICK_TOKEN = os.getenv("ALERTS_TICK_TOKEN", "")
+# Alertas evaluadas por tick. Cada skin distinta cuesta 1 req a steamwebapi por
+# el mismo limiter que el price-tick (18/60 s): 18 = una ventana, ≤432 req/día
+# con el cron horario. Las que no entran rotan al siguiente tick (LRU por
+# last_checked_at).
+ALERTS_LOOKUP_CAP = int(os.getenv("ALERTS_LOOKUP_CAP", "18"))
+# Tope de alertas activas por usuario: acota la cuota que un solo usuario
+# puede consumir y el tamaño de la rueda.
+ALERTS_MAX_PER_USER = int(os.getenv("ALERTS_MAX_PER_USER", "20"))

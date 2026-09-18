@@ -93,6 +93,11 @@ LoginCsFinance/
                       # send_broadcast (wrapper), check_and_notify_new_news
     router.py         # APIRouter: /notifications/register-token, /notifications/delete-token,
                       #            /internal/news-tick, /internal/broadcast
+  alerts/
+    repo.py           # Supabase data layer: price_alerts (reuses steam/cap_history_repo's client)
+    service.py        # create_alert (validación + tope + dedup), evaluate_alerts (el tick),
+                      # condition_met. Excepciones AlertError → HTTP en el router
+    router.py         # APIRouter: GET/POST /alerts, DELETE /alerts/{id}, /internal/alerts-tick
 ```
 
 **Dependency order** (no circular imports):
@@ -139,6 +144,10 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/notifications/delete-token` | Bearer | Borra un token FCM. Lo llama el frontend en logout, **antes** de invalidar el access token (si no, el POST saldría sin Bearer y fallaría en silencio). |
 | POST | `/internal/news-tick` | `X-News-Tick-Token` | Cron horario (GitHub Actions). Detecta noticias CS2 nuevas y envía push broadcast vía FCM. Idempotente (dedup por `gid` en `notified_news`). |
 | POST | `/internal/broadcast` | `X-Broadcast-Token` | Anuncio manual (`workflow_dispatch` de GitHub Actions). Envía un push con `{title, body}` libres a todos los `device_tokens`. `data` vacío → al tocar, la app abre Home. No deduplica: no toca `notified_news`. Devuelve `{sent, failed, pruned}`. |
+| GET | `/alerts` | Bearer | Alertas de precio del usuario (activas primero, luego disparadas). |
+| POST | `/alerts` | Bearer | Crea una alerta `{market_hash_name, direction: above\|below, threshold}` de **un solo disparo**. 201. 409 si ya hay una activa idéntica; 422 si supera `ALERTS_MAX_PER_USER`; 404 si la skin no se resuelve. El dueño sale del `sub` del JWT. |
+| DELETE | `/alerts/{id}` | Bearer | Borra una alerta propia. 404 si no existe **o es de otro usuario** (no se revela cuál). |
+| POST | `/internal/alerts-tick` | `X-Alerts-Tick-Token` | Cron horario (`alerts-tick.yml`, minuto :50). Evalúa hasta `ALERTS_LOOKUP_CAP` alertas activas (LRU por `last_checked_at`), 1 lookup por skin distinta vía el `_history_limiter`, marca disparadas **antes** de enviar y manda push solo a los tokens del dueño. Devuelve `{evaluated, triggered, sent, errors, pendientes}`. |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited |
 | POST | `/rag/chat` | Bearer | Chat con el asistente Sharky (Gemini), con historial de turnos. Hace retrieval del RAG en cada mensaje (inyectado en el system prompt) y devuelve `reply` + `sources[]` (dedup por URL). Function calling multi-tool sobre `tools/` |
@@ -274,6 +283,30 @@ nunca se versionó** — vivía solo dentro de un plan de implementación histó
 reconstruyó el 2026-09-14. Si el proyecto Supabase se recrea desde cero sin aplicarlo,
 el registro de token devuelve error y el news-tick no tiene dónde deduplicar.
 
+## Alertas de precio (`price_alerts`)
+
+DDL en **`docs/sql/price_alerts.sql`** — **hay que ejecutarlo a mano en Supabase**.
+Requiere `device_tokens.steam_id` (PUSH-06): sin él no hay a quién mandar la push.
+
+Una alerta es de **un solo disparo**: `triggered_at` null = activa; con fecha = disparada,
+fuera de la rueda y conservada para que el usuario la vea. `last_checked_at` es el cursor
+LRU del tick (mismo patrón que `tracked_skins.last_captured`).
+
+Tres invariantes del tick (`alerts/service.py:evaluate_alerts`):
+
+- **Una petición por skin distinta, no por alerta**, y como mucho `ALERTS_LOOKUP_CAP` (18)
+  alertas por tick = una ventana del `_history_limiter` → ≤432 req/día con el cron horario.
+  Es el mismo lookup que el price-tick (`price_capture._lookup_item`), no otro cliente.
+- **`mark_triggered` va ANTES de `send_to_tokens`.** Si el envío revienta a medias, el
+  siguiente tick no la reenvía. Se sacrifica un aviso perdido a cambio de no duplicar
+  nunca. Si es `mark_triggered` lo que falla, no se envía.
+- **`mark_checked` marca las evaluadas aunque el lookup fallara** — si no, una skin
+  delistada acapararía la rueda para siempre (mismo criterio que `enrich-tick`).
+
+Al crear: si la skin no está en `tracked_skins`, se resuelve con un lookup (1 req, solo en
+creación) y se registra con `source='alert'` para que entre en la captura diaria. La
+condición es inclusiva en el borde (`>=` / `<=`).
+
 ## Market cap history (Supabase, persistent)
 
 The CS2 price-index history is **persisted in a dedicated Supabase Postgres project** (`cs-finance`), not in memory. This survives restarts/redeploys (ephemeral disk on Render free wiped the old JSON every deploy).
@@ -311,6 +344,9 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `GEMINI_MODEL` | `gemini-flash-latest` | Modelo de generación del chat. El alias `-latest` resuelve a un modelo concreto que Google mueve sin avisar (hoy `gemini-3.5-flash`); en free tier la cuota es **20 req/día por proyecto y modelo**, así que conviene fijarlo a una versión explícita para que el gasto sea predecible. |
 | `PRICE_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/price-tick` (captura diaria de precios por skin). Must match the GitHub Actions secret. Startup warns if missing. |
 | `PRICE_LOOKUP_CAP` | `150` | Skins por **lote** del price-tick (el workflow repite hasta `pendientes: 0`). ~8 min por lote. No subirlo sin más: a ~22 min Render free devuelve 502 y se pierde la corrida. |
+| `ALERTS_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/alerts-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
+| `ALERTS_LOOKUP_CAP` | `18` | Alertas evaluadas por tick. Cada skin distinta cuesta 1 req por el `_history_limiter`; 18 = una ventana. Las que no entran rotan al siguiente tick. |
+| `ALERTS_MAX_PER_USER` | `20` | Tope de alertas activas por usuario. Acota la cuota que un solo usuario puede consumir. |
 | `TRENDING_TRACK_TOP` | `80` | Cuántos ítems del trending (top por turnover) se registran en `tracked_skins` en cada captura horaria. `0` desactiva el registro. Súbelo solo si `PRICE_LOOKUP_CAP` tiene margen sobre la población seguida. |
 
 **Cuidado con los valores multilínea**: `python-dotenv` corta un valor que ocupe

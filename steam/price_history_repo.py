@@ -130,6 +130,18 @@ async def mark_captured(names: list[str], date_iso: str) -> None:
     await asyncio.to_thread(_do)
 
 
+async def is_tracked(name: str) -> bool:
+    def _do() -> bool:
+        resp = (get_supabase().table(_TRACKED)
+                .select("market_hash_name")
+                .eq("market_hash_name", name)
+                .limit(1)
+                .execute())
+        return bool(resp.data)
+
+    return await asyncio.to_thread(_do)
+
+
 async def count_tracked() -> int:
     """Número de filas en tracked_skins (para el seed idempotente)."""
     def _do() -> int:

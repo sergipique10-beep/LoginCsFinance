@@ -1,0 +1,22 @@
+name: alerts-tick
+
+# Cron externo que evalúa las alertas de precio activas y manda push a sus
+# dueños. Minuto :50 para no coincidir con cap-tick (:05), news-tick (:15) ni
+# enrich/movers (:00/:15/:30/:45). Cada tick cuesta como mucho ALERTS_LOOKUP_CAP
+# requests a steamwebapi (18 por defecto → ≤432/día).
+
+on:
+  schedule:
+    - cron: "50 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /internal/alerts-tick
+        run: |
+          curl -fsS -X POST "$BASE_URL/internal/alerts-tick" -H "X-Alerts-Tick-Token: $ALERTS_TICK_TOKEN"
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          ALERTS_TICK_TOKEN: ${{ secrets.ALERTS_TICK_TOKEN }}

@@ -11,7 +11,7 @@ from settings import (
     SUPABASE_URL, SUPABASE_SERVICE_KEY, CAP_TICK_TOKEN,
     REVIEW_USER, REVIEW_PASSWORD, REVIEW_STEAM_ID,
     FIREBASE_SERVICE_ACCOUNT_JSON, NEWS_TICK_TOKEN, BROADCAST_TOKEN,
-    GEMINI_API_KEY, RAG_INGEST_TOKEN, PRICE_TICK_TOKEN,
+    GEMINI_API_KEY, RAG_INGEST_TOKEN, PRICE_TICK_TOKEN, ALERTS_TICK_TOKEN,
     COOKIE_SECURE, DEV_TOKEN_ENABLED, ENV,
 )
 from middleware import SecurityHeadersMiddleware
@@ -19,6 +19,7 @@ from auth.router import router as auth_router
 from steam.routes import router as steam_router
 from steam.services import _fetch_static_images
 from notifications.router import router as notifications_router
+from alerts.router import router as alerts_router
 from rag.router import router as rag_router
 from chat.router import router as chat_router
 
@@ -90,6 +91,11 @@ async def lifespan(app: FastAPI):
             "PRICE_TICK_TOKEN no está configurada — "
             "la captura de precios históricos (POST /internal/price-tick) no funcionará"
         )
+    if not ALERTS_TICK_TOKEN:
+        logger.warning(
+            "ALERTS_TICK_TOKEN no está configurada — "
+            "las alertas de precio (POST /internal/alerts-tick) no se evaluarán"
+        )
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
     await _fetch_static_images(app.state.http_client)
 
@@ -110,13 +116,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],  # DELETE: /alerts/{id}
     allow_headers=["Authorization", "Content-Type"],
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_router)
 app.include_router(steam_router)
 app.include_router(notifications_router)
+app.include_router(alerts_router)
 app.include_router(rag_router)
 app.include_router(chat_router)
 
