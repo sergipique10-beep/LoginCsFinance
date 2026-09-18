@@ -8,7 +8,7 @@ import logging
 
 import httpx
 import firebase_admin
-from firebase_admin import credentials, messaging
+from firebase_admin import credentials, exceptions as fb_exceptions, messaging
 
 from settings import FIREBASE_SERVICE_ACCOUNT_JSON
 from steam.mappers import _clean_news_content
@@ -34,38 +34,76 @@ def _get_firebase_app() -> firebase_admin.App:
     return _firebase_app
 
 
-async def register_token(token: str, platform: str) -> None:
-    await repo.register_device_token(token, platform)
+async def register_token(token: str, platform: str, steam_id: str) -> None:
+    await repo.register_device_token(token, platform, steam_id)
 
 
-async def send_broadcast(title: str, body: str, data: dict[str, str]) -> dict[str, int]:
-    tokens = await repo.list_device_tokens()
+# FCM rechaza un MulticastMessage con más de 500 tokens.
+_FCM_MULTICAST_LIMIT = 500
+
+# Canal Android. Tiene que coincidir con el que crea el frontend
+# (FirebaseMessaging.createChannel) y con default_notification_channel_id del
+# manifest; si no existe en el dispositivo, Android usa el canal por defecto.
+ANDROID_CHANNEL_ID = "cs_finance"
+
+# Errores de FCM que identifican al TOKEN como muerto, nunca al payload:
+# app desinstalada / token caducado, o token de otro proyecto Firebase.
+_TOKEN_DEAD_ERRORS = (messaging.UnregisteredError, messaging.SenderIdMismatchError)
+
+
+def _is_prunable(exc: Exception | None, any_success: bool) -> bool:
+    if isinstance(exc, _TOKEN_DEAD_ERRORS):
+        return True
+    # InvalidArgumentError es permanente para un token malformado, pero también
+    # lo lanza un payload inválido — y en ese caso fallan TODOS los tokens a la
+    # vez. Solo se poda si algún envío del mismo lote tuvo éxito: eso descarta
+    # que el problema sea el mensaje.
+    return isinstance(exc, fb_exceptions.InvalidArgumentError) and any_success
+
+
+async def send_to_tokens(tokens: list[str], title: str, body: str, data: dict[str, str]) -> dict[str, int]:
+    """Envía la misma push a una lista concreta de tokens y poda los muertos.
+
+    Única función de envío del backend: el broadcast de noticias y las push
+    personalizadas (alertas de precio) pasan por aquí.
+    """
     if not tokens:
         return {"sent": 0, "failed": 0, "pruned": 0}
 
     def _do():
-        message = messaging.MulticastMessage(
-            notification=messaging.Notification(title=title, body=body),
-            data=data,
-            tokens=tokens,
-        )
-        return messaging.send_each_for_multicast(message, app=_get_firebase_app())
+        app = _get_firebase_app()
+        responses = []
+        for i in range(0, len(tokens), _FCM_MULTICAST_LIMIT):
+            message = messaging.MulticastMessage(
+                notification=messaging.Notification(title=title, body=body),
+                data=data,
+                android=messaging.AndroidConfig(
+                    notification=messaging.AndroidNotification(channel_id=ANDROID_CHANNEL_ID),
+                ),
+                tokens=tokens[i:i + _FCM_MULTICAST_LIMIT],
+            )
+            responses.extend(messaging.send_each_for_multicast(message, app=app).responses)
+        return responses
 
-    response = await asyncio.to_thread(_do)
+    responses = await asyncio.to_thread(_do)
 
-    sent = sum(1 for r in response.responses if r.success)
-    failed = len(response.responses) - sent
+    sent = sum(1 for r in responses if r.success)
+    failed = len(responses) - sent
 
     invalid = [
         tokens[i]
-        for i, r in enumerate(response.responses)
-        if not r.success and isinstance(r.exception, messaging.UnregisteredError)
+        for i, r in enumerate(responses)
+        if not r.success and _is_prunable(r.exception, any_success=sent > 0)
     ]
     if invalid:
-        logger.info("[notifications] pruning %d unregistered token(s)", len(invalid))
+        logger.info("[notifications] pruning %d dead token(s)", len(invalid))
         await repo.delete_device_tokens(invalid)
 
     return {"sent": sent, "failed": failed, "pruned": len(invalid)}
+
+
+async def send_broadcast(title: str, body: str, data: dict[str, str]) -> dict[str, int]:
+    return await send_to_tokens(await repo.list_device_tokens(), title, body, data)
 
 
 async def _fetch_raw_news(http_client: httpx.AsyncClient, count: int = _NEWS_TICK_COUNT) -> list[dict]:

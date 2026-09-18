@@ -29,8 +29,11 @@ class BroadcastBody(BaseModel):
 
 
 @router.post("/notifications/register-token", summary="Registra un token FCM para push notifications")
-async def register_token(body: RegisterTokenBody, _payload: dict = Depends(require_jwt)):
-    await service.register_token(body.token, body.platform)
+async def register_token(body: RegisterTokenBody, payload: dict = Depends(require_jwt)):
+    # El dueño del token sale del JWT, nunca del body: es lo que permite
+    # segmentar push por usuario (alertas de precio) sin que un cliente pueda
+    # suscribir su dispositivo a las alertas de otro.
+    await service.register_token(body.token, body.platform, payload["sub"])
     return {"status": "ok"}
 
 

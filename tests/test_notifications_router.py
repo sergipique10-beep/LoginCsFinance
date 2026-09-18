@@ -2,9 +2,10 @@ from unittest.mock import AsyncMock
 
 from notifications import router as notifications_router
 from notifications import service as notifications_service
+from tests.conftest import STEAM_ID
 
 
-def test_register_token_persists_via_service(client, monkeypatch):
+def test_register_token_persists_owner_from_jwt(client, monkeypatch):
     mock_register = AsyncMock()
     monkeypatch.setattr(notifications_service, "register_token", mock_register)
 
@@ -12,7 +13,32 @@ def test_register_token_persists_via_service(client, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
-    mock_register.assert_awaited_once_with("abc123", "android")
+    mock_register.assert_awaited_once_with("abc123", "android", STEAM_ID)
+
+
+def test_register_token_ignores_steam_id_in_body(client, monkeypatch):
+    """El dueño es el sub del JWT: un cliente no puede suscribir su dispositivo
+    a las push de otro usuario mandando steam_id en el body."""
+    mock_register = AsyncMock()
+    monkeypatch.setattr(notifications_service, "register_token", mock_register)
+
+    client.post(
+        "/notifications/register-token",
+        json={"token": "abc123", "platform": "android", "steam_id": "otro-usuario"},
+    )
+
+    mock_register.assert_awaited_once_with("abc123", "android", STEAM_ID)
+
+
+def test_delete_token_removes_it(client, monkeypatch):
+    mock_delete = AsyncMock()
+    monkeypatch.setattr(notifications_router.repo, "delete_device_token", mock_delete)
+
+    resp = client.post("/notifications/delete-token", json={"token": "abc123"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    mock_delete.assert_awaited_once_with("abc123")
 
 
 def test_register_token_rejects_invalid_platform(client):

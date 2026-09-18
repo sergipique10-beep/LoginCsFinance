@@ -7,15 +7,24 @@
 -- proyecto Supabase desde cero deja las push rotas en silencio — el registro de
 -- token devuelve 500 y el news-tick no encuentra dónde deduplicar.
 
--- Tokens FCM de los dispositivos registrados. Sin steam_id a propósito: el
--- contenido es broadcast (misma noticia para todos), así que no hay
--- personalización por usuario. El token ES la identidad del dispositivo.
+-- Tokens FCM de los dispositivos registrados. El token es la identidad del
+-- dispositivo (PK); steam_id es su dueño actual, lo que permite push
+-- personalizadas (alertas de precio) además del broadcast de noticias.
 create table if not exists public.device_tokens (
     token       text primary key,
     platform    text not null check (platform in ('android', 'ios')),
-    created_at  timestamptz not null default now()
+    created_at  timestamptz not null default now(),
+    steam_id    text
 );
 alter table public.device_tokens enable row level security;
+
+-- PUSH-06 (2026-09-18): la fase 1 era broadcast puro y no guardaba el dueño.
+-- Nullable a propósito: los tokens ya registrados siguen recibiendo noticias y
+-- se rellenan solos en el siguiente arranque de la app (registerForPush corre
+-- en cada sesión restaurada). Un token sin steam_id nunca recibe una push
+-- personalizada.
+alter table public.device_tokens add column if not exists steam_id text;
+create index if not exists device_tokens_steam_id_idx on public.device_tokens (steam_id);
 
 -- Dedup del cron de noticias: un gid ya presente no se vuelve a notificar.
 -- Es lo que hace `POST /internal/news-tick` idempotente frente a reintentos

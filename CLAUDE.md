@@ -89,7 +89,8 @@ LoginCsFinance/
       news.py       #   /news/cs2
   notifications/
     repo.py           # Supabase data layer: device_tokens, notified_news (reuses steam/cap_history_repo's client)
-    service.py        # register_token, send_broadcast (firebase-admin), check_and_notify_new_news
+    service.py        # register_token, send_to_tokens (firebase-admin, única función de envío),
+                      # send_broadcast (wrapper), check_and_notify_new_news
     router.py         # APIRouter: /notifications/register-token, /notifications/delete-token,
                       #            /internal/news-tick, /internal/broadcast
 ```
@@ -134,7 +135,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/internal/trending-tick` | `X-Cap-Token` | Cron **horario** (`market-tick.yml`). Captura ~`_TRENDING_CAPTURE_LIMIT` items con 1 request a `/items` y hace **upsert por `name`** (no replace-all: borraría el enriquecimiento acumulado). Marca `seen_at` y purga las filas con >`_TRENDING_STALE_DAYS` sin aparecer. Devuelve `{ok, count, purged}`. |
 | POST | `/internal/enrich-tick` | `X-Cap-Token` | Cron **cada 15 min** (`market-tick.yml`). Rueda progresiva: coge los `_ENRICH_BATCH` items con `enriched_at` más antiguo (nulls primero) y les recalcula los deltas desde `csfloat/history`. Escribe `enriched_at` **siempre**, con datos o sin ellos — si no, un item sin histórico acapararía la rueda para siempre. Devuelve `{ok, count, with_deltas}`. |
 | POST | `/internal/movers-tick` | `X-Cap-Token` | Cron **cada 15 min** (`market-tick.yml`). Captura el ranking hot/cold en `market_movers` — replace-all (DELETE+INSERT): son 20 items que se recalculan enteros, no acumulan nada. |
-| POST | `/notifications/register-token` | Bearer | Registra un token FCM (`{ token, platform }`) para recibir push notifications. |
+| POST | `/notifications/register-token` | Bearer | Registra un token FCM (`{ token, platform }`) para recibir push notifications. El dueño (`steam_id`) sale del `sub` del JWT. |
 | POST | `/notifications/delete-token` | Bearer | Borra un token FCM. Lo llama el frontend en logout, **antes** de invalidar el access token (si no, el POST saldría sin Bearer y fallaría en silencio). |
 | POST | `/internal/news-tick` | `X-News-Tick-Token` | Cron horario (GitHub Actions). Detecta noticias CS2 nuevas y envía push broadcast vía FCM. Idempotente (dedup por `gid` en `notified_news`). |
 | POST | `/internal/broadcast` | `X-Broadcast-Token` | Anuncio manual (`workflow_dispatch` de GitHub Actions). Envía un push con `{title, body}` libres a todos los `device_tokens`. `data` vacío → al tocar, la app abre Home. No deduplica: no toca `notified_news`. Devuelve `{sent, failed, pruned}`. |
@@ -251,9 +252,22 @@ Del upsert salen tres consecuencias:
 ## Push notifications — tablas (`device_tokens` / `notified_news`)
 
 DDL en **`docs/sql/device_tokens.sql`** — **hay que ejecutarlo a mano en Supabase**,
-igual que el resto del esquema. `device_tokens` (token FCM + plataforma) y
-`notified_news` (dedup por `gid`, lo que hace idempotente al news-tick). Sin
-`steam_id` a propósito: el contenido es broadcast, no personalizado por usuario.
+igual que el resto del esquema. `device_tokens` (token FCM + plataforma + `steam_id`
+del dueño) y `notified_news` (dedup por `gid`, lo que hace idempotente al news-tick).
+
+**`steam_id` llegó con PUSH-06** (antes era broadcast puro). Sale del `sub` del JWT en
+`register-token`, nunca del body, y es lo que permite segmentar push por usuario.
+Es nullable: los tokens antiguos siguen recibiendo noticias y se rellenan solos en el
+siguiente arranque de la app. **Un token sin `steam_id` nunca recibe una push
+personalizada** (`repo.list_device_tokens_for` filtra por él).
+
+**Única función de envío: `service.send_to_tokens(tokens, title, body, data)`.**
+`send_broadcast` es un wrapper sobre todos los tokens. Trocea en lotes de 500 (límite
+de `MulticastMessage`), fija el canal Android `cs_finance` (debe coincidir con el que
+crea el frontend) y poda tokens muertos: `UnregisteredError` y `SenderIdMismatchError`
+siempre; `InvalidArgumentError` **solo si algún envío del lote tuvo éxito** — ese
+error también lo lanza un payload inválido, y en ese caso fallan todos los tokens a
+la vez: podar ahí vaciaría la tabla entera.
 
 ⚠️ Estas dos tablas se crearon vía el MCP de Supabase (`apply_migration`) y **su DDL
 nunca se versionó** — vivía solo dentro de un plan de implementación histórico. Se
