@@ -1,10 +1,9 @@
-import secrets
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from auth.service import require_jwt
+from auth.service import require_jwt, token_matches
 from settings import ALERTS_TICK_TOKEN
 from . import repo, service
 
@@ -54,10 +53,6 @@ async def delete_alert(alert_id: int, payload: dict = Depends(require_jwt)):
 
 @router.post("/internal/alerts-tick", summary="Evalúa alertas de precio y envía push (cron)")
 async def alerts_tick(request: Request, x_alerts_tick_token: str = Header(default="")):
-    # compare_digest sobre bytes: sobre str lanza TypeError con un no-ASCII y
-    # eso es un 500 alcanzable sin credenciales (SEC-04/05).
-    if not ALERTS_TICK_TOKEN or not secrets.compare_digest(
-        x_alerts_tick_token.encode(), ALERTS_TICK_TOKEN.encode()
-    ):
+    if not token_matches(x_alerts_tick_token, ALERTS_TICK_TOKEN):
         raise HTTPException(status_code=401, detail="Token inválido")
     return await service.evaluate_alerts(request.app.state.http_client)

@@ -1,5 +1,4 @@
 import logging
-import secrets
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -13,7 +12,7 @@ from stores import (
     _market_index_cache, _topmovers_raw_cache,
     _search_cache, _market_prices_cache, _item_price_cache,
 )
-from auth.service import require_jwt
+from auth.service import require_jwt, token_matches
 from ..cap_history_repo import insert_snapshot, fetch_range
 from ..rankings_repo import trending_repo, movers_repo
 from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point
@@ -698,7 +697,7 @@ async def cap_tick(
     request: Request,
     x_cap_token: str | None = Header(default=None),
 ):
-    if not CAP_TICK_TOKEN or not x_cap_token or not secrets.compare_digest(x_cap_token, CAP_TICK_TOKEN):
+    if not token_matches(x_cap_token, CAP_TICK_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
 
     try:
@@ -763,7 +762,7 @@ async def trending_tick(
     request: Request,
     x_cap_token: str | None = Header(default=None),
 ):
-    if not CAP_TICK_TOKEN or not x_cap_token or not secrets.compare_digest(x_cap_token, CAP_TICK_TOKEN):
+    if not token_matches(x_cap_token, CAP_TICK_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
 
     items = await _compute_trending(request.app.state.http_client)
@@ -807,7 +806,7 @@ async def enrich_tick(request: Request, x_cap_token: str | None = Header(default
     Es el único coste que escala con el número de items (1 req por item), por
     eso está separado de la captura y capado a _ENRICH_BATCH por pasada.
     """
-    if not CAP_TICK_TOKEN or not x_cap_token or not secrets.compare_digest(x_cap_token, CAP_TICK_TOKEN):
+    if not token_matches(x_cap_token, CAP_TICK_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
 
     names = await trending_repo.fetch_stalest(_ENRICH_BATCH)
@@ -853,7 +852,7 @@ async def enrich_tick(request: Request, x_cap_token: str | None = Header(default
 
 @router.post("/internal/movers-tick", summary="Captura el ranking hot/cold del mercado CS2 (cron interno)")
 async def movers_tick(request: Request, x_cap_token: str | None = Header(default=None)):
-    if not CAP_TICK_TOKEN or not x_cap_token or not secrets.compare_digest(x_cap_token, CAP_TICK_TOKEN):
+    if not token_matches(x_cap_token, CAP_TICK_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
     result = await _compute_movers(request.app.state.http_client)
     rows = [_to_row(item, rank, "hot")  for rank, item in enumerate(result["hot"])] \
@@ -868,9 +867,7 @@ async def price_tick(
     request: Request,
     x_price_tick_token: str = Header(default=""),
 ):
-    if not PRICE_TICK_TOKEN or not secrets.compare_digest(
-        x_price_tick_token.encode(), PRICE_TICK_TOKEN.encode()
-    ):
+    if not token_matches(x_price_tick_token, PRICE_TICK_TOKEN):
         raise HTTPException(status_code=401, detail="Token inválido")
     return await price_capture_run(request.app.state.http_client)
 

@@ -19,6 +19,19 @@ from stores import (
 logger = logging.getLogger("uvicorn.error")
 
 
+def token_matches(given: str | None, expected: str) -> bool:
+    """Comparación en tiempo constante del token de un endpoint interno.
+
+    Sobre bytes, no str: `compare_digest` con un `str` no-ASCII lanza TypeError,
+    y Starlette decodifica cabeceras como latin-1, así que un byte alto crudo en
+    la cabecera era un 500 alcanzable sin credenciales (SEC-04/SEC-05). Con el
+    token esperado vacío el endpoint está deshabilitado: siempre False.
+    """
+    if not expected or not given:
+        return False
+    return secrets.compare_digest(given.encode("utf-8"), expected.encode("utf-8"))
+
+
 def _get_client_ip(request: Request) -> str:
     """Returns the real client IP honoring trusted reverse-proxy headers.
 
