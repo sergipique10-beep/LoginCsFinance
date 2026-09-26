@@ -14,6 +14,13 @@ orden (PERF-09):
    432 él solo (cuota agotada el 2026-09-23). Un 402 aborta los lookups
    restantes del tick; las skins con precio cacheado se evalúan igual.
 
+⚠️ PREVENTIVO PARA EL PLAN LIMITADO. Este orden (rankings → /item una vez al
+día) existe solo porque el plan Starter de steamwebapi no da para evaluar cada
+hora contra /item. Si se amplía el plan o se cambia a un proveedor con más
+capacidad, hay que revisarlo: bajar LOOKUP_MIN_INTERVAL (o quitar `_lookup_due`
+y volver a un lookup por skin y tick), bajar CACHED_PRICE_MAX_AGE y ajustar
+ALERTS_LOOKUP_CAP al nuevo límite. Ver docs/issues/rendimiento/PERF-09-cuota-steamwebapi.md.
+
 A las que cumplen la condición las marca disparadas ANTES de mandar la push:
 si el envío revienta a medias, el siguiente tick no las reenvía. Se sacrifica
 un aviso perdido a cambio de no duplicar nunca.
