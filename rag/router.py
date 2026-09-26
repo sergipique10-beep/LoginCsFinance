@@ -7,8 +7,8 @@ recuperación (`rag/retrieval.py`) sigue viva; solo desapareció el endpoint
 paralelo y su generación dedicada (`rag/generation.py`).
 """
 import logging
-import secrets
 
+from auth.service import token_matches
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from settings import RAG_INGEST_TOKEN
@@ -24,12 +24,6 @@ async def rag_ingest(
     request: Request,
     x_rag_ingest_token: str = Header(default=""),
 ):
-    try:
-        valid = bool(RAG_INGEST_TOKEN) and secrets.compare_digest(
-            x_rag_ingest_token.encode(), RAG_INGEST_TOKEN.encode()
-        )
-    except TypeError:
-        valid = False
-    if not valid:
+    if not token_matches(x_rag_ingest_token, RAG_INGEST_TOKEN):
         raise HTTPException(status_code=401, detail="Token inválido")
     return await ingest(request.app.state.http_client)
