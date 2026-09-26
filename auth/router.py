@@ -26,7 +26,8 @@ from auth.service import (
     _issue_nonce,
     _issue_tokens,
     _rate_limit,
-    _set_refresh_cookie,
+    _refresh_token_from_body,
+    _token_response,
 )
 
 STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
@@ -104,7 +105,7 @@ async def steam_callback(request: Request, nonce: str = ""):
     return RedirectResponse(url=f"{redirect_origin}/auth/callback?code={code}")
 
 
-@router.post("/auth/token", summary="Canjea el auth code por access token + refresh cookie")
+@router.post("/auth/token", summary="Canjea el auth code por access token + refresh (cookie en web, cuerpo en nativo)")
 async def exchange_token(request: Request):
     _rate_limit(_get_client_ip(request))
 
@@ -125,9 +126,7 @@ async def exchange_token(request: Request):
 
     access_token, refresh_token = _issue_tokens(steam_id)
 
-    response = JSONResponse({"access_token": access_token})
-    _set_refresh_cookie(response, refresh_token)
-    return response
+    return _token_response(request, access_token, refresh_token)
 
 
 @router.post("/auth/dev-token", summary="[DEV ONLY] Emite tokens para un steam_id sin pasar por Steam OpenID")
@@ -144,9 +143,7 @@ async def dev_token(request: Request):
         raise HTTPException(status_code=400, detail="steam_id must be exactly 17 digits")
 
     access_token, refresh_token = _issue_tokens(steam_id)
-    response = JSONResponse({"access_token": access_token})
-    _set_refresh_cookie(response, refresh_token)
-    return response
+    return _token_response(request, access_token, refresh_token)
 
 
 def _eq(a: str, b: str) -> bool:
@@ -174,9 +171,7 @@ async def review_login(request: Request):
         raise HTTPException(status_code=401, detail="Invalid review credentials")
 
     access_token, refresh_token = _issue_tokens(REVIEW_STEAM_ID)
-    response = JSONResponse({"access_token": access_token})
-    _set_refresh_cookie(response, refresh_token)
-    return response
+    return _token_response(request, access_token, refresh_token)
 
 
 @router.post("/auth/refresh", summary="Rota el refresh token y devuelve nuevo access token")
@@ -186,6 +181,8 @@ async def refresh_tokens(
 ):
     _rate_limit(_get_client_ip(request))
 
+    # Cookie (web) primero; cuerpo (nativo, SEC-06) como alternativa.
+    refresh_token = refresh_token or await _refresh_token_from_body(request)
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Missing refresh token")
 
@@ -222,15 +219,15 @@ async def refresh_tokens(
 
     access_token, new_refresh_token = _issue_tokens(steam_id)
 
-    response = JSONResponse({"access_token": access_token})
-    _set_refresh_cookie(response, new_refresh_token)
-    return response
+    return _token_response(request, access_token, new_refresh_token)
 
 
 @router.post("/auth/logout", summary="Revoca el refresh token y limpia la cookie")
 async def logout(
+    request: Request,
     refresh_token: str | None = Cookie(default=None),
 ):
+    refresh_token = refresh_token or await _refresh_token_from_body(request)
     if refresh_token:
         try:
             payload = jwt.decode(

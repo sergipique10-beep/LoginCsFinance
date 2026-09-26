@@ -33,8 +33,8 @@ FastAPI microservice that authenticates users via **Steam OpenID 2.0** and issue
 **Auth flow:**
 1. `GET /auth/steam` — rate-limited, issues a nonce, redirects to Steam OpenID
 2. `GET /auth/steam/callback` — validates nonce + Steam response, extracts SteamID, emits a one-time auth code (TTL 30 s), redirects to `FRONTEND_URL/auth/callback?code=<code>`
-3. `POST /auth/token` — consumes the one-time code, returns `{ access_token }` + sets `refresh_token` HttpOnly cookie
-4. `POST /auth/refresh` — validates + rotates refresh token (JTI revocation), returns new `{ access_token }`
+3. `POST /auth/token` — consumes the one-time code, returns `{ access_token }` + sets `refresh_token` HttpOnly cookie. **Si la petición llega con `Origin: https://localhost` (WebView de Capacitor), el refresh va en el cuerpo (`{ access_token, refresh_token }`) y no se emite cookie** (SEC-06): Chromium rechaza un `Set-Cookie` `SameSite=Strict` cross-site, así que en Android la cookie nunca llegaba a guardarse y la sesión moría a los 30 min.
+4. `POST /auth/refresh` — validates + rotates refresh token (JTI revocation), returns new `{ access_token }`. Lee el refresh de la cookie o, si no hay, de `{ "refresh_token" }` en el cuerpo (nativo). `/auth/logout` igual.
 5. `POST /auth/logout` — revokes JTI, clears cookie
 
 **Token claims:**
@@ -121,10 +121,10 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | GET | `/` | — | Health check |
 | GET | `/auth/steam` | — | Rate-limited; accepts `?platform=android` for Android redirect origin |
 | GET | `/auth/steam/callback` | — | Validates nonce + Steam, emits one-time auth code |
-| POST | `/auth/token` | — | Exchanges auth code → access token + refresh cookie |
+| POST | `/auth/token` | — | Exchanges auth code → access token + refresh (cookie en web, cuerpo si `Origin: https://localhost`) |
 | POST | `/auth/dev-token` | — | **Only active when `DEBUG=true` AND `ENV != production`** — emits tokens without Steam. Startup logs a loud warning when enabled. |
 | POST | `/auth/review-login` | — | Credenciales fijas (`REVIEW_USER`/`REVIEW_PASSWORD`) para la revisión de Google Play, sin pasar por Steam. 404 si las tres vars no están puestas. |
-| POST | `/auth/refresh` | cookie | Rotates refresh token |
+| POST | `/auth/refresh` | cookie o cuerpo | Rotates refresh token |
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
 | GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item` + enrichment below) |
