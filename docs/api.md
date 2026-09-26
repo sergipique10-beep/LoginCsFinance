@@ -37,12 +37,14 @@ Response `200`:
 ```
 Sets `Set-Cookie: refresh_token=...; HttpOnly; Secure; SameSite=Strict; Path=/`
 
+Native clients (request `Origin: https://localhost`, the Capacitor WebView) get `{ "access_token", "refresh_token" }` in the body and **no cookie**: Chromium rejects a cross-site `SameSite=Strict` cookie, so the app stores it in private app storage instead.
+
 Errors: `400 Invalid or expired code`
 
 ---
 
 ### `POST /auth/refresh`
-Rotate refresh token. Reads `refresh_token` cookie automatically.
+Rotate refresh token. Reads the `refresh_token` cookie, or `{ "refresh_token": "..." }` from the JSON body when there is no cookie (native).
 
 Must include `withCredentials: true` in Angular HTTP call.
 
@@ -57,7 +59,7 @@ Errors: `401` — cookie missing, expired, revoked, or wrong token type.
 ---
 
 ### `POST /auth/logout`
-Revoke refresh token and clear cookie.
+Revoke refresh token and clear cookie. Also accepts `{ "refresh_token" }` in the body (native).
 
 Must include `withCredentials: true`.
 

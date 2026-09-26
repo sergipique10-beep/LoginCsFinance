@@ -438,3 +438,78 @@ def test_cookie_secure_accepts_the_documented_falsy_values(monkeypatch, valor):
         assert reloaded.COOKIE_SECURE is False
     finally:
         importlib.reload(settings)
+
+
+# ── SEC-06: cliente nativo (Origin https://localhost) recibe el refresh en el cuerpo ──
+#
+# El WebView de Capacitor pide desde https://localhost, cross-site respecto a la
+# API, y Chromium rechaza un Set-Cookie SameSite=Strict en esa situación. Para
+# ese origen el refresh viaja en el JSON y se acepta de vuelta en el cuerpo de
+# /auth/refresh y /auth/logout. La web sigue con cookie HttpOnly y nunca ve el
+# refresh en el cuerpo.
+
+NATIVE = {"Origin": "https://localhost"}
+
+
+def test_native_token_exchange_returns_refresh_in_body_and_no_cookie(client):
+    resp = client.post("/auth/token", json={"code": _seed_code()}, headers=NATIVE)
+
+    assert resp.status_code == 200
+    assert _decode(resp.json()["refresh_token"])["type"] == "refresh"
+    assert "refresh_token" not in resp.cookies
+
+
+def test_web_token_exchange_never_puts_the_refresh_in_the_body(client):
+    resp = client.post("/auth/token", json={"code": _seed_code()})
+    assert "refresh_token" not in resp.json()
+
+    spoof = client.post("/auth/token", json={"code": _seed_code("otro")}, headers={"Origin": "https://evil.example"})
+    assert "refresh_token" not in spoof.json()
+
+
+def test_native_refresh_from_body_rotates_and_answers_in_body(client):
+    old_refresh = client.post("/auth/token", json={"code": _seed_code()}, headers=NATIVE).json()["refresh_token"]
+    old_jti = _decode(old_refresh)["jti"]
+
+    resp = client.post("/auth/refresh", json={"refresh_token": old_refresh}, headers=NATIVE)
+
+    assert resp.status_code == 200
+    new_refresh = resp.json()["refresh_token"]
+    assert _decode(new_refresh)["jti"] != old_jti
+    assert old_jti not in _refresh_store
+    assert "refresh_token" not in resp.cookies
+    assert client.post("/auth/refresh", json={"refresh_token": old_refresh}, headers=NATIVE).status_code == 401
+
+
+def test_native_logout_from_body_revokes_the_jti(client):
+    refresh = client.post("/auth/token", json={"code": _seed_code()}, headers=NATIVE).json()["refresh_token"]
+    jti = _decode(refresh)["jti"]
+
+    assert client.post("/auth/logout", json={"refresh_token": refresh}, headers=NATIVE).status_code == 200
+    assert jti not in _refresh_store
+
+
+def test_refresh_with_empty_or_malformed_body_is_a_401_not_a_500(client):
+    assert client.post("/auth/refresh", headers=NATIVE).status_code == 401
+    assert client.post("/auth/refresh", content=b"no es json", headers={**NATIVE, "Content-Type": "application/json"}).status_code == 401
+    assert client.post("/auth/refresh", json={"refresh_token": 123}, headers=NATIVE).status_code == 401
+
+
+def test_cookie_wins_over_body_when_both_are_present(client):
+    """Un cuerpo con basura no debe romper el flujo web con cookie válida."""
+    refresh = _login(client)
+    resp = client.post("/auth/refresh", json={"refresh_token": "basura"}, cookies={"refresh_token": refresh})
+    assert resp.status_code == 200
+    assert "refresh_token" in resp.cookies
+
+
+def test_review_login_and_dev_token_follow_the_same_native_rule(client, review_configured, monkeypatch):
+    monkeypatch.setattr(auth_router, "DEV_TOKEN_ENABLED", True)
+
+    review = client.post("/auth/review-login", json={"user": "revisor", "password": "clave-secreta"}, headers=NATIVE)
+    assert review.status_code == 200
+    assert "refresh_token" in review.json() and "refresh_token" not in review.cookies
+
+    dev = client.post("/auth/dev-token", json={"steam_id": STEAM_ID}, headers=NATIVE)
+    assert dev.status_code == 200
+    assert "refresh_token" in dev.json() and "refresh_token" not in dev.cookies
