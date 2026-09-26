@@ -11,7 +11,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from settings import COOKIE_SECURE, JWT_SECRET
 from stores import (
     NONCE_TTL, CODE_TTL,
-    RATE_LIMIT_CALLS, RATE_LIMIT_WINDOW,
+    RATE_LIMIT_CALLS, RATE_LIMIT_WINDOW, MARKET_RATE_LIMIT_CALLS,
     ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL, TOKEN_AUDIENCE,
     _nonces, _refresh_store, _rate_store,
 )
@@ -43,14 +43,29 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _rate_limit(ip: str) -> None:
+def _rate_limit(ip: str, *, limit: int = RATE_LIMIT_CALLS, bucket: str = "") -> None:
+    """Ventana deslizante por IP. `bucket` separa presupuestos: el de auth (10/min,
+    operaciones sensibles) no debe compartir contador con el de mercado (SEC-03)."""
+    key = f"{bucket}:{ip}" if bucket else ip
     now = time.monotonic()
     cutoff = now - RATE_LIMIT_WINDOW
-    calls = [t for t in _rate_store[ip] if t > cutoff]
-    if len(calls) >= RATE_LIMIT_CALLS:
+    calls = [t for t in _rate_store[key] if t > cutoff]
+    if len(calls) >= limit:
         raise HTTPException(status_code=429, detail="Too many requests")
     calls.append(now)
-    _rate_store[ip] = calls
+    _rate_store[key] = calls
+
+
+def market_rate_limit(request: Request) -> None:
+    """SEC-03 — dependencia para las lecturas de /market/*.
+
+    Todos exigen Bearer, pero un cliente en bucle (o un bug de reintentos del
+    frontend) agota el presupuesto compartido de steamwebapi para todos. 60/60 s
+    por IP: la pantalla de Market abre ~6 llamadas distintas, un usuario normal
+    no se acerca. Se declara como `dependencies=[Depends(market_rate_limit)]`
+    en el decorador para no tocar la firma de cada handler.
+    """
+    _rate_limit(_get_client_ip(request), limit=MARKET_RATE_LIMIT_CALLS, bucket="market")
 
 
 def _issue_nonce(redirect_origin: str) -> str:
