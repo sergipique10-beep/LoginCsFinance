@@ -16,6 +16,7 @@ from typing import Any
 NONCE_TTL = 300              # seconds a nonce remains valid
 CODE_TTL = 30                # seconds a one-time auth code remains valid
 RATE_LIMIT_CALLS = 10        # max requests per window per IP
+MARKET_RATE_LIMIT_CALLS = 60  # SEC-03: lecturas /market/* por IP y ventana (Market abre ~6 llamadas)
 RATE_LIMIT_WINDOW = 60       # seconds
 
 ACCESS_TOKEN_TTL = timedelta(minutes=30)

@@ -283,6 +283,15 @@ nunca se versionó** — vivía solo dentro de un plan de implementación histó
 reconstruyó el 2026-09-14. Si el proyecto Supabase se recrea desde cero sin aplicarlo,
 el registro de token devuelve error y el news-tick no tiene dónde deduplicar.
 
+## Rate limit de lecturas de mercado (SEC-03)
+
+`_rate_limit(ip, limit=, bucket=)` en `auth/service.py` tiene presupuestos separados: el de
+`/auth/*`, `/rag/chat` y `/news/cs2` (10/60 s por IP, bucket vacío) y el de las **ocho
+lecturas `/market/*`** (`market_rate_limit`, 60/60 s por IP, bucket `market`), declarado como
+`dependencies=[Depends(market_rate_limit)]` en cada decorador. Abrir Market son ~6 llamadas;
+un bucle o un bug de reintentos del frontend recibe 429 antes de agotar la cuota compartida
+de steamwebapi. Sigue siendo en memoria y single-worker (CAL-04).
+
 ## Dependencias (CLEAN-02)
 
 `requirements.txt` es ASCII con CRLF (ya no UTF-16). `APScheduler` y `tzlocal` se quitaron

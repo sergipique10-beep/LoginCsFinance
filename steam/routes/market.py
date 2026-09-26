@@ -12,7 +12,7 @@ from stores import (
     _market_index_cache, _topmovers_raw_cache,
     _search_cache, _market_prices_cache, _item_price_cache,
 )
-from auth.service import require_jwt, token_matches
+from auth.service import market_rate_limit, require_jwt, token_matches
 from ..cap_history_repo import insert_snapshot, fetch_range
 from ..rankings_repo import trending_repo, movers_repo
 from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point
@@ -296,7 +296,7 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
     return {"hot": [], "cold": []}
 
 
-@router.get("/market/movers", summary="Top movers del mercado CS2 (hot & cold 24 h)")
+@router.get("/market/movers", dependencies=[Depends(market_rate_limit)], summary="Top movers del mercado CS2 (hot & cold 24 h)")
 async def get_market_movers(request: Request, user: dict = Depends(require_jwt)):
     rows = await movers_repo.fetch_snapshot()
     hot  = [_row_to_item(r) for r in rows if r.get("bucket") == "hot"]
@@ -304,7 +304,7 @@ async def get_market_movers(request: Request, user: dict = Depends(require_jwt))
     return {"hot": hot, "cold": cold}
 
 
-@router.get("/market/items", summary="Busca items en el mercado CS2 por nombre")
+@router.get("/market/items", dependencies=[Depends(market_rate_limit)], summary="Busca items en el mercado CS2 por nombre")
 async def get_market_items(
     request: Request,
     q: str,
@@ -362,7 +362,7 @@ async def get_market_items(
     return result
 
 
-@router.get("/market/price", summary="Datos completos (con liquidez) de un item CS2 por nombre")
+@router.get("/market/price", dependencies=[Depends(market_rate_limit)], summary="Datos completos (con liquidez) de un item CS2 por nombre")
 async def get_market_price(
     request: Request,
     name: str,
@@ -534,7 +534,7 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
     return []
 
 
-@router.get("/market/trending", summary="Items trending del mercado CS2 (por volumen 24h)")
+@router.get("/market/trending", dependencies=[Depends(market_rate_limit)], summary="Items trending del mercado CS2 (por volumen 24h)")
 async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
     # Por turnover y no por `rank`: con upsert, un item que no aparece en una
     # captura conserva su rank viejo y ocuparía una posición alta como fantasma
@@ -543,7 +543,7 @@ async def get_market_trending(request: Request, user: dict = Depends(require_jwt
     return [_row_to_item(row) for row in rows]
 
 
-@router.get("/market/index", summary="Índice de mercado global CS2")
+@router.get("/market/index", dependencies=[Depends(market_rate_limit)], summary="Índice de mercado global CS2")
 async def get_market_index(
     request: Request,
     tf: str = "24h",
@@ -742,7 +742,7 @@ async def cap_tick(
     return {"ok": True, "ts": point["ts"], "priceindex": point["priceindex"]}
 
 
-@router.get("/market/cap-history", summary="Historial del índice de precio CS2 (snapshots horarios)")
+@router.get("/market/cap-history", dependencies=[Depends(market_rate_limit)], summary="Historial del índice de precio CS2 (snapshots horarios)")
 async def get_market_cap_history(
     tf: str = "7d",
     user: dict = Depends(require_jwt),
@@ -872,13 +872,13 @@ async def price_tick(
     return await price_capture_run(request.app.state.http_client)
 
 
-@router.get("/market/providers", summary="Lista de markets soportados como price providers")
+@router.get("/market/providers", dependencies=[Depends(market_rate_limit)], summary="Lista de markets soportados como price providers")
 async def get_market_providers(request: Request, user: dict = Depends(require_jwt)):
     providers = await _fetch_market_providers(request.app.state.http_client)
     return providers
 
 
-@router.get("/market/prices", summary="Precios en tiempo real de un item por mercado")
+@router.get("/market/prices", dependencies=[Depends(market_rate_limit)], summary="Precios en tiempo real de un item por mercado")
 async def get_market_prices(
     request: Request,
     market: str,
