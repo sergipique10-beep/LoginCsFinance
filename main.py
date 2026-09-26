@@ -128,7 +128,8 @@ app.include_router(rag_router)
 app.include_router(chat_router)
 
 
-@app.get("/")
+# HEAD además de GET: los pingers gratuitos (UptimeRobot) solo hacen HEAD (PERF-07).
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"status": "ok"}
 
