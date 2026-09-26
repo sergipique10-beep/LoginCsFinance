@@ -147,7 +147,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | GET | `/alerts` | Bearer | Alertas de precio del usuario (activas primero, luego disparadas). |
 | POST | `/alerts` | Bearer | Crea una alerta `{market_hash_name, direction: above\|below, threshold}` de **un solo disparo**. 201. 409 si ya hay una activa idéntica; 422 si supera `ALERTS_MAX_PER_USER`; 404 si la skin no se resuelve. El dueño sale del `sub` del JWT. |
 | DELETE | `/alerts/{id}` | Bearer | Borra una alerta propia. 404 si no existe **o es de otro usuario** (no se revela cuál). |
-| POST | `/internal/alerts-tick` | `X-Alerts-Tick-Token` | Cron horario (`alerts-tick.yml`, minuto :50). Evalúa hasta `ALERTS_LOOKUP_CAP` alertas activas (LRU por `last_checked_at`), 1 lookup por skin distinta vía el `_history_limiter`, marca disparadas **antes** de enviar y manda push solo a los tokens del dueño. Devuelve `{evaluated, triggered, sent, errors, pendientes}`. |
+| POST | `/internal/alerts-tick` | `X-Alerts-Tick-Token` | Cron horario (`alerts-tick.yml`, minuto :50). Evalúa hasta `ALERTS_LOOKUP_CAP` alertas activas (LRU por `last_checked_at`), 1 lookup por skin distinta vía el `_history_limiter`, marca disparadas **antes** de enviar y manda push solo a los tokens del dueño. Devuelve `{evaluated, triggered, sent, errors, pendientes, quota_exhausted}`. |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited; caché en proceso 30 min por `count` (`_news_cache`, PERF-06: sin ella costaba 6 s por petición) |
 | POST | `/rag/chat` | Bearer | Chat con el asistente Sharky (Gemini), con historial de turnos. Hace retrieval del RAG en cada mensaje (inyectado en el system prompt) y devuelve `reply` + `sources[]` (dedup por URL). Function calling multi-tool sobre `tools/` |
@@ -294,9 +294,13 @@ LRU del tick (mismo patrón que `tracked_skins.last_captured`).
 
 Tres invariantes del tick (`alerts/service.py:evaluate_alerts`):
 
-- **Una petición por skin distinta, no por alerta**, y como mucho `ALERTS_LOOKUP_CAP` (18)
-  alertas por tick = una ventana del `_history_limiter` → ≤432 req/día con el cron horario.
-  Es el mismo lookup que el price-tick (`price_capture._lookup_item`), no otro cliente.
+- **Precio desde los rankings primero (PERF-09).** `market_movers` y `market_trending`
+  (`RankingRepo.fetch_prices`, filas de ≤6 h) resuelven gratis casi todo. Solo las skins sin
+  precio cacheado van a `/item`, y **como mucho una vez al día por skin** (`last_checked_at`
+  hace de cursor). Motivo: el plan Starter da ~333 req/día en total y el tick horario con 18
+  lookups gastaba 432 él solo; la cuota se agotó el 2026-09-23 y `/item` devolvió 402 cuatro
+  días sin que nadie lo viera. Un 402 (`QuotaExhausted`) corta los lookups del tick y del
+  `price-tick`, ambos devuelven `quota_exhausted: true` y sus workflows se ponen en rojo.
 - **`mark_triggered` va ANTES de `send_to_tokens`.** Si el envío revienta a medias, el
   siguiente tick no la reenvía. Se sacrifica un aviso perdido a cambio de no duplicar
   nunca. Si es `mark_triggered` lo que falla, no se envía.

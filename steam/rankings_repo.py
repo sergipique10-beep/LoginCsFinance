@@ -55,6 +55,24 @@ class RankingRepo:
 
         return await asyncio.to_thread(_do)
 
+    async def fetch_prices(self, names: list[str]) -> list[dict]:
+        """`name`, `price_latest`, `updated_at` de las filas cuyo nombre esté en `names`.
+        Lo usa el tick de alertas (PERF-09): precio gratis, sin gastar cuota de /item."""
+        if not names:
+            return []
+
+        def _do() -> list[dict]:
+            resp = (
+                get_supabase()
+                .table(self._table)
+                .select("name, price_latest, updated_at")
+                .in_("name", names)
+                .execute()
+            )
+            return resp.data or []
+
+        return await asyncio.to_thread(_do)
+
     # ── Upsert incremental (solo lo usa trending) ───────────────────────────
 
     async def upsert_rows(self, rows: list[dict]) -> None:

@@ -11,7 +11,7 @@ def _alert(id, name, direction, threshold, steam_id="u1"):
             "direction": direction, "threshold": threshold}
 
 
-def _prepare(monkeypatch, alerts, prices, tokens=None, total_active=None):
+def _prepare(monkeypatch, alerts, prices, tokens=None, total_active=None, cached=None):
     """Mocks del tick: repo de alertas, lookup por skin, tokens y envío.
     `prices` mapea nombre → item crudo de steamwebapi (o excepción)."""
     monkeypatch.setattr(service.repo, "count_active", AsyncMock(return_value=total_active or len(alerts)))
@@ -28,6 +28,8 @@ def _prepare(monkeypatch, alerts, prices, tokens=None, total_active=None):
         return v
     lookup_mock = AsyncMock(side_effect=lookup)
     monkeypatch.setattr(price_capture, "_lookup_item", lookup_mock)
+    # PERF-09: sin precio cacheado por defecto → se ejercita el lookup como antes.
+    monkeypatch.setattr(service, "_cached_prices", AsyncMock(return_value=dict(cached or {})))
 
     monkeypatch.setattr(service.notif_repo, "list_device_tokens_for",
                         AsyncMock(return_value=tokens or {}))
@@ -63,7 +65,7 @@ async def test_triggers_marks_and_sends_to_owner(monkeypatch):
 
     out = await service.evaluate_alerts(MagicMock())
 
-    assert out == {"evaluated": 1, "triggered": 1, "sent": 1, "errors": 0, "pendientes": 0}
+    assert out == {"evaluated": 1, "triggered": 1, "sent": 1, "errors": 0, "pendientes": 0, "quota_exhausted": False}
     mark_triggered.assert_awaited_once_with(1, 38.2)
     args = send.await_args
     assert args.args[0] == ["tok-1", "tok-2"]
@@ -133,7 +135,7 @@ async def test_send_failure_does_not_undo_trigger(monkeypatch):
     out = await service.evaluate_alerts(MagicMock())
 
     mark_triggered.assert_awaited_once()
-    assert out == {"evaluated": 1, "triggered": 1, "sent": 0, "errors": 1, "pendientes": 0}
+    assert out == {"evaluated": 1, "triggered": 1, "sent": 0, "errors": 1, "pendientes": 0, "quota_exhausted": False}
 
 
 @pytest.mark.asyncio
@@ -187,13 +189,14 @@ async def test_pendientes_reports_what_is_left_outside_the_batch(monkeypatch):
 
 # ── create_alert ──────────────────────────────────────────────────────────────
 
-def _prepare_create(monkeypatch, *, active=0, duplicate=False, tracked=True, item=None):
+def _prepare_create(monkeypatch, *, active=0, duplicate=False, tracked=True, item=None, cached=None):
     monkeypatch.setattr(service.repo, "count_active", AsyncMock(return_value=active))
     monkeypatch.setattr(service.repo, "exists_active", AsyncMock(return_value=duplicate))
     monkeypatch.setattr(service.price_history_repo, "is_tracked", AsyncMock(return_value=tracked))
     register = AsyncMock()
     monkeypatch.setattr(service.price_history_repo, "register_tracked", register)
     monkeypatch.setattr(price_capture, "_lookup_item", AsyncMock(return_value=item or {}))
+    monkeypatch.setattr(service, "_cached_prices", AsyncMock(return_value=dict(cached or {})))
     create = AsyncMock(return_value={"id": 7})
     monkeypatch.setattr(service.repo, "create", create)
     return create, register
@@ -243,3 +246,107 @@ async def test_create_untracked_unknown_skin_is_rejected(monkeypatch):
     with pytest.raises(service.UnknownItem):
         await service.create_alert(MagicMock(), "u1", "No Existe", "above", 15.0)
     create.assert_not_awaited()
+
+
+# ── PERF-09: precio desde rankings, /item una vez al día, 402 aborta ─────────
+
+from datetime import datetime, timedelta, timezone
+
+from steam.price_capture import QuotaExhausted
+
+
+def _iso(delta: timedelta) -> str:
+    return (datetime.now(timezone.utc) + delta).isoformat()
+
+
+@pytest.mark.asyncio
+async def test_cached_price_is_used_without_any_lookup(monkeypatch):
+    alert = _alert(1, "X", "below", 40.0)
+    lookup, mark_triggered, _, send = _prepare(
+        monkeypatch, [alert], prices={}, cached={"X": 39.0}, tokens={"u1": ["t1"]},
+    )
+
+    out = await service.evaluate_alerts(MagicMock())
+
+    lookup.assert_not_awaited()
+    assert out["triggered"] == 1 and out["sent"] == 1 and out["errors"] == 0
+    mark_triggered.assert_awaited_once_with(1, 39.0)
+
+
+@pytest.mark.asyncio
+async def test_uncached_skin_checked_recently_is_not_looked_up_again(monkeypatch):
+    alert = {**_alert(1, "X", "below", 40.0), "last_checked_at": _iso(timedelta(hours=-2))}
+    lookup, mark_triggered, mark_checked, _ = _prepare(monkeypatch, [alert], prices={"X": {"pricelatest": 10}})
+
+    out = await service.evaluate_alerts(MagicMock())
+
+    lookup.assert_not_awaited()                       # como mucho un /item al día por skin
+    assert out["errors"] == 0 and out["triggered"] == 0
+    mark_checked.assert_awaited_once_with([1])
+
+
+@pytest.mark.asyncio
+async def test_uncached_skin_not_checked_for_a_day_is_looked_up(monkeypatch):
+    alert = {**_alert(1, "X", "below", 40.0), "last_checked_at": _iso(timedelta(hours=-25))}
+    lookup, mark_triggered, _, _ = _prepare(monkeypatch, [alert], prices={"X": {"pricelatest": 10}}, tokens={"u1": ["t1"]})
+
+    out = await service.evaluate_alerts(MagicMock())
+
+    lookup.assert_awaited_once()
+    assert out["triggered"] == 1
+
+
+@pytest.mark.asyncio
+async def test_quota_exhausted_stops_lookups_but_cached_alerts_still_trigger(monkeypatch):
+    alerts = [_alert(1, "A", "below", 40.0), _alert(2, "B", "below", 40.0), _alert(3, "C", "below", 40.0)]
+    lookup, mark_triggered, mark_checked, _ = _prepare(
+        monkeypatch, alerts,
+        prices={"B": QuotaExhausted("402"), "C": {"pricelatest": 1}},
+        cached={"A": 30.0}, tokens={"u1": ["t1"]},
+    )
+
+    out = await service.evaluate_alerts(MagicMock())
+
+    assert lookup.await_count == 1                     # B revienta, C ya no se intenta
+    assert out["quota_exhausted"] is True
+    assert out["errors"] == 1 and out["triggered"] == 1
+    mark_triggered.assert_awaited_once_with(1, 30.0)
+    mark_checked.assert_awaited_once_with([1, 2, 3])   # la rueda avanza igual
+
+
+@pytest.mark.asyncio
+async def test_create_uses_cached_price_and_skips_lookup(monkeypatch):
+    register, create = _prepare_create(monkeypatch, tracked=False, cached={"AK": 12.0})
+
+    await service.create_alert(MagicMock(), "u1", "AK", "below", 10.0)
+
+    price_capture._lookup_item.assert_not_awaited()
+    register.assert_awaited_once()
+    create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_reports_price_unavailable_when_quota_is_exhausted(monkeypatch):
+    _prepare_create(monkeypatch, tracked=False)
+    monkeypatch.setattr(price_capture, "_lookup_item", AsyncMock(side_effect=QuotaExhausted("402")))
+
+    with pytest.raises(service.PriceUnavailable):
+        await service.create_alert(MagicMock(), "u1", "AK", "below", 10.0)
+
+
+def test_cached_prices_ignores_stale_rows_and_prefers_movers(monkeypatch):
+    import asyncio
+    fresh, stale = _iso(timedelta(hours=-1)), _iso(timedelta(hours=-30))
+    monkeypatch.setattr(service.movers_repo, "fetch_prices", AsyncMock(return_value=[
+        {"name": "A", "price_latest": "10.5", "updated_at": fresh},
+        {"name": "B", "price_latest": "20", "updated_at": stale},
+    ]))
+    monkeypatch.setattr(service.trending_repo, "fetch_prices", AsyncMock(return_value=[
+        {"name": "A", "price_latest": "99", "updated_at": fresh},
+        {"name": "B", "price_latest": "21", "updated_at": fresh},
+        {"name": "C", "price_latest": None, "updated_at": fresh},
+    ]))
+
+    prices = asyncio.run(service._cached_prices(["A", "B", "C"]))
+
+    assert prices == {"A": 10.5, "B": 21.0}

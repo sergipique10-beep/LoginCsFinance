@@ -16,7 +16,20 @@ jobs:
     steps:
       - name: POST /internal/alerts-tick
         run: |
-          curl -fsS -X POST "$BASE_URL/internal/alerts-tick" -H "X-Alerts-Tick-Token: $ALERTS_TICK_TOKEN"
+          RESP=$(curl -fsS -X POST "$BASE_URL/internal/alerts-tick" -H "X-Alerts-Tick-Token: $ALERTS_TICK_TOKEN")
+          echo "$RESP"
+          # PERF-09: si hubo alertas que evaluar y TODAS fallaron, el tick no ha
+          # hecho nada útil y tiene que verse en rojo (antes: verde con errors=N).
+          if echo "$RESP" | grep -q '"quota_exhausted":true'; then
+            echo "::error::Cuota mensual de steamwebapi agotada (402): solo se evalúan las skins con precio en market_movers/market_trending hasta el día 10."
+            exit 1
+          fi
+          EVALUATED=$(echo "$RESP" | grep -o '"evaluated":[0-9]*' | cut -d: -f2)
+          ERRORS=$(echo "$RESP" | grep -o '"errors":[0-9]*' | cut -d: -f2)
+          if [ "${EVALUATED:-0}" -gt 0 ] && [ "${ERRORS:-0}" -ge "${EVALUATED:-0}" ]; then
+            echo "::error::$ERRORS errores en $EVALUATED alertas evaluadas: ninguna se pudo resolver."
+            exit 1
+          fi
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
           ALERTS_TICK_TOKEN: ${{ secrets.ALERTS_TICK_TOKEN }}

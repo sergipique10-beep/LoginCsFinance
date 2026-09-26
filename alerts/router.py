@@ -40,6 +40,8 @@ async def create_alert(body: CreateAlertBody, request: Request, payload: dict = 
         raise HTTPException(status_code=409, detail=str(exc))
     except service.UnknownItem as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except service.PriceUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.delete("/alerts/{alert_id}", summary="Borra una alerta propia")

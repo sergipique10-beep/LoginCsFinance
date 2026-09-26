@@ -49,6 +49,16 @@ async def seed_tracked() -> int:
     return len(names)
 
 
+class QuotaExhausted(Exception):
+    """steamwebapi devolvió 402: cuota mensual agotada (PERF-09).
+
+    Medido 2026-09-26: con la cuota agotada, /item responde 402 en TODAS las
+    llamadas hasta el reset (día 10 de cada mes). Seguir iterando el lote es
+    gastar minutos de Render en nada, y peor: el resultado parecía normal
+    (`errors: N`, workflow en verde) y la captura estuvo 4 días muerta sin aviso.
+    """
+
+
 async def _lookup_item(client: httpx.AsyncClient, name: str) -> dict:
     """GET /item?market_hash_name=<name> vía el limiter compartido. Devuelve el item."""
     await _history_limiter.acquire()
@@ -59,6 +69,8 @@ async def _lookup_item(client: httpx.AsyncClient, name: str) -> dict:
         timeout=_LOOKUP_TIMEOUT,
         follow_redirects=True,
     )
+    if resp.status_code == 402:
+        raise QuotaExhausted(resp.text[:200])
     resp.raise_for_status()
     data = resp.json()
     return data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
@@ -93,11 +105,18 @@ async def capture(client: httpx.AsyncClient) -> dict:
     intentadas: list[str] = []
     skipped = 0
     errors = 0
+    quota_exhausted = False
 
     for name in names:
         intentadas.append(name)
         try:
             item = await _lookup_item(client, name)
+        except QuotaExhausted as exc:
+            # Inútil seguir: cada llamada será otro 402 hasta el reset mensual.
+            errors += 1
+            quota_exhausted = True
+            logger.error("[price] cuota de steamwebapi agotada, lote abortado: %s", exc)
+            break
         except Exception as exc:  # noqa: BLE001 — best-effort: un fallo no aborta el lote
             errors += 1
             logger.warning("[price] lookup falló para %r: %s", name, exc)
@@ -130,4 +149,4 @@ async def capture(client: httpx.AsyncClient) -> dict:
 
     return {"tracked_run": len(names), "captured": len(rows),
             "skipped": skipped, "errors": errors,
-            "pendientes": restantes}
+            "pendientes": restantes, "quota_exhausted": quota_exhausted}

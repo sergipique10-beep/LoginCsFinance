@@ -54,6 +54,20 @@ jobs:
             }
             echo "$RESP"
 
+            # PERF-09: un lote sin ninguna captura es un fallo, no un día flojo.
+            # Del 23 al 26 de septiembre de 2026 la cuota mensual de steamwebapi
+            # estuvo agotada (402 en todo) y el workflow siguió en verde 4 días.
+            if echo "$RESP" | grep -q '"quota_exhausted":true'; then
+              echo "::error::Cuota mensual de steamwebapi agotada (402). Se reinicia el día 10. Ver docs/issues/rendimiento/PERF-09-cuota-steamwebapi.md"
+              exit 1
+            fi
+            TRACKED=$(echo "$RESP" | grep -o '"tracked_run":[0-9]*' | cut -d: -f2)
+            CAPTURED=$(echo "$RESP" | grep -o '"captured":[0-9]*' | cut -d: -f2)
+            if [ "${TRACKED:-0}" -gt 0 ] && [ "${CAPTURED:-0}" -eq 0 ]; then
+              echo "::error::Lote de $TRACKED skins con 0 capturas: el lookup falla para todas. Revisa 'errors' y el estado de steamwebapi."
+              exit 1
+            fi
+
             PENDIENTES=$(echo "$RESP" | grep -o '"pendientes":[0-9]*' | cut -d: -f2)
             if [ "${PENDIENTES:-0}" -eq 0 ]; then
               echo "✓ Población cubierta en $lote lote(s)."

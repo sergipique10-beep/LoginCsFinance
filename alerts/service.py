@@ -2,19 +2,32 @@
 Alertas de precio por skin: creación validada y evaluación periódica (tick).
 
 Una alerta es de un solo disparo. El tick lee las activas menos-recientemente
-evaluadas (hasta ALERTS_LOOKUP_CAP), consulta el precio spot UNA vez por skin
-a través del mismo lookup y limiter que el price-tick, y a las que cumplen la
-condición las marca disparadas ANTES de mandar la push: si el envío revienta
-a medias, el siguiente tick no las reenvía. Se sacrifica un aviso perdido a
-cambio de no duplicar nunca.
+evaluadas (hasta ALERTS_LOOKUP_CAP) y resuelve el precio de cada skin, en este
+orden (PERF-09):
+
+1. `market_movers` / `market_trending` (Supabase, refrescadas por market-tick):
+   gratis y para la mayoría de skins con alerta. Se aceptan filas de hasta
+   CACHED_PRICE_MAX_AGE; más viejas cuentan como ausentes.
+2. `/item` de steamwebapi solo para lo que no cubra (1), y como mucho UNA vez
+   al día por skin: `last_checked_at` hace de cursor, sin estado nuevo. El plan
+   Starter da ~333 req/día en total y el tick horario con 18 lookups gastaba
+   432 él solo (cuota agotada el 2026-09-23). Un 402 aborta los lookups
+   restantes del tick; las skins con precio cacheado se evalúan igual.
+
+A las que cumplen la condición las marca disparadas ANTES de mandar la push:
+si el envío revienta a medias, el siguiente tick no las reenvía. Se sacrifica
+un aviso perdido a cambio de no duplicar nunca.
 """
 import logging
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from settings import ALERTS_LOOKUP_CAP, ALERTS_MAX_PER_USER
 from steam import price_capture
 from steam import price_history_repo
+from steam.price_capture import QuotaExhausted
+from steam.rankings_repo import movers_repo, trending_repo
 from notifications import repo as notif_repo
 from notifications.service import send_to_tokens
 from . import repo
@@ -22,6 +35,13 @@ from . import repo
 logger = logging.getLogger("uvicorn.error")
 
 MAX_NAME_LEN = 200
+
+# ponytail: los schedule de GitHub que refrescan los rankings se retrasan horas
+# (medido: 1–5 h entre ticks), así que un tope estricto dejaría sin precio a
+# casi todo. 6 h es el compromiso; bajarlo cuando el market-tick sea puntual.
+CACHED_PRICE_MAX_AGE = timedelta(hours=6)
+# Una consulta a /item por skin y día como máximo.
+LOOKUP_MIN_INTERVAL = timedelta(hours=24)
 
 
 class AlertError(Exception):
@@ -38,6 +58,54 @@ class Duplicate(AlertError):
 
 class UnknownItem(AlertError):
     pass
+
+
+class PriceUnavailable(AlertError):
+    """No hay precio cacheado y la cuota de /item está agotada: reintentar más tarde."""
+
+
+def _parse_ts(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
+async def _cached_prices(names: list[str]) -> dict[str, float]:
+    """Precio por skin desde las tablas de rankings, ignorando filas viejas.
+    movers primero (se reemplaza entero en cada tick); trending como respaldo."""
+    cutoff = datetime.now(timezone.utc) - CACHED_PRICE_MAX_AGE
+    prices: dict[str, float] = {}
+    for ranking in (movers_repo, trending_repo):
+        try:
+            rows = await ranking.fetch_prices(names)
+        except Exception as exc:  # noqa: BLE001 — sin caché se cae al lookup
+            logger.warning("[alerts] lectura de %s falló: %s", ranking._table, exc)
+            continue
+        for row in rows:
+            ts = _parse_ts(row.get("updated_at"))
+            try:
+                price = float(row.get("price_latest") or 0)
+            except (TypeError, ValueError):
+                price = 0
+            if price > 0 and ts is not None and ts >= cutoff:
+                prices.setdefault(row["name"], price)
+    return prices
+
+
+def _lookup_due(alerts: list[dict], name: str) -> bool:
+    """True si alguna alerta de esa skin no se ha evaluado en las últimas 24 h."""
+    cutoff = datetime.now(timezone.utc) - LOOKUP_MIN_INTERVAL
+    for a in alerts:
+        if a["market_hash_name"] != name:
+            continue
+        last = _parse_ts(a.get("last_checked_at"))
+        if last is None or last < cutoff:
+            return True
+    return False
 
 
 def condition_met(direction: str, threshold: float, price: float) -> bool:
@@ -59,15 +127,21 @@ async def create_alert(
         raise Duplicate("Ya existe una alerta activa idéntica")
 
     # El nombre tiene que ser una skin real. Si ya la seguimos, listo; si no,
-    # un lookup la resuelve (cuesta 1 req de cuota, solo en creación) y la
-    # registra en tracked_skins para que entre en la captura diaria.
+    # los rankings la resuelven gratis y, si tampoco, un lookup (1 req de cuota,
+    # solo en creación). En cualquier caso se registra en tracked_skins para
+    # que entre en la captura diaria.
     if not await price_history_repo.is_tracked(market_hash_name):
-        try:
-            item = await price_capture._lookup_item(http_client, market_hash_name)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[alerts] lookup falló para %r: %s", market_hash_name, exc)
-            item = {}
-        if price_capture._canonical_price(item) is None:
+        price = (await _cached_prices([market_hash_name])).get(market_hash_name)
+        if price is None:
+            try:
+                item = await price_capture._lookup_item(http_client, market_hash_name)
+            except QuotaExhausted:
+                raise PriceUnavailable("Precio no disponible ahora mismo, inténtalo más tarde")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[alerts] lookup falló para %r: %s", market_hash_name, exc)
+                item = {}
+            price = price_capture._canonical_price(item)
+        if price is None:
             raise UnknownItem(f"No se encontró la skin {market_hash_name!r}")
         await price_history_repo.register_tracked([market_hash_name], "alert")
 
@@ -97,15 +171,20 @@ async def evaluate_alerts(http_client: httpx.AsyncClient) -> dict:
     total_active = await repo.count_active()
     alerts = await repo.fetch_active(ALERTS_LOOKUP_CAP)
 
-    # ponytail: una req por skin y tick, tope ALERTS_LOOKUP_CAP (una ventana del
-    # limiter). Si crece el nº de skins con alertas, el siguiente paso es leer
-    # primero market_trending / market_movers (refrescadas cada 15 min, gratis)
-    # y hacer lookup solo del resto.
-    prices: dict[str, float] = {}
+    names = list(dict.fromkeys(a["market_hash_name"] for a in alerts))
+    prices = await _cached_prices(names)
     errors = 0
-    for name in dict.fromkeys(a["market_hash_name"] for a in alerts):
+    quota_exhausted = False
+    for name in names:
+        if name in prices or not _lookup_due(alerts, name):
+            continue
         try:
             item = await price_capture._lookup_item(http_client, name)
+        except QuotaExhausted as exc:
+            errors += 1
+            quota_exhausted = True
+            logger.error("[alerts] cuota de steamwebapi agotada, sin más lookups este tick: %s", exc)
+            break
         except Exception as exc:  # noqa: BLE001 — best-effort: un fallo no aborta el lote
             errors += 1
             logger.warning("[alerts] lookup falló para %r: %s", name, exc)
@@ -154,6 +233,7 @@ async def evaluate_alerts(http_client: httpx.AsyncClient) -> dict:
         "sent": sent,
         "errors": errors,
         "pendientes": max(total_active - len(alerts), 0),
+        "quota_exhausted": quota_exhausted,
     }
     logger.info("[alerts] %s", out)
     return out
