@@ -301,6 +301,11 @@ Tres invariantes del tick (`alerts/service.py:evaluate_alerts`):
   lookups gastaba 432 él solo; la cuota se agotó el 2026-09-23 y `/item` devolvió 402 cuatro
   días sin que nadie lo viera. Un 402 (`QuotaExhausted`) corta los lookups del tick y del
   `price-tick`, ambos devuelven `quota_exhausted: true` y sus workflows se ponen en rojo.
+  ⚠️ **Es una medida preventiva para el plan Starter, no el diseño deseable.** Si se amplía
+  el plan o se cambia a un proveedor con más capacidad, hay que revisar `LOOKUP_MIN_INTERVAL`
+  (24 h → cadencia horaria, o eliminar `_lookup_due`), `CACHED_PRICE_MAX_AGE` (6 h) y
+  `ALERTS_LOOKUP_CAP`, todos en `alerts/service.py` y `settings.py`. Detalle en
+  `docs/issues/rendimiento/PERF-09-cuota-steamwebapi.md`.
 - **`mark_triggered` va ANTES de `send_to_tokens`.** Si el envío revienta a medias, el
   siguiente tick no la reenvía. Se sacrifica un aviso perdido a cambio de no duplicar
   nunca. Si es `mark_triggered` lo que falla, no se envía.
