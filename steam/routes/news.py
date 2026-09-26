@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import time
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from auth.service import _get_client_ip, _rate_limit
+from stores import NEWS_CACHE_TTL, _news_cache
 from ..mappers import _map_news_item, _fetch_og_image
 
 logger = logging.getLogger("uvicorn.error")
@@ -15,6 +17,13 @@ router = APIRouter()
 @router.get("/news/cs2", summary="Últimas noticias de CS2 vía Steam News API")
 async def get_cs2_news(request: Request, count: int = 5):
     _rate_limit(_get_client_ip(request))
+
+    # PERF-06: sin caché cada petición costaba 5,6–12,3 s desde Render (Steam +
+    # un GET por noticia para el og:image). Misma forma que _inventory_cache.
+    now = time.monotonic()
+    cached = _news_cache.get(count)
+    if cached and now - cached[1] < NEWS_CACHE_TTL:
+        return cached[0]
 
     try:
         resp = await request.app.state.http_client.get(
@@ -34,4 +43,6 @@ async def get_cs2_news(request: Request, count: int = 5):
         _fetch_og_image(request.app.state.http_client, item.get("url", ""))
         for item in newsitems
     ])
-    return [_map_news_item(item, i, images[i]) for i, item in enumerate(newsitems)]
+    items = [_map_news_item(item, i, images[i]) for i, item in enumerate(newsitems)]
+    _news_cache[count] = (items, now)
+    return items

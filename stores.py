@@ -43,6 +43,7 @@ MARKET_PRICES_CACHE_TTL = 300  # 5 min — live market prices, updated frequentl
 IMAGE_CACHE_TTL = 82800      # 23 h — same budget as other free-plan caches; CDN URLs are stable
 MARKET_LOOKUP_CACHE_TTL = 82800  # 23 h — full price list per market (premium endpoint, same daily budget)
 MARKET_PROVIDERS_CACHE_TTL = 82800  # 23 h — market list is mostly static
+NEWS_CACHE_TTL = 1800        # 30 min — /news/cs2 llama a Steam + scrapea 5 og:image por petición (PERF-06)
 
 INVENTORY_REFRESH_COOLDOWN = 3600  # 1h — manual "force refresh" button, protects shared steamwebapi quota
 
@@ -56,6 +57,7 @@ _topmovers_raw_cache: dict[str, tuple[list, list, float]] = {}  # "latest" → (
 _search_cache: dict[str, tuple[list, float]] = {}
 _item_price_cache: dict[str, tuple[Any, float]] = {}  # markethashname.lower() → (ISkinCard, ts)
 _market_prices_cache: dict[str, tuple[Any, float]] = {}
+_news_cache: dict[int, tuple[list, float]] = {}  # count → (items, ts)
 _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image URL
 _image_cache_meta: dict[str, float] = {}  # "ts" → monotonic timestamp of last successful population
 _market_lookup_cache: dict[str, tuple[dict, float]] = {}  # market → ({name: price}, ts)
