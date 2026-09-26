@@ -350,3 +350,10 @@ def test_cached_prices_ignores_stale_rows_and_prefers_movers(monkeypatch):
     prices = asyncio.run(service._cached_prices(["A", "B", "C"]))
 
     assert prices == {"A": 10.5, "B": 21.0}
+
+
+def test_fetch_active_selects_last_checked_at():
+    """Sin esta columna `_lookup_due` cree que ninguna alerta se ha evaluado nunca y el
+    tope de un /item al día por skin desaparece (visto en producción el 2026-09-26)."""
+    from alerts import repo
+    assert "last_checked_at" in repo._COLS

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from steam.cap_history_repo import get_supabase
 
 _TABLE = "price_alerts"
-_COLS = "id, steam_id, market_hash_name, direction, threshold, created_at, triggered_at, triggered_price"
+_COLS = "id, steam_id, market_hash_name, direction, threshold, created_at, last_checked_at, triggered_at, triggered_price"
 
 
 def _now() -> str:
