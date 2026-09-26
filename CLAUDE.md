@@ -283,6 +283,13 @@ nunca se versionó** — vivía solo dentro de un plan de implementación histó
 reconstruyó el 2026-09-14. Si el proyecto Supabase se recrea desde cero sin aplicarlo,
 el registro de token devuelve error y el news-tick no tiene dónde deduplicar.
 
+## Dependencias (CLEAN-02)
+
+`requirements.txt` es ASCII con CRLF (ya no UTF-16). `APScheduler` y `tzlocal` se quitaron
+el 2026-09-26: cero usos (los ticks son crons externos). `CacheControl`,
+`google-cloud-firestore` y `google-cloud-storage` **se quedan**: son transitivas de
+`firebase-admin` (`pipdeptree -r -p <paquete>` antes de tocar cualquier otra).
+
 ## Limiter del histórico y el chat (PERF-03)
 
 `_history_limiter` (18 req/60 s) **hace esperar** a quien llega con la ventana llena. Es lo
