@@ -11,6 +11,17 @@ import logging
 
 import httpx
 
+from steam.services import HistoryBusy
+
+# PERF-03: el _history_limiter (18 req/60 s) hace esperar a los crons, que es lo
+# correcto para batch; en el chat esa espera va dentro de la respuesta al usuario
+# (medido: el mismo "hola" entre 2,5 y 10,9 s). Tope solo en el camino del chat.
+CHAT_LIMITER_TIMEOUT = 3.0
+HISTORY_BUSY_MSG = (
+    "El histórico de precios está saturado ahora mismo. "
+    "Responde con los datos que tengas y dilo."
+)
+
 from tools.registry import register_tool
 
 logger = logging.getLogger("uvicorn.error")
@@ -139,12 +150,19 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
 
     _cache_images([raw])
     item = _map_item(raw)
-    (item,) = await _enrich_prices(client_http, [item])
+    try:
+        (item,) = await _enrich_prices(client_http, [item], limiter_timeout=CHAT_LIMITER_TIMEOUT)
+        enriched = True
+    except HistoryBusy:
+        # PERF-03: mejor un precio sin deltas en 3 s que uno completo en 60.
+        enriched = False
+        item["aviso"] = HISTORY_BUSY_MSG
     (item,) = await _enrich_market_prices(client_http, [item])
     await _fetch_static_images(client_http)
     _enrich_images_from_cache([item])
 
-    _item_price_cache[cache_key] = (item, now)
+    if enriched:
+        _item_price_cache[cache_key] = (item, now)
     return item
 
 
@@ -243,8 +261,11 @@ async def _historial_precio(
     """Historial de precios de una skin."""
     from steam.services import _fetch_history_for_item
 
-    pts = await _fetch_history_for_item(client, market_hash_name)
-    return pts
+    try:
+        return await _fetch_history_for_item(client, market_hash_name, limiter_timeout=CHAT_LIMITER_TIMEOUT)
+    except HistoryBusy:
+        # Vuelve al modelo como functionResponse: lo explica con sus palabras.
+        return {"error": HISTORY_BUSY_MSG}
 
 
 # ── Registrar todas las tools ─────────────────────────────────────────────────

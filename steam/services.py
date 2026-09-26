@@ -71,7 +71,20 @@ class _SlidingWindowLimiter:
 _history_limiter = _SlidingWindowLimiter(limit=18, window=60.0)
 
 
-async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
+class HistoryBusy(Exception):
+    """El limiter del histórico está lleno y el llamador no puede esperar (PERF-03).
+
+    Los crons esperan lo que haga falta (mejor tarde que perder el dato); el chat
+    no: una espera de hasta 60 s dentro de una respuesta interactiva es un chat
+    muerto. Cancelar `acquire()` es seguro: registra la llamada y devuelve sin
+    ningún `await` entre medias, así que una cancelación durante la espera no deja
+    un hueco fantasma en la ventana.
+    """
+
+
+async def _fetch_history_for_item(
+    client: httpx.AsyncClient, name: str, *, limiter_timeout: float | None = None,
+) -> list:
     cache_key = f"{name}:csfloat:35d"
     now = time.monotonic()
     cached = _item_history_cache.get(cache_key)
@@ -80,7 +93,14 @@ async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
         if now - cached[1] < ttl:
             return cached[0]
     try:
-        await _history_limiter.acquire()
+        if limiter_timeout is None:
+            await _history_limiter.acquire()
+        else:
+            try:
+                await asyncio.wait_for(_history_limiter.acquire(), timeout=limiter_timeout)
+            except asyncio.TimeoutError:
+                # Sin cachear: un vacío "por saturación" no es un dato.
+                raise HistoryBusy(name) from None
         now = time.monotonic()  # limiter may have blocked; refresh for cache stamps
         today = date.today()
         resp = await client.get(
@@ -116,18 +136,22 @@ async def _fetch_history_for_item(client: httpx.AsyncClient, name: str) -> list:
         logger.info("[item-history] %s → %d points (csfloat)", name, len(pts))
         _item_history_cache[cache_key] = (pts, now)
         return pts
+    except HistoryBusy:
+        raise
     except Exception as exc:
         logger.warning("[item-history] %s → exception: %s", name, exc)
         _item_history_cache[cache_key] = ([], now)
         return []
 
 
-async def _enrich_prices(client: httpx.AsyncClient, items: list, concurrency: int = 5) -> list:
+async def _enrich_prices(
+    client: httpx.AsyncClient, items: list, concurrency: int = 5, *, limiter_timeout: float | None = None,
+) -> list:
     sem = asyncio.Semaphore(concurrency)
 
     async def fetch(name: str):
         async with sem:
-            return await _fetch_history_for_item(client, name)
+            return await _fetch_history_for_item(client, name, limiter_timeout=limiter_timeout)
 
     histories = await asyncio.gather(*[fetch(it["name"]) for it in items])
     result = []

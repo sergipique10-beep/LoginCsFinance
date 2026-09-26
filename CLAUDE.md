@@ -283,6 +283,17 @@ nunca se versionó** — vivía solo dentro de un plan de implementación histó
 reconstruyó el 2026-09-14. Si el proyecto Supabase se recrea desde cero sin aplicarlo,
 el registro de token devuelve error y el news-tick no tiene dónde deduplicar.
 
+## Limiter del histórico y el chat (PERF-03)
+
+`_history_limiter` (18 req/60 s) **hace esperar** a quien llega con la ventana llena. Es lo
+correcto para los crons y lo incorrecto para el chat: la espera iba dentro de la respuesta
+al usuario (hasta 60 s). Desde 2026-09-26 `_fetch_history_for_item(..., limiter_timeout=)` y
+`_enrich_prices(..., limiter_timeout=)` aceptan un tope; **solo las tools del chat lo pasan**
+(`CHAT_LIMITER_TIMEOUT = 3.0` en `tools/market_tools.py`). Si vence, `HistoryBusy`: la tool
+`historial_precio` devuelve `{"error": ...}` para que el modelo lo explique, y
+`consultar_precio_skin` responde con el precio sin deltas, marca `aviso` y **no cachea** el
+item. Nada de esto se cachea como vacío. Los crons siguen llamando sin timeout.
+
 ## Alertas de precio (`price_alerts`)
 
 DDL en **`docs/sql/price_alerts.sql`** — **hay que ejecutarlo a mano en Supabase**.
