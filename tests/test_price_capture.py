@@ -183,3 +183,40 @@ async def test_capture_counts_errors(monkeypatch):
 
     assert out["errors"] == 1
     assert out["captured"] == 0
+
+
+# ── PERF-09: 402 = cuota agotada → abortar el lote ───────────────────────────
+
+import httpx
+
+from steam.price_capture import QuotaExhausted
+
+
+@pytest.mark.asyncio
+async def test_lookup_raises_quota_exhausted_on_402(monkeypatch):
+    monkeypatch.setattr(price_capture._history_limiter, "acquire", AsyncMock())
+    client = MagicMock()
+    client.get = AsyncMock(return_value=httpx.Response(402, text='{"status":402,"message":"monthly limit"}'))
+
+    with pytest.raises(QuotaExhausted):
+        await price_capture._lookup_item(client, "AK")
+
+
+@pytest.mark.asyncio
+async def test_capture_aborts_batch_on_quota_exhausted(monkeypatch):
+    monkeypatch.setattr(price_capture, "PRICE_LOOKUP_CAP", 400)
+    monkeypatch.setattr(price_capture.repo, "count_pending", AsyncMock(return_value=3))
+    monkeypatch.setattr(price_capture.repo, "fetch_tracked", AsyncMock(return_value=["A", "B", "C"]))
+    upsert, mark = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(price_capture.repo, "upsert_prices", upsert)
+    monkeypatch.setattr(price_capture.repo, "mark_captured", mark)
+    lookup = AsyncMock(side_effect=[{"pricelatest": 5}, QuotaExhausted("402"), {"pricelatest": 7}])
+    monkeypatch.setattr(price_capture, "_lookup_item", lookup)
+
+    out = await price_capture.capture(MagicMock())
+
+    assert lookup.await_count == 2                     # C no se intenta
+    assert out["quota_exhausted"] is True
+    assert out["captured"] == 1 and out["errors"] == 1 and out["pendientes"] == 1
+    mark.assert_awaited_once()
+    assert mark.await_args.args[0] == ["A", "B"]        # B intentada: la rueda avanza
