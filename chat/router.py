@@ -45,8 +45,9 @@ class Source(BaseModel):
 class ChatStatus(BaseModel):
     """Estado de Sharky, para que el frontend sepa si pintar la UI del chat.
 
-    Público a propósito (sin `require_jwt`): la app necesita saber si mostrar el
-    botón del chat antes de que haya sesión, y la respuesta no revela nada.
+    Con `require_jwt`: el único consumidor es el shell de tabs, que se monta
+    después del `authGuard`, así que siempre llega con Bearer. Público era el
+    único endpoint sin rate limit de toda la API (revisión del 2026-09-27).
     """
     enabled: bool
 
@@ -66,12 +67,21 @@ async def require_chat_enabled():
     guard dentro del cuerpo, `require_jwt` se evaluaría primero y un anónimo
     recibiría 401, revelando que el endpoint existe y espera credenciales.
     Medido: con el guard en el cuerpo, `POST /rag/chat` sin token daba 401.
+
+    No es un control de seguridad: un JSON malformado da 422 y un GET da 405
+    antes de evaluar dependencias, así que la ruta sigue siendo descubrible.
+    Es cortesía con el usuario legítimo, no ocultación frente a un atacante.
     """
     if not CHAT_ENABLED:
         raise HTTPException(status_code=404, detail="Not found")
 
 
-@router.get("/rag/chat/status", response_model=ChatStatus, summary="¿Está Sharky disponible?")
+@router.get(
+    "/rag/chat/status",
+    response_model=ChatStatus,
+    summary="¿Está Sharky disponible?",
+    dependencies=[Depends(require_jwt)],
+)
 async def rag_chat_status():
     return ChatStatus(enabled=CHAT_ENABLED)
 
@@ -111,11 +121,12 @@ async def rag_chat(
         # proyecto y el loop de tools gasta 2-4 por mensaje (PERF-04). Devolverlo
         # como 502 genérico le enseña al usuario que la app falla, cuando lo que
         # pasa es que se acabó el cupo del día. 429 para que el frontend pueda
-        # distinguirlo y decirlo con sus palabras.
+        # distinguirlo y decirlo con sus palabras. Sin "diarias": Gemini también
+        # devuelve 429 por el límite por minuto, y prometer "mañana" sería falso.
         if exc.response.status_code == 429:
             raise HTTPException(
                 status_code=429,
-                detail="El asistente ha alcanzado su límite de consultas diarias",
+                detail="El asistente ha alcanzado su límite de consultas",
             )
         raise HTTPException(status_code=502, detail="El asistente no está disponible ahora mismo")
     except httpx.RequestError as exc:
