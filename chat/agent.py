@@ -218,11 +218,23 @@ async def generate_with_sources(
     preload del system prompt y la tool `buscar_contexto_rag`. Ambas cuentan —
     si solo se miraran los del preload, una respuesta documentada vía tool
     llegaría al frontend sin fuentes. El router deduplica por URL.
+
+    Pero el preload solo se cita si la respuesta salió de él: si el modelo
+    resolvió el turno con otra tool (precio, predicción, inventario), esos
+    fragmentos estaban en el prompt sin intervenir, y citarlos es adjuntar
+    changelogs de 2022 a una proyección de precios (UX-15). Los del sink se
+    citan siempre: el modelo los pidió a propósito.
     """
     fragmentos = await _retrieve_context(client, message, history)
     sink: list[dict] = []
-    ctx = {**(tool_context or {}), "sources_sink": sink}
+    usos: dict[str, int] = {}  # lo rellena `_run_tool` (mismo objeto tras la copia)
+    ctx = {**(tool_context or {}), "sources_sink": sink, "_usos_tool": usos}
     texto = await _generate(client, message, history, tools, ctx, fragmentos)
+    # ponytail: heurística "hubo tool ≠ RAG → el preload no respaldó la respuesta".
+    # Pierde el caso mixto (precio + noticias en un turno); si molesta, pedir al
+    # modelo los ids citados (opción D del issue).
+    if any(t != "buscar_contexto_rag" for t in usos):
+        fragmentos = []
     return texto, fragmentos + sink
 
 
