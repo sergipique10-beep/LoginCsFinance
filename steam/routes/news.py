@@ -7,9 +7,14 @@ from fastapi import APIRouter, HTTPException, Request
 
 from auth.service import _get_client_ip, _rate_limit
 from stores import NEWS_CACHE_TTL, _news_cache
-from ..mappers import _map_news_item, _fetch_og_image
+from ..mappers import _map_news_item, _fetch_og_image, is_readable_news
 
 logger = logging.getLogger("uvicorn.error")
+
+# Cuántas noticias se piden de más para poder descartar las no latinas (UX-05),
+# y tope duro para que un `count` alto no dispare una petición enorme a Steam.
+NEWS_OVERFETCH = 3
+NEWS_MAX_FETCH = 30
 
 router = APIRouter()
 
@@ -26,9 +31,13 @@ async def get_cs2_news(request: Request, count: int = 5):
         return cached[0]
 
     try:
+        # UX-05: se piden más de las necesarias porque después se descartan las
+        # que no están en alfabeto latino. El tope evita que un `count` alto
+        # dispare una petición enorme a Steam.
+        fetch_count = min(count * NEWS_OVERFETCH, NEWS_MAX_FETCH)
         resp = await request.app.state.http_client.get(
             "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/",
-            params={"appid": 730, "count": count, "format": "json"},
+            params={"appid": 730, "count": fetch_count, "format": "json"},
         )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Steam news request timed out")
@@ -39,6 +48,12 @@ async def get_cs2_news(request: Request, count: int = 5):
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
     newsitems = resp.json().get("appnews", {}).get("newsitems", [])
+
+    # UX-05: fuera las ilegibles (ruso, chino...), y recorte al `count` pedido.
+    # Si el filtro se lo lleva TODO nos quedamos con las originales: más vale una
+    # noticia en ruso que un feed vacío.
+    readable = [n for n in newsitems if is_readable_news(n)]
+    newsitems = (readable or newsitems)[:count]
     images = await asyncio.gather(*[
         _fetch_og_image(request.app.state.http_client, item.get("url", ""))
         for item in newsitems
