@@ -150,7 +150,8 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/internal/alerts-tick` | `X-Alerts-Tick-Token` | Cron horario (`alerts-tick.yml`, minuto :50). Evalúa hasta `ALERTS_LOOKUP_CAP` alertas activas (LRU por `last_checked_at`), 1 lookup por skin distinta vía el `_history_limiter`, marca disparadas **antes** de enviar y manda push solo a los tokens del dueño. Devuelve `{evaluated, triggered, sent, errors, pendientes, quota_exhausted}`. |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited; caché en proceso 30 min por `count` (`_news_cache`, PERF-06: sin ella costaba 6 s por petición) |
-| POST | `/rag/chat` | Bearer | Chat con el asistente Sharky (Gemini), con historial de turnos. Hace retrieval del RAG en cada mensaje (inyectado en el system prompt) y devuelve `reply` + `sources[]` (dedup por URL). Function calling multi-tool sobre `tools/` |
+| GET | `/rag/chat/status` | — | `{enabled}` según `CHAT_ENABLED`. Público a propósito: el frontend necesita saber si pintar la UI del chat antes de tener sesión. |
+| POST | `/rag/chat` | Bearer | Chat con el asistente Sharky (Gemini), con historial de turnos. Hace retrieval del RAG en cada mensaje (inyectado en el system prompt) y devuelve `reply` + `sources[]` (dedup por URL). Function calling multi-tool sobre `tools/`. **404 si `CHAT_ENABLED=false`; 429 (no 502) si Gemini agota la cuota diaria** (PERF-04) |
 | POST | `/internal/rag-ingest` | `X-Rag-Ingest-Token` | Cron diario (GitHub Actions) de ingesta RSS + Steam News → embeddings Gemini → upsert en Supabase. Idempotente por `external_id` |
 
 ## Data mapping
@@ -372,6 +373,7 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | *(empty)* | JSON completo de la service account de Firebase (Firebase Admin SDK), como string. Startup warns if missing. |
 | `NEWS_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/news-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
 | `BROADCAST_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/broadcast` (anuncio manual). Token propio, **no** se reutiliza `NEWS_TICK_TOKEN`. Must match the GitHub Actions secret of the same name. Startup warns if missing. |
+| `CHAT_ENABLED` | `true` | **Interruptor de Sharky (PERF-04).** Con `false`, `POST /rag/chat` devuelve **404** y `GET /rag/chat/status` responde `{enabled:false}`, que es lo que el frontend usa para no pintar el FAB ni el modal. Existe porque el free tier de Gemini (20 req/día por proyecto) no da para usuarios reales y el chat va a formar parte de un plan de suscripción: hay que poder apagarlo sin tocar código. ⚠️ El flag se evalúa como dependencia **antes** de `require_jwt`; si se moviera al cuerpo de la función, un anónimo recibiría 401 en vez de 404 (medido). |
 | `GEMINI_EMBED_MODEL` | `gemini-embedding-001` | Modelo de embeddings de Gemini usado por el RAG (768 dims vía `outputDimensionality`) |
 | `RAG_INGEST_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/rag-ingest`. Must match the GitHub Actions secret. |
 | `RAG_FEEDS` | `https://blog.counter-strike.net/index.php/feed/` | Feeds RSS a ingestar para el RAG, separados por coma |
