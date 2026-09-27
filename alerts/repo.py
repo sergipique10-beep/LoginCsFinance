@@ -92,6 +92,14 @@ async def delete(alert_id: int, steam_id: str) -> bool:
     return await asyncio.to_thread(_do)
 
 
+async def delete_all_for_user(steam_id: str) -> None:
+    """Borrado de cuenta (LAUNCH-04): activas y disparadas, sin distinción."""
+    def _do() -> None:
+        get_supabase().table(_TABLE).delete().eq("steam_id", steam_id).execute()
+
+    await asyncio.to_thread(_do)
+
+
 async def fetch_active(limit: int) -> list[dict]:
     """Hasta `limit` alertas activas, menos-recientemente-evaluadas primero (nulls primero)."""
     def _do() -> list[dict]:

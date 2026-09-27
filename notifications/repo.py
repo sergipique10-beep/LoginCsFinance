@@ -66,6 +66,14 @@ async def delete_device_tokens(tokens: list[str]) -> None:
     await asyncio.to_thread(_do)
 
 
+async def delete_device_tokens_for(steam_id: str) -> None:
+    """Borrado de cuenta (LAUNCH-04): todos los dispositivos del usuario."""
+    def _do() -> None:
+        get_supabase().table(_DEVICE_TOKENS_TABLE).delete().eq("steam_id", steam_id).execute()
+
+    await asyncio.to_thread(_do)
+
+
 async def delete_device_token(token: str) -> None:
     def _do() -> None:
         get_supabase().table(_DEVICE_TOKENS_TABLE).delete().eq("token", token).execute()

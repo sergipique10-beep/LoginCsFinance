@@ -126,6 +126,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/auth/review-login` | — | Credenciales fijas (`REVIEW_USER`/`REVIEW_PASSWORD`) para la revisión de Google Play, sin pasar por Steam. 404 si las tres vars no están puestas. |
 | POST | `/auth/refresh` | cookie o cuerpo | Rotates refresh token |
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
+| DELETE | `/me` | Bearer (+cookie/body refresh) | **Borrado de cuenta (LAUNCH-04)**: borra `device_tokens` y `price_alerts` del SteamID, vacía sus cachés en memoria, revoca el refresh y limpia la cookie. Idempotente. Es la URL de borrado que exige Google Play, vía botón en Perfil |
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
 | GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item` + enrichment below) |
 | POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio en `stores.py`). |
