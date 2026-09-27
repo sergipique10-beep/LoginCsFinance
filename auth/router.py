@@ -4,7 +4,7 @@ import time
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Cookie, HTTPException, Request
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 import jwt
@@ -19,7 +19,10 @@ from settings import (
     REVIEW_STEAM_ID,
     REVIEW_USER,
 )
-from stores import _auth_codes, CODE_TTL, _refresh_store, TOKEN_AUDIENCE
+from stores import (
+    _auth_codes, CODE_TTL, _refresh_store, TOKEN_AUDIENCE,
+    _profile_cache, _inventory_cache, _inventory_refresh_cooldown,
+)
 from auth.service import (
     _consume_nonce,
     _get_client_ip,
@@ -28,7 +31,10 @@ from auth.service import (
     _rate_limit,
     _refresh_token_from_body,
     _token_response,
+    require_jwt,
 )
+from notifications import repo as notifications_repo
+from alerts import repo as alerts_repo
 
 STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
 
@@ -227,23 +233,16 @@ async def logout(
     request: Request,
     refresh_token: str | None = Cookie(default=None),
 ):
-    refresh_token = refresh_token or await _refresh_token_from_body(request)
-    if refresh_token:
-        try:
-            payload = jwt.decode(
-                refresh_token,
-                JWT_SECRET,
-                algorithms=["HS256"],
-                audience=TOKEN_AUDIENCE,
-            )
-            jti = payload.get("jti")
-            if jti:
-                _refresh_store.pop(jti, None)
-        except jwt.InvalidTokenError:
-            # Invalid or expired token: no JTI to revoke, continue anyway
-            pass
+    _revoke_refresh(refresh_token or await _refresh_token_from_body(request))
 
     response = JSONResponse({"message": "Logged out"})
+    _delete_refresh_cookie(response)
+    return response
+
+
+def _delete_refresh_cookie(response: JSONResponse) -> None:
+    # Mismos atributos con los que se emitió: si no coinciden, el navegador no
+    # la considera la misma cookie y el borrado no surte efecto.
     response.delete_cookie(
         key="refresh_token",
         path="/",
@@ -251,4 +250,40 @@ async def logout(
         secure=COOKIE_SECURE,
         samesite="strict",
     )
+
+
+def _revoke_refresh(refresh_token: str | None) -> None:
+    if not refresh_token:
+        return
+    try:
+        payload = jwt.decode(refresh_token, JWT_SECRET, algorithms=["HS256"], audience=TOKEN_AUDIENCE)
+    except jwt.InvalidTokenError:
+        return  # inválido o caducado: no hay JTI que revocar
+    jti = payload.get("jti")
+    if jti:
+        _refresh_store.pop(jti, None)
+
+
+@router.delete("/me", summary="Borra los datos del usuario y cierra la sesión (LAUNCH-04)")
+async def delete_me(
+    request: Request,
+    refresh_token: str | None = Cookie(default=None),
+    claims: dict = Depends(require_jwt),
+):
+    """Borrado de cuenta que exige Google Play y describe la política de privacidad.
+
+    Todo lo que lleva SteamID en servidor: tokens de dispositivo (push) y alertas
+    de precio, más las cachés en memoria de perfil e inventario y el refresh
+    vigente. Los precios históricos de mercado no llevan SteamID y se quedan.
+    Idempotente: borrar lo que ya no existe también responde 200.
+    """
+    steam_id: str = claims["sub"]
+    await notifications_repo.delete_device_tokens_for(steam_id)
+    await alerts_repo.delete_all_for_user(steam_id)
+    for cache in (_profile_cache, _inventory_cache, _inventory_refresh_cooldown):
+        cache.pop(steam_id, None)
+    _revoke_refresh(refresh_token or await _refresh_token_from_body(request))
+
+    response = JSONResponse({"message": "Deleted"})
+    _delete_refresh_cookie(response)
     return response

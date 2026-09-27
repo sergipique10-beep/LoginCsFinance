@@ -181,6 +181,49 @@ def test_logout_without_cookie_still_succeeds(client):
     assert client.post("/auth/logout").status_code == 200
 
 
+# ── DELETE /me: borrado de cuenta (LAUNCH-04) ────────────────────────────────
+
+def test_delete_me_wipes_tokens_alerts_caches_and_revokes_refresh(client, monkeypatch):
+    """Todo lo que lleva SteamID en servidor se va en una sola llamada: es lo que
+    la política de privacidad promete y lo que Google Play exige poder hacer."""
+    from unittest.mock import AsyncMock
+    from stores import _profile_cache, _inventory_cache, _inventory_refresh_cooldown
+    from tests.conftest import STEAM_ID as JWT_SUB  # el sub que firma el fixture `client`
+
+    tokens = AsyncMock()
+    alerts = AsyncMock()
+    monkeypatch.setattr(auth_router.notifications_repo, "delete_device_tokens_for", tokens)
+    monkeypatch.setattr(auth_router.alerts_repo, "delete_all_for_user", alerts)
+    _profile_cache[JWT_SUB] = ({"name": "x"}, 0.0)
+    _inventory_cache[JWT_SUB] = ([], 0.0)
+    _inventory_refresh_cooldown[JWT_SUB] = 0.0
+    refresh = _login(client)
+    jti = _decode(refresh)["jti"]
+
+    resp = client.delete("/me", cookies={"refresh_token": refresh})
+
+    assert resp.status_code == 200
+    tokens.assert_awaited_once_with(JWT_SUB)
+    alerts.assert_awaited_once_with(JWT_SUB)
+    assert JWT_SUB not in _profile_cache and JWT_SUB not in _inventory_cache
+    assert JWT_SUB not in _inventory_refresh_cooldown
+    assert jti not in _refresh_store
+    assert "refresh_token=" in resp.headers["set-cookie"]  # cookie borrada
+
+
+def test_delete_me_requires_a_session(monkeypatch):
+    from unittest.mock import AsyncMock
+    from fastapi.testclient import TestClient
+    import main as main_module
+
+    monkeypatch.setattr(main_module, "_fetch_static_images", AsyncMock())
+    tokens = AsyncMock()
+    monkeypatch.setattr(auth_router.notifications_repo, "delete_device_tokens_for", tokens)
+    with TestClient(main_module.app) as anon:
+        assert anon.delete("/me").status_code == 401
+    tokens.assert_not_awaited()
+
+
 # ── /auth/dev-token: 404 fuera de DEBUG ───────────────────────────────────────
 
 def test_dev_token_is_404_when_disabled(client, monkeypatch):
