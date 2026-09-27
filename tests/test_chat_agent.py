@@ -162,3 +162,60 @@ class TestGenerateWithTools:
         part_sent = model_turn["parts"][0]
         assert part_sent["thoughtSignature"] == "encrypted_sig_abc123"
         assert part_sent["functionCall"]["name"] == "test_tool"
+
+
+class TestGenerateWithSourcesPertinencia:
+    """UX-15: el preload solo se cita si la respuesta salió de él."""
+
+    _PRELOAD = [{"content": "Parche", "title": "Update 2022", "url": "https://x/1"}]
+
+    @pytest.fixture(autouse=True)
+    def _preload(self, monkeypatch):
+        async def _fake(client, message, history=None):
+            return list(self._PRELOAD)
+        monkeypatch.setattr(agent, "_retrieve_context", _fake)
+
+    @pytest.mark.asyncio
+    async def test_respuesta_por_tool_no_cita_el_preload(self):
+        fc = {"name": "predecir_precio", "args": {"skin": "AK"}}
+        client = _mock_client_sequence([
+            {"candidates": [{"content": {"parts": [{"functionCall": fc}]}}]},
+            {"candidates": [{"content": {"parts": [{"text": "Subirá un 3 %"}]}}]},
+        ])
+
+        async def fake_tool(*a, **kw):
+            return {"delta": 3}
+
+        with patch("tools.registry.execute_tool", side_effect=fake_tool):
+            texto, fragmentos = await agent.generate_with_sources(
+                client, "¿merece la pena?", [], tools=[{"name": "predecir_precio"}],
+            )
+        assert texto == "Subirá un 3 %"
+        assert fragmentos == []
+
+    @pytest.mark.asyncio
+    async def test_respuesta_desde_el_contexto_si_cita(self):
+        client = _mock_client({
+            "candidates": [{"content": {"parts": [{"text": "Según el parche..."}]}}]
+        })
+        _, fragmentos = await agent.generate_with_sources(client, "novedades?", [])
+        assert fragmentos == self._PRELOAD
+
+    @pytest.mark.asyncio
+    async def test_la_tool_rag_si_cita_lo_que_trajo(self):
+        """El sink cuenta aunque no hubiera preload útil: el modelo lo pidió."""
+        fc = {"name": "buscar_contexto_rag", "args": {"query": "cache"}}
+        client = _mock_client_sequence([
+            {"candidates": [{"content": {"parts": [{"functionCall": fc}]}}]},
+            {"candidates": [{"content": {"parts": [{"text": "Cache vuelve"}]}}]},
+        ])
+
+        async def fake_tool(name, *a, _sources_sink=None, **kw):
+            _sources_sink.append({"title": "Cache", "url": "https://x/9"})
+            return {"encontrado": True}
+
+        with patch("tools.registry.execute_tool", side_effect=fake_tool):
+            _, fragmentos = await agent.generate_with_sources(
+                client, "¿y Cache?", [], tools=[{"name": "buscar_contexto_rag"}],
+            )
+        assert [f["url"] for f in fragmentos] == ["https://x/1", "https://x/9"]
