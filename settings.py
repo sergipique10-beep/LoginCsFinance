@@ -51,6 +51,14 @@ BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN", "")
 # pudiendo pedir el contexto vía la tool `buscar_contexto_rag`.
 CHAT_RAG_PRELOAD = os.getenv("CHAT_RAG_PRELOAD", "true").lower() not in ("false", "0", "no")
 
+# Interruptor de Sharky (PERF-04). `false` deja /rag/chat devolviendo 404 y el
+# frontend esconde la UI del chat: es el mismo flag por los dos lados.
+#
+# Existe porque la cuota del free tier de Gemini (20 req/día por proyecto) no da
+# para servir a usuarios reales, y la idea es que el chat forme parte de un plan
+# de suscripción. Poder apagarlo y encenderlo sin tocar código es el requisito.
+CHAT_ENABLED = os.getenv("CHAT_ENABLED", "true").lower() not in ("false", "0", "no")
+
 # Gemini (Google AI Studio) — chat del asistente Sharky (POST /rag/chat).
 # La key vive SOLO en el backend; el frontend nunca la ve.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")

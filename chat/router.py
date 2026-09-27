@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from auth.service import require_jwt, _get_client_ip, _rate_limit
 from chat.agent import generate_with_sources
+from settings import CHAT_ENABLED
 
 from tools.registry import get_declarations
 from tools.market_tools import register_market_tools
@@ -41,6 +42,15 @@ class Source(BaseModel):
     published_at: str | None = None
 
 
+class ChatStatus(BaseModel):
+    """Estado de Sharky, para que el frontend sepa si pintar la UI del chat.
+
+    Público a propósito (sin `require_jwt`): la app necesita saber si mostrar el
+    botón del chat antes de que haya sesión, y la respuesta no revela nada.
+    """
+    enabled: bool
+
+
 class ChatResponse(BaseModel):
     reply: str
     # Fuentes del contexto RAG recuperado para este mensaje. Sustituye al
@@ -49,7 +59,31 @@ class ChatResponse(BaseModel):
     sources: list[Source] = []
 
 
-@router.post("/rag/chat", response_model=ChatResponse, summary="Chat con Sharky (Gemini)")
+async def require_chat_enabled():
+    """404 si Sharky está apagado (PERF-04).
+
+    Va como dependencia y **antes** de `require_jwt` en la lista: si fuera un
+    guard dentro del cuerpo, `require_jwt` se evaluaría primero y un anónimo
+    recibiría 401, revelando que el endpoint existe y espera credenciales.
+    Medido: con el guard en el cuerpo, `POST /rag/chat` sin token daba 401.
+    """
+    if not CHAT_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@router.get("/rag/chat/status", response_model=ChatStatus, summary="¿Está Sharky disponible?")
+async def rag_chat_status():
+    return ChatStatus(enabled=CHAT_ENABLED)
+
+
+@router.post(
+    "/rag/chat",
+    response_model=ChatResponse,
+    summary="Chat con Sharky (Gemini)",
+    # El orden importa: el flag se evalúa antes que la auth, así un anónimo ve
+    # 404 y no 401 cuando el chat está apagado.
+    dependencies=[Depends(require_chat_enabled)],
+)
 async def rag_chat(
     payload: ChatRequest,
     request: Request,
@@ -73,6 +107,16 @@ async def rag_chat(
         )
     except httpx.HTTPStatusError as exc:
         logger.warning("Gemini devolvió %s: %s", exc.response.status_code, exc.response.text[:300])
+        # La cuota agotada no es una caída: el free tier son 20 req/día por
+        # proyecto y el loop de tools gasta 2-4 por mensaje (PERF-04). Devolverlo
+        # como 502 genérico le enseña al usuario que la app falla, cuando lo que
+        # pasa es que se acabó el cupo del día. 429 para que el frontend pueda
+        # distinguirlo y decirlo con sus palabras.
+        if exc.response.status_code == 429:
+            raise HTTPException(
+                status_code=429,
+                detail="El asistente ha alcanzado su límite de consultas diarias",
+            )
         raise HTTPException(status_code=502, detail="El asistente no está disponible ahora mismo")
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"No se pudo contactar con el asistente: {exc}")
