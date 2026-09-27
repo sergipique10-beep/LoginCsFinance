@@ -150,7 +150,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/internal/alerts-tick` | `X-Alerts-Tick-Token` | Cron horario (`alerts-tick.yml`, minuto :50). Evalúa hasta `ALERTS_LOOKUP_CAP` alertas activas (LRU por `last_checked_at`), 1 lookup por skin distinta vía el `_history_limiter`, marca disparadas **antes** de enviar y manda push solo a los tokens del dueño. Devuelve `{evaluated, triggered, sent, errors, pendientes, quota_exhausted}`. |
 | GET | `/item/history` | Bearer | Item price history; `?name=<hash>&interval=<minutes>` |
 | GET | `/news/cs2` | — | CS2 news via Steam News API; `?count=N` (default 5); rate-limited; caché en proceso 30 min por `count` (`_news_cache`, PERF-06: sin ella costaba 6 s por petición) |
-| GET | `/rag/chat/status` | — | `{enabled}` según `CHAT_ENABLED`. Público a propósito: el frontend necesita saber si pintar la UI del chat antes de tener sesión. |
+| GET | `/rag/chat/status` | Bearer | `{enabled}` según `CHAT_ENABLED`. Lo consulta el shell de tabs tras el `authGuard`, siempre con sesión; era el único endpoint público sin rate limit. |
 | POST | `/rag/chat` | Bearer | Chat con el asistente Sharky (Gemini), con historial de turnos. Hace retrieval del RAG en cada mensaje (inyectado en el system prompt) y devuelve `reply` + `sources[]` (dedup por URL). Function calling multi-tool sobre `tools/`. **404 si `CHAT_ENABLED=false`; 429 (no 502) si Gemini agota la cuota diaria** (PERF-04) |
 | POST | `/internal/rag-ingest` | `X-Rag-Ingest-Token` | Cron diario (GitHub Actions) de ingesta RSS + Steam News → embeddings Gemini → upsert en Supabase. Idempotente por `external_id` |
 

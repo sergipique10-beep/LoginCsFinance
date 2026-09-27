@@ -51,7 +51,9 @@ def test_chat_traduce_429_de_gemini_a_429_propio(client, monkeypatch):
     resp = client.post("/rag/chat", json={"message": "hola", "history": []})
 
     assert resp.status_code == 429
-    assert "diarias" in resp.json()["detail"]
+    assert "límite" in resp.json()["detail"]
+    # Gemini da 429 también por el límite por minuto: el texto no promete "mañana".
+    assert "diaria" not in resp.json()["detail"]
 
 
 def test_chat_mantiene_502_para_otros_errores_de_gemini(client, monkeypatch):
@@ -113,3 +115,11 @@ def test_chat_apagado_da_404_tambien_sin_autenticar(monkeypatch):
     assert resp.status_code == 404, (
         f"esperaba 404 y llegó {resp.status_code}: el flag debe evaluarse antes que require_jwt"
     )
+
+    # Control positivo: sin él, el 404 de arriba también saldría si la ruta no
+    # existiera o cambiara de path. Con el flag encendido el anónimo ve 401.
+    monkeypatch.setattr(chat_router, "CHAT_ENABLED", True)
+    with TestClient(main_module.app) as anon:
+        assert anon.post("/rag/chat", json={"message": "hola", "history": []}).status_code == 401
+        # El status también exige sesión: era el único endpoint sin auth ni rate limit.
+        assert anon.get("/rag/chat/status").status_code == 401
