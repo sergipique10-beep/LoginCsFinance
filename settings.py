@@ -80,6 +80,12 @@ RAG_FEEDS: list[str] = [u.strip() for u in _raw_feeds.split(",") if u.strip()]
 # Ver spec: "nunca inventa".
 RAG_MIN_SIMILARITY = float(os.getenv("RAG_MIN_SIMILARITY", "0.5"))
 
+# Antigüedad máxima de una fuente citada en /rag/chat (UX-15, red de seguridad).
+# La similitud no distingue un changelog de 2023 de uno de la semana pasada, y un
+# artículo viejo bajo una predicción de precio es lo que rompe la confianza en las
+# citas. 0 desactiva el filtro. Solo afecta a `sources[]`, no al contexto del modelo.
+RAG_SOURCE_MAX_AGE_DAYS = int(os.getenv("RAG_SOURCE_MAX_AGE_DAYS", "365"))
+
 # Whitelist de orígenes de retorno permitidos tras la auth de Steam.
 # Separar múltiples valores con coma en .env.
 # Debe incluir la URL web y el scheme nativo de Android.
