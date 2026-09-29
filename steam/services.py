@@ -8,9 +8,9 @@ import httpx
 from settings import STEAM_API_KEY
 from stores import (
     ITEM_HISTORY_CACHE_TTL, IMAGE_CACHE_TTL, MARKET_LOOKUP_CACHE_TTL,
-    MARKET_PROVIDERS_CACHE_TTL,
+    MARKET_PROVIDERS_CACHE_TTL, FX_CACHE_TTL,
     _item_history_cache, _item_image_cache, _image_cache_meta,
-    _market_lookup_cache, _market_providers_cache,
+    _market_lookup_cache, _market_providers_cache, _fx_cache,
 )
 from steam.mappers import _delta_from_history, _map_topmovers_item
 
@@ -18,6 +18,10 @@ logger = logging.getLogger("uvicorn.error")
 
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
 STEAM_MARKET_API = "https://www.steamwebapi.com/market"
+
+# Tipo de cambio: frankfurter sirve los tipos de referencia del BCE, sin clave ni
+# registro. El host .app redirige 301 a .dev, asi que se apunta directo a .dev.
+_FX_API = "https://api.frankfurter.dev/v1/latest"
 
 _STATIC_SKINS_URL     = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins.json"
 _STATIC_STICKERS_URL  = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/stickers.json"
@@ -369,6 +373,41 @@ _FALLBACK_PROVIDERS = [
     {"id": "csfloat", "name": "CSFloat", "logoUrl": _KNOWN_LOGOS["csfloat"]},
     {"id": "buff",    "name": "Buff163", "logoUrl": _KNOWN_LOGOS["buff"]},
 ]
+
+
+async def _fetch_fx_rate(client: httpx.AsyncClient) -> tuple[float | None, bool]:
+    """USD→EUR del BCE, cacheado 24 h. Devuelve (tasa, es_fresca).
+
+    El backend no convierte nada: solo sirve el numero (UX-08). Si la fuente cae se
+    reutiliza el ultimo valor conocido marcado como stale, para que el cliente pueda
+    avisar en vez de convertir con una tasa fantasma. Sin valor previo → (None, False)
+    y el cliente se queda en USD.
+    """
+    now = time.monotonic()
+    cached = _fx_cache.get("usdeur")
+    if cached and now - cached[1] < FX_CACHE_TTL:
+        return cached[0], True
+    try:
+        resp = await client.get(
+            _FX_API,
+            params={"base": "USD", "symbols": "EUR"},
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            logger.warning("[fx] frankfurter returned %s", resp.status_code)
+            return (cached[0], False) if cached else (None, False)
+        rate = (resp.json().get("rates") or {}).get("EUR")
+        # Un tipo USD/EUR fuera de este rango es un error de la fuente, no un
+        # movimiento de mercado: mejor servir el ultimo bueno que corromper precios.
+        if not isinstance(rate, (int, float)) or not 0.5 < rate < 2.0:
+            logger.warning("[fx] tasa implausible: %r", rate)
+            return (cached[0], False) if cached else (None, False)
+        _fx_cache["usdeur"] = (float(rate), now)
+        logger.info("[fx] USD/EUR = %s", rate)
+        return float(rate), True
+    except Exception as exc:
+        logger.warning("[fx] failed: %s", exc)
+        return (cached[0], False) if cached else (None, False)
 
 
 async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:

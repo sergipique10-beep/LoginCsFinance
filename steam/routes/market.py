@@ -24,6 +24,7 @@ from ..services import (
     _enrich_prices,
     _enrich_market_prices,
     _fetch_market_providers,
+    _fetch_fx_rate,
     _cache_images,
     _enrich_images_from_cache,
     _fetch_static_images,
@@ -870,6 +871,18 @@ async def price_tick(
     if not token_matches(x_price_tick_token, PRICE_TICK_TOKEN):
         raise HTTPException(status_code=401, detail="Token inválido")
     return await price_capture_run(request.app.state.http_client)
+
+
+@router.get("/market/fx", dependencies=[Depends(market_rate_limit)], summary="Tipo de cambio USD→EUR (BCE, cacheado 24 h)")
+async def get_fx_rate(request: Request, user: dict = Depends(require_jwt)):
+    """Sirve el USD/EUR. El backend NO convierte precios: la conversion es
+    presentacion y vive en el cliente (UX-08). `stale=true` significa que la fuente
+    no respondio y se esta reutilizando el ultimo valor conocido."""
+    rate, fresh = await _fetch_fx_rate(request.app.state.http_client)
+    if rate is None:
+        # Sin tasa el cliente se queda en USD; no es un error del servidor.
+        return {"base": "USD", "rates": {}, "stale": True}
+    return {"base": "USD", "rates": {"EUR": rate}, "stale": not fresh}
 
 
 @router.get("/market/providers", dependencies=[Depends(market_rate_limit)], summary="Lista de markets soportados como price providers")
