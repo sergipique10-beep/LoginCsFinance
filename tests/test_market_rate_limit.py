@@ -13,6 +13,7 @@ from stores import MARKET_RATE_LIMIT_CALLS, RATE_LIMIT_CALLS, _rate_store
 MARKET_READS = [
     "/market/movers", "/market/items", "/market/price", "/market/trending",
     "/market/index", "/market/cap-history", "/market/providers", "/market/prices",
+    "/market/fx",
 ]
 
 
