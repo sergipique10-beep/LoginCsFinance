@@ -35,6 +35,7 @@ from auth.service import (
 )
 from notifications import repo as notifications_repo
 from alerts import repo as alerts_repo
+from portfolio import repo as portfolio_repo
 
 STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
 
@@ -272,14 +273,16 @@ async def delete_me(
 ):
     """Borrado de cuenta que exige Google Play y describe la política de privacidad.
 
-    Todo lo que lleva SteamID en servidor: tokens de dispositivo (push) y alertas
-    de precio, más las cachés en memoria de perfil e inventario y el refresh
-    vigente. Los precios históricos de mercado no llevan SteamID y se quedan.
+    Todo lo que lleva SteamID en servidor: tokens de dispositivo (push), alertas
+    de precio y el histórico de la cartera (UX-16), más las cachés en memoria de
+    perfil e inventario y el refresh vigente. Los precios históricos de mercado no
+    llevan SteamID y se quedan.
     Idempotente: borrar lo que ya no existe también responde 200.
     """
     steam_id: str = claims["sub"]
     await notifications_repo.delete_device_tokens_for(steam_id)
     await alerts_repo.delete_all_for_user(steam_id)
+    await portfolio_repo.delete_all_for_user(steam_id)
     for cache in (_profile_cache, _inventory_cache, _inventory_refresh_cooldown):
         cache.pop(steam_id, None)
     _revoke_refresh(refresh_token or await _refresh_token_from_body(request))
