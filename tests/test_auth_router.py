@@ -185,15 +185,20 @@ def test_logout_without_cookie_still_succeeds(client):
 
 def test_delete_me_wipes_tokens_alerts_caches_and_revokes_refresh(client, monkeypatch):
     """Todo lo que lleva SteamID en servidor se va en una sola llamada: es lo que
-    la política de privacidad promete y lo que Google Play exige poder hacer."""
+    la política de privacidad promete y lo que Google Play exige poder hacer.
+
+    Desde UX-16 incluye el histórico de la cartera (portfolio_history)."""
     from unittest.mock import AsyncMock
     from stores import _profile_cache, _inventory_cache, _inventory_refresh_cooldown
     from tests.conftest import STEAM_ID as JWT_SUB  # el sub que firma el fixture `client`
 
     tokens = AsyncMock()
     alerts = AsyncMock()
+    portfolio = AsyncMock()
     monkeypatch.setattr(auth_router.notifications_repo, "delete_device_tokens_for", tokens)
     monkeypatch.setattr(auth_router.alerts_repo, "delete_all_for_user", alerts)
+    # UX-16: sin este mock el test hablaba con el Supabase real.
+    monkeypatch.setattr(auth_router.portfolio_repo, "delete_all_for_user", portfolio)
     _profile_cache[JWT_SUB] = ({"name": "x"}, 0.0)
     _inventory_cache[JWT_SUB] = ([], 0.0)
     _inventory_refresh_cooldown[JWT_SUB] = 0.0
@@ -205,6 +210,7 @@ def test_delete_me_wipes_tokens_alerts_caches_and_revokes_refresh(client, monkey
     assert resp.status_code == 200
     tokens.assert_awaited_once_with(JWT_SUB)
     alerts.assert_awaited_once_with(JWT_SUB)
+    portfolio.assert_awaited_once_with(JWT_SUB)   # UX-16: la serie de cartera también se borra
     assert JWT_SUB not in _profile_cache and JWT_SUB not in _inventory_cache
     assert JWT_SUB not in _inventory_refresh_cooldown
     assert jti not in _refresh_store
