@@ -56,7 +56,16 @@ async def call(client: httpx.AsyncClient, body: dict) -> dict:
         )
         raise
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    # PERF-12 — el coste lo marcan los tokens de entrada, no el número de mensajes.
+    # Grep «[gemini] tokens» en los logs de Render para validar el presupuesto.
+    usage = data.get("usageMetadata") or {}
+    logger.info(
+        "[gemini] tokens in=%s out=%s total=%s (cuerpo %d chars)",
+        usage.get("promptTokenCount"), usage.get("candidatesTokenCount"),
+        usage.get("totalTokenCount"), size,
+    )
+    return data
 
 
 def extract_text(candidates: list[dict]) -> str | None:
