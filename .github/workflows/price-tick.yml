@@ -6,7 +6,14 @@ name: price-tick
 #
 # La serie es UNA fila por skin y día, así que una skin que no entre pierde el
 # punto de hoy para siempre — y la predicción necesita 20 puntos = 20 días de
-# calendario. Por eso hay que cubrir toda la población, no rotarla.
+# calendario.
+#
+# PRESUPUESTO (PERF-11): el backend gasta como mucho PRICE_DAILY_BUDGET lookups
+# al día (variable de entorno en Render). Cubrir a toda la población no cabía
+# en el plan Starter de steamwebapi y agotaba la cuota mensual hacia el día 13.
+# Si la población no cabe, entra por prioridad (alerta → inventario →
+# trending) y el resto sale como `fuera_de_presupuesto`: el workflow termina en
+# verde pero deja un aviso. Ampliar el plan = subir la variable, nada más.
 #
 # TROCEADO — por qué este workflow tiene un bucle en vez de un solo curl:
 # Render free corta las peticiones HTTP largas por su cuenta. Medido en
@@ -31,14 +38,17 @@ on:
 jobs:
   tick:
     runs-on: ubuntu-latest
-    # ~10 lotes × 8 min + margen. El default de GitHub son 360 min.
-    timeout-minutes: 120
+    # Casi el máximo de GitHub (360) a propósito: el número de lotes lo decide
+    # PRICE_DAILY_BUDGET en el backend, y subir esa variable no debe exigir
+    # tocar este fichero. 350 min ≈ 42 lotes de 150 ≈ 6 300 skins/día, que es
+    # también lo que da de sí el limiter de 18 req/min.
+    timeout-minutes: 350
     steps:
       - name: Capturar precios por lotes
         run: |
-          # Tope de seguridad: si `pendientes` no baja (bug o skins que fallan
-          # el lookup siempre), esto corta en vez de girar hasta el timeout.
-          MAX_LOTES=12
+          # Tope de seguridad: si `pendientes` no baja (bug), esto corta en vez
+          # de girar hasta el timeout. Cuadra con timeout-minutes (42 × ~8 min).
+          MAX_LOTES=42
           lote=0
 
           while [ "$lote" -lt "$MAX_LOTES" ]; do
@@ -58,7 +68,7 @@ jobs:
             # Del 23 al 26 de septiembre de 2026 la cuota mensual de steamwebapi
             # estuvo agotada (402 en todo) y el workflow siguió en verde 4 días.
             if echo "$RESP" | grep -q '"quota_exhausted":true'; then
-              echo "::error::Cuota mensual de steamwebapi agotada (402). Se reinicia el día 10. Ver docs/issues/rendimiento/PERF-09-cuota-steamwebapi.md"
+              echo "::error::Cuota mensual de steamwebapi agotada (402). Se reinicia el día 10. Ver PERF-09 y PERF-11 en Plane (CSFIN); si pasa antes de fin de ciclo, PRICE_DAILY_BUDGET está por encima del plan."
               exit 1
             fi
             TRACKED=$(echo "$RESP" | grep -o '"tracked_run":[0-9]*' | cut -d: -f2)
@@ -70,7 +80,13 @@ jobs:
 
             PENDIENTES=$(echo "$RESP" | grep -o '"pendientes":[0-9]*' | cut -d: -f2)
             if [ "${PENDIENTES:-0}" -eq 0 ]; then
-              echo "✓ Población cubierta en $lote lote(s)."
+              # PERF-11: lo que no cabe en el presupuesto no es un fallo del
+              # tick, pero esas skins pierden el punto de hoy. Aviso visible.
+              FUERA=$(echo "$RESP" | grep -o '"fuera_de_presupuesto":[0-9]*' | cut -d: -f2)
+              if [ "${FUERA:-0}" -gt 0 ]; then
+                echo "::warning::$FUERA skins se quedan hoy sin punto por el presupuesto diario (PRICE_DAILY_BUDGET). Si pasa a diario, sube la variable en Render o amplía el plan de steamwebapi."
+              fi
+              echo "✓ Presupuesto del día cubierto en $lote lote(s)."
               exit 0
             fi
 
@@ -79,7 +95,10 @@ jobs:
             sleep 10
           done
 
-          echo "::error::Tras $MAX_LOTES lotes aún quedan $PENDIENTES skins. ¿El lookup falla siempre para algunas? Revisa `errors` en los responses de arriba."
+          # Con el presupuesto, `pendientes` baja en cada lote aunque fallen los
+          # lookups (se marcan igual): llegar aquí es un bug o un presupuesto
+          # por encima de lo que caben 42 lotes (~6 300/día).
+          echo "::error::Tras $MAX_LOTES lotes aún quedan $PENDIENTES skins dentro del presupuesto. O PRICE_DAILY_BUDGET supera lo que caben $MAX_LOTES lotes de PRICE_LOOKUP_CAP, o pendientes no baja entre lotes (bug)."
           exit 1
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}

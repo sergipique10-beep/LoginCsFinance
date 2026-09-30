@@ -194,18 +194,28 @@ La predicción es **determinista, no la hace el LLM**: se expone como tool y el 
 
 ## Captura de precios por-skin (`steam/price_capture.py`)
 
-Tablas `tracked_skins` (qué seguimos) y `precios_historicos` (la serie) — SQL en `docs/sql/precios_historicos.sql`. **Ojo: hay que ejecutarlo en Supabase; si la tabla no existe, la predicción cae silenciosamente a CSFloat.**
+Tablas `tracked_skins` (qué seguimos) y `precios_historicos` (la serie) — SQL en `docs/sql/precios_historicos.sql`, y la cola priorizada (columnas `last_seen`/`inventory_seen_at` + vista `price_tick_queue`) en `docs/sql/tracked_skins_prioridad.sql`. **Ojo: hay que ejecutarlos en Supabase; si la tabla no existe, la predicción cae silenciosamente a CSFloat, y sin la vista el price-tick falla.**
 
-**Es la única relación declarada del esquema**: `precios_historicos.market_hash_name` → `tracked_skins.market_hash_name`, `ON DELETE CASCADE`. Formaliza lo que el código ya hacía — `capture()` inserta solo nombres que acaba de leer de `tracked_skins` — y cubre la ventana entre esa lectura y el upsert, que dura minutos por el `_history_limiter`. ⚠️ **Con `CASCADE`, cualquier limpieza que se añada a `tracked_skins` se lleva su serie histórica por delante.** Es lo deseable (dejar de seguir una skin debe borrar sus datos), pero conviene saberlo antes de escribir un `purge_stale` para skins como el que ya existe para `market_trending`.
+### Presupuesto diario (PERF-11)
+
+**El gasto de steamwebapi del price-tick lo decide `PRICE_DAILY_BUDGET`** (variable de entorno, default 250). Ampliar el plan de steamwebapi = subir esa variable en Render, sin tocar código. Motivo: el tick hacía un lookup por skin seguida y día (~800) y el plan Starter da 10 000/mes ≈ 333/día para todo el backend; la cuota se agotaba hacia el día 13 del ciclo (26-08 y 23-09 de 2026). PERF-09 solo trató el síntoma (abortar en el 402).
+
+- **Lo gastado hoy se cuenta en la BD** (`count_captured_on(hoy)`: skins con `last_captured = hoy`, intentadas con éxito o sin él). Sin estado en memoria: el tope aguanta varios lotes y reinicios de Render.
+- **Si la población no cabe, entra por prioridad** (vista `price_tick_queue`): 0 alerta activa, 1 vista en un inventario en 30 días, 2 el resto (trending, seed). Dentro de cada prioridad, LRU por `last_captured`. Lo que no cabe sale en la respuesta como `fuera_de_presupuesto` y el workflow deja un `::warning::`.
+- **Poda blanda, nunca DELETE.** Una skin que nadie registra en 30 días (y sin alerta) sale de la vista, pero su fila y su serie siguen: un DELETE dispararía el `CASCADE` de abajo. `register_tracked` refresca `last_seen` (y `inventory_seen_at` si viene de `/inventory`) en cada registro; `source` guarda solo el **primer** origen y no sirve para priorizar.
+- **Techo sin tocar código:** 42 lotes de `PRICE_LOOKUP_CAP` en 350 min de job ≈ 6 300 skins/día, que es también lo que da el limiter de 18 req/min. Por encima hay que tocar el limiter (`steam/services.py`) y el workflow.
+- Los precios de los rankings **no** sirven como fuente gratis para la serie: `market_trending.price_latest` se desvía una mediana del 18 % del precio canónico de `/item` (medido el 30-09).
+
+**Es la única relación declarada del esquema**: `precios_historicos.market_hash_name` → `tracked_skins.market_hash_name`, `ON DELETE CASCADE`. Formaliza lo que el código ya hacía — `capture()` inserta solo nombres que acaba de leer de `tracked_skins` — y cubre la ventana entre esa lectura y el upsert, que dura minutos por el `_history_limiter`. ⚠️ **Con `CASCADE`, cualquier limpieza que se añada a `tracked_skins` se lleva su serie histórica por delante.** Por eso la poda de PERF-11 es **blanda** (la vista `price_tick_queue` deja fuera a las skins sin actividad, sin borrarlas): una serie histórica no se recupera, y la skin puede volver a aparecer en un inventario.
 
 Las tablas de ranking **no** tienen FK a `tracked_skins` a propósito: no todo ítem del ranking se sigue. Pero el `trending-tick` sí registra el **top `TRENDING_TRACK_TOP` por turnover** (`register_tracked(..., "trending")`), para que los ítems más relevantes acumulen serie propia en vez de que toda predicción sobre ellos caiga a CSFloat. Es best-effort: un fallo ahí no tumba la captura del ranking.
 
 **La serie es UNA fila por skin y día** (`unique (market_hash_name, date)`). Dos consecuencias que gobiernan todo lo demás:
 
 - **Correr el price-tick más veces al día no da más puntos** — refina el precio de hoy sobre la misma fila. Los 20 puntos que exige `predict/service.py` son 20 **días** de calendario, sin atajo. (Un backfill desde el histórico de CSFloat sí los daría de golpe; no está hecho.)
-- **La skin que no entra en la corrida pierde el punto de ese día para siempre.** Por eso `PRICE_LOOKUP_CAP` (400) debe cubrir *toda* la población seguida, no rotarla: con 320 skins y cap 200 se quedaban 120 fuera cada día. Ojo, `tracked_skins` crece sola (270 de 320 vienen de `/inventory`, y ahora también del trending): si la población supera el cap, vuelven los huecos.
+- **La skin que no entra en la corrida pierde el punto de ese día para siempre.** Por eso la prioridad del presupuesto importa: con Starter no cabe toda la población (869 skins el 30-09 frente a 250/día), y lo que queda fuera son las de prioridad más baja, no una rotación ciega.
 
-**El tick captura UN LOTE, no toda la población.** `PRICE_LOOKUP_CAP` (150) es el tamaño del lote; el workflow llama al endpoint **en bucle** hasta que el response trae `pendientes: 0`. Con ~391 skins son 3 llamadas de ~8 min.
+**El tick captura UN LOTE, no toda la población.** `PRICE_LOOKUP_CAP` (150) es el tamaño del lote; el workflow llama al endpoint **en bucle** hasta que el response trae `pendientes: 0`, y `pendientes` solo cuenta lo que cabe en el presupuesto del día. Con 250 son 2 llamadas de ~8 min.
 
 ⚠️ **El troceado es obligatorio, no una optimización: Render free corta las peticiones HTTP largas.** Medido en producción: 200 skins (~11 min) pasaba, 400 (~22 min) devolvió **502 y se perdió la corrida entera** — 0 puntos escritos ese día, porque `upsert_prices` va al final. Ampliar el `--max-time` del curl no arregla nada; quien cierra la conexión es el proxy de Render. `tests/test_price_cap_timeout.py` protege el tamaño del lote contra esa cota.
 
@@ -214,7 +224,7 @@ Dos invariantes del troceado, ambos load-bearing:
 - **`fetch_tracked(limit, before=hoy)`** excluye las ya capturadas hoy (`or(last_captured.is.null, last_captured.lt.hoy)`). Sin ese filtro, cada lote devolvería el mismo conjunto y el bucle no avanzaría.
 - **`mark_captured` marca las intentadas, no las capturadas.** Una skin que falla el lookup siempre (delistada, nombre inválido) quedaría "pendiente" para siempre y el bucle la reintentaría lote tras lote sin que `pendientes` bajara. Mismo criterio que `enrich_tick` con `enriched_at`.
 
-`POST /internal/price-tick` (cron diario, `.github/workflows/price-tick.yml`) recorre las skins **menos-recientemente-capturadas primero** (`last_captured` asc, nulls primero) hasta `PRICE_LOOKUP_CAP`, hace lookup por-nombre vía el `_history_limiter` compartido, y hace upsert idempotente por `(market_hash_name, date)`. Best-effort: un fallo por skin no aborta la corrida. El seed inicial sale de `steam/data/tracked_seed.json`.
+`POST /internal/price-tick` (cron diario, `.github/workflows/price-tick.yml`) recorre la cola `price_tick_queue` **por prioridad y, dentro de ella, menos-recientemente-capturadas primero** (`last_captured` asc, nulls primero) hasta `min(PRICE_LOOKUP_CAP, presupuesto restante)`, hace lookup por-nombre vía el `_history_limiter` compartido, y hace upsert idempotente por `(market_hash_name, date)`. Best-effort: un fallo por skin no aborta la corrida. El seed inicial sale de `steam/data/tracked_seed.json`.
 
 **Dónde vive**: solo en `/inventory` y `/market/items` (search) — los dos endpoints que sirven la salida de `_map_item`. **`/market/trending` y `/market/movers` NO lo llevan**: sirven snapshots de Supabase vía `_row_to_item` (`steam/market_rows.py`), que no lo transporta.
 
@@ -383,10 +393,11 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `GEMINI_MODEL` | `gemini-flash-latest` | Modelo de generación del chat. El alias `-latest` resuelve a un modelo concreto que Google mueve sin avisar (hoy `gemini-3.5-flash`); en free tier la cuota es **20 req/día por proyecto y modelo**, así que conviene fijarlo a una versión explícita para que el gasto sea predecible. |
 | `PRICE_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/price-tick` (captura diaria de precios por skin). Must match the GitHub Actions secret. Startup warns if missing. |
 | `PRICE_LOOKUP_CAP` | `150` | Skins por **lote** del price-tick (el workflow repite hasta `pendientes: 0`). ~8 min por lote. No subirlo sin más: a ~22 min Render free devuelve 502 y se pierde la corrida. |
+| `PRICE_DAILY_BUDGET` | `250` | Lookups a steamwebapi que el price-tick gasta **al día** (PERF-11). El mando del gasto: al ampliar el plan, solo se sube esto. Dimensionar como `cuota_mensual / 31` menos el margen de alertas y sheet (Starter: 250). Lo que no cabe entra por prioridad y sale como `fuera_de_presupuesto`. |
 | `ALERTS_TICK_TOKEN` | *(empty)* | Shared secret protecting `POST /internal/alerts-tick`. Must match the GitHub Actions secret. Startup warns if missing. |
 | `ALERTS_LOOKUP_CAP` | `18` | Alertas evaluadas por tick. Cada skin distinta cuesta 1 req por el `_history_limiter`; 18 = una ventana. Las que no entran rotan al siguiente tick. |
 | `ALERTS_MAX_PER_USER` | `20` | Tope de alertas activas por usuario. Acota la cuota que un solo usuario puede consumir. |
-| `TRENDING_TRACK_TOP` | `80` | Cuántos ítems del trending (top por turnover) se registran en `tracked_skins` en cada captura horaria. `0` desactiva el registro. Súbelo solo si `PRICE_LOOKUP_CAP` tiene margen sobre la población seguida. |
+| `TRENDING_TRACK_TOP` | `80` | Cuántos ítems del trending (top por turnover) se registran en `tracked_skins` en cada captura horaria. `0` desactiva el registro. No afecta al gasto: el trending es la última prioridad del presupuesto diario. |
 
 **Cuidado con los valores multilínea**: `python-dotenv` corta un valor que ocupe
 varias líneas sin comillas — se queda con la primera. `FIREBASE_SERVICE_ACCOUNT_JSON`

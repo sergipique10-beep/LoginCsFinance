@@ -1,8 +1,9 @@
 """Seed + captura diaria de precios por-skin.
 
 seed_tracked(): siembra tracked_skins desde el JSON curado si está vacía.
-capture(): recorre las skins seguidas (menos-recientemente-capturadas primero,
-hasta PRICE_LOOKUP_CAP), hace lookup por-nombre en steamwebapi /item vía el
+capture(): recorre la cola del price-tick (por prioridad y, dentro de ella,
+menos-recientemente-capturadas primero, hasta PRICE_LOOKUP_CAP por lote y
+PRICE_DAILY_BUDGET por día), hace lookup por-nombre en steamwebapi /item vía el
 limiter compartido, y hace upsert del snapshot del día. Best-effort: un fallo
 por skin no aborta la corrida.
 """
@@ -13,7 +14,7 @@ from pathlib import Path
 
 import httpx
 
-from settings import STEAM_API_KEY, PRICE_LOOKUP_CAP
+from settings import STEAM_API_KEY, PRICE_LOOKUP_CAP, PRICE_DAILY_BUDGET
 from steam.services import STEAM_WEB_API, _history_limiter
 from steam import price_history_repo as repo
 
@@ -89,12 +90,21 @@ async def capture(client: httpx.AsyncClient) -> dict:
     """
     today = date.today().isoformat()
 
+    # PERF-11: presupuesto diario. Lo gastado hoy se lee de la BD, así que el
+    # tope aguanta aunque el workflow haga varios lotes o Render reinicie.
+    restante = max(PRICE_DAILY_BUDGET - await repo.count_captured_on(today), 0)
+
     # Solo las que aún no se han capturado HOY: es lo que hace que la llamada
     # N+1 avance en vez de repetir el mismo lote. fetch_tracked ya ordena por
-    # last_captured ascendente (nulls primero), así que basta con excluir las
-    # de hoy para que el orden natural haga de cursor.
+    # prioridad y last_captured, así que basta con excluir las de hoy para que
+    # el orden natural haga de cursor.
     pendientes = await repo.count_pending(today)
-    names = await repo.fetch_tracked(PRICE_LOOKUP_CAP, before=today)
+    lote = min(PRICE_LOOKUP_CAP, restante)
+    names = await repo.fetch_tracked(lote, before=today) if lote else []
+    # Las que hoy no van a entrar. Se cuentan antes del lote: pendientes y
+    # restante bajan igual con cada intento, así que el número es estable
+    # entre lotes y el workflow puede avisar con el del último.
+    fuera = max(pendientes - restante, 0)
 
     rows: list[dict] = []
     # Todas las intentadas, con o sin éxito: se marcan igual para que la rueda
@@ -139,14 +149,17 @@ async def capture(client: httpx.AsyncClient) -> dict:
     await repo.upsert_prices(rows)
     await repo.mark_captured(intentadas, today)
 
-    # Lo que queda para el siguiente lote. El workflow repite mientras sea > 0.
-    restantes = max(pendientes - len(intentadas), 0)
+    # Lo que queda para el siguiente lote DENTRO del presupuesto. El workflow
+    # repite mientras sea > 0; lo que no cabe va en `fuera_de_presupuesto`.
+    restantes = max(min(pendientes, restante) - len(intentadas), 0)
     logger.info(
         "[price] lote: %d pedidas, %d capturadas, %d saltadas, %d errores | "
-        "quedan %d pendientes",
-        len(names), len(rows), skipped, errors, restantes,
+        "quedan %d pendientes, %d fuera de presupuesto (%d/día)",
+        len(names), len(rows), skipped, errors, restantes, fuera, PRICE_DAILY_BUDGET,
     )
 
     return {"tracked_run": len(names), "captured": len(rows),
             "skipped": skipped, "errors": errors,
-            "pendientes": restantes, "quota_exhausted": quota_exhausted}
+            "pendientes": restantes, "quota_exhausted": quota_exhausted,
+            "fuera_de_presupuesto": fuera,
+            "presupuesto_restante": max(restante - len(intentadas), 0)}

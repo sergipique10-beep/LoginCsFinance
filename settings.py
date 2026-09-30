@@ -123,13 +123,34 @@ PRICE_TICK_TOKEN = os.getenv("PRICE_TICK_TOKEN", "")
 # El reloj lo fija _history_limiter (18/60s): (n/18)*60 s por lote.
 PRICE_LOOKUP_CAP = int(os.getenv("PRICE_LOOKUP_CAP", "150"))
 
+# Lookups a steamwebapi /item que el price-tick puede gastar AL DÍA (PERF-11).
+# Es el mando del gasto: ampliar el plan de steamwebapi = subir esta variable en
+# Render, sin tocar código.
+#
+# Cada skin capturada cuesta 1 request. Sin tope, el tick hacía una por skin
+# seguida (~800/día) y el plan Starter da 10 000/mes ≈ 333/día para TODO el
+# backend: la cuota se agotaba hacia el día 13 del ciclo, dos meses seguidos.
+# Cómo dimensionarlo: cuota_mensual / 31, menos lo que gastan el alerts-tick,
+# la creación de alertas y el /market/price del sheet. Starter: 250 (≈7 750/mes,
+# deja ~2 250 de margen).
+#
+# Si la población pendiente no cabe, entra por prioridad (alerta activa →
+# inventario → trending; vista price_tick_queue) y el resto sale en la
+# respuesta como `fuera_de_presupuesto`.
+#
+# Techo práctico sin tocar más que esta variable: el limiter (18/60 s) y el
+# timeout del job de GitHub (350 min) dan ~6 000 skins/día.
+PRICE_DAILY_BUDGET = int(os.getenv("PRICE_DAILY_BUDGET", "250"))
+
 # Cuántos items del trending se registran en tracked_skins en cada captura.
 # Sin esto, los items del ranking no tienen serie propia y toda predicción sobre
 # ellos cae a CSFloat (predict/service.py). Se cogen los N primeros por turnover
 # (precio × volumen 24h), que es el orden con el que ya se sirve la lista.
-# El registro es un upsert con ignore_duplicates → re-registrar cada hora es
-# un no-op barato y no pisa `first_seen` ni `last_captured`.
-# 80 ≈ el margen que deja PRICE_LOOKUP_CAP sobre las ~320 skins ya seguidas.
+# Re-registrar cada hora no pisa `first_seen` ni `last_captured`: solo refresca
+# `last_seen`, que es lo que las mantiene en la cola del price-tick.
+# Ya no compiten con el inventario: el trending es la última prioridad del
+# presupuesto diario (PRICE_DAILY_BUDGET) y cae de la cola a los 30 días sin
+# volver a aparecer. Subirlo solo añade candidatas a la cola, no gasto.
 TRENDING_TRACK_TOP = int(os.getenv("TRENDING_TRACK_TOP", "80"))
 
 # Alertas de precio por skin (POST /internal/alerts-tick, cron horario).

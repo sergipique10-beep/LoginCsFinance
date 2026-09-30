@@ -6,6 +6,19 @@ import pytest
 from steam import price_capture
 
 
+@pytest.fixture(autouse=True)
+def _sin_supabase(monkeypatch):
+    """Ningún test de este fichero toca Supabase de verdad.
+
+    Antes de PERF-11 varios tests mockeaban fetch_tracked pero no count_pending,
+    que salía contra producción (y fallaba sin .env). Presupuesto holgado por
+    defecto: los tests que no son de presupuesto no deben notarlo.
+    """
+    monkeypatch.setattr(price_capture, "PRICE_DAILY_BUDGET", 10_000)
+    monkeypatch.setattr(price_capture.repo, "count_captured_on", AsyncMock(return_value=0))
+    monkeypatch.setattr(price_capture.repo, "count_pending", AsyncMock(return_value=10))
+
+
 def test_canonical_price_prefers_latestsell():
     assert price_capture._canonical_price(
         {"pricelatestsell": 43.15, "pricelatest": 41.35, "pricemedian": 42.71}
@@ -220,3 +233,89 @@ async def test_capture_aborts_batch_on_quota_exhausted(monkeypatch):
     assert out["captured"] == 1 and out["errors"] == 1 and out["pendientes"] == 1
     mark.assert_awaited_once()
     assert mark.await_args.args[0] == ["A", "B"]        # B intentada: la rueda avanza
+
+
+class TestPresupuestoDiario:
+    """PERF-11: el price-tick gasta como mucho PRICE_DAILY_BUDGET lookups al día.
+
+    Sin tope gastaba ~800/día (una por skin seguida) frente a ~333/día de todo
+    el plan Starter, y agotaba la cuota mensual hacia el día 13 del ciclo.
+    El gasto del día se deduce de la BD (skins con last_captured = hoy), así
+    que el tope se respeta aunque el workflow haga varios lotes.
+    """
+
+    @staticmethod
+    def _preparar(monkeypatch, *, presupuesto, usado, pendientes, lote=150):
+        monkeypatch.setattr(price_capture, "PRICE_DAILY_BUDGET", presupuesto)
+        monkeypatch.setattr(price_capture, "PRICE_LOOKUP_CAP", lote)
+        monkeypatch.setattr(price_capture.repo, "count_captured_on",
+                            AsyncMock(return_value=usado))
+        monkeypatch.setattr(price_capture.repo, "count_pending",
+                            AsyncMock(return_value=pendientes))
+        fetch = AsyncMock(side_effect=lambda n, before: [f"S{i}" for i in range(min(n, pendientes))])
+        monkeypatch.setattr(price_capture.repo, "fetch_tracked", fetch)
+        monkeypatch.setattr(price_capture.repo, "upsert_prices", AsyncMock())
+        monkeypatch.setattr(price_capture.repo, "mark_captured", AsyncMock())
+        lookup = AsyncMock(return_value={"pricelatestsell": 1.0})
+        monkeypatch.setattr(price_capture, "_lookup_item", lookup)
+        return fetch, lookup
+
+    @pytest.mark.asyncio
+    async def test_el_lote_no_pasa_del_presupuesto_restante(self, monkeypatch):
+        fetch, lookup = self._preparar(monkeypatch, presupuesto=250, usado=200, pendientes=600)
+
+        out = await price_capture.capture(MagicMock())
+
+        assert fetch.await_args.args[0] == 50
+        assert lookup.await_count == 50
+        assert out["pendientes"] == 0                    # el workflow para
+        assert out["fuera_de_presupuesto"] == 550        # y lo dice
+        assert out["presupuesto_restante"] == 0
+
+    @pytest.mark.asyncio
+    async def test_presupuesto_agotado_no_hace_lookups(self, monkeypatch):
+        fetch, lookup = self._preparar(monkeypatch, presupuesto=250, usado=250, pendientes=400)
+
+        out = await price_capture.capture(MagicMock())
+
+        fetch.assert_not_awaited()
+        lookup.assert_not_awaited()
+        assert out["tracked_run"] == 0
+        assert out["pendientes"] == 0
+        assert out["fuera_de_presupuesto"] == 400
+
+    @pytest.mark.asyncio
+    async def test_pendientes_cuenta_solo_lo_que_cabe(self, monkeypatch):
+        """Lote 1 de 2: quedan 100 dentro del presupuesto, no las 600."""
+        self._preparar(monkeypatch, presupuesto=250, usado=0, pendientes=600)
+
+        out = await price_capture.capture(MagicMock())
+
+        assert out["tracked_run"] == 150
+        assert out["pendientes"] == 100
+        assert out["fuera_de_presupuesto"] == 350
+        assert out["presupuesto_restante"] == 100
+
+    @pytest.mark.asyncio
+    async def test_con_presupuesto_holgado_cubre_todo(self, monkeypatch):
+        """Ampliar el plan = subir la variable; la población entera cabe."""
+        self._preparar(monkeypatch, presupuesto=5000, usado=0, pendientes=120)
+
+        out = await price_capture.capture(MagicMock())
+
+        assert out["tracked_run"] == 120
+        assert out["pendientes"] == 0
+        assert out["fuera_de_presupuesto"] == 0
+
+
+def test_presupuesto_sale_de_la_variable_de_entorno(monkeypatch):
+    """Escalar el plan de steamwebapi no debe exigir tocar código."""
+    import importlib
+    import settings
+
+    monkeypatch.setenv("PRICE_DAILY_BUDGET", "1234")
+    try:
+        assert importlib.reload(settings).PRICE_DAILY_BUDGET == 1234
+    finally:
+        monkeypatch.delenv("PRICE_DAILY_BUDGET")
+        importlib.reload(settings)

@@ -6,6 +6,7 @@ Cliente cacheado module-level con service_role (bypassa RLS), patrón
 steam/cap_history_repo.py.
 """
 import asyncio
+from datetime import datetime, timezone
 
 from supabase import create_client, Client
 
@@ -28,32 +29,61 @@ def get_supabase() -> Client:
     return _client
 
 
+_QUEUE = "price_tick_queue"   # vista: docs/sql/tracked_skins_prioridad.sql
+# El filtro `in_` viaja en la URL de PostgREST: un inventario de cientos de
+# skins en una sola petición puede pasarse del límite de longitud.
+_IN_CHUNK = 100
+
+
 async def register_tracked(names: list[str], source: str) -> None:
-    """Registra nombres en tracked_skins. No-op si vacío. No pisa filas existentes."""
+    """Registra nombres en tracked_skins y refresca su `last_seen`. No-op si vacío.
+
+    Dos pasos: el alta no pisa `source`, `first_seen` ni `last_captured` de las
+    existentes; el update marca que siguen vivas (PERF-11). Sin `last_seen`, una
+    skin que nadie vuelve a ver seguiría gastando cuota cada día para siempre.
+    `inventory_seen_at` solo lo sube /inventory: `source` guarda el PRIMER origen,
+    así que una skin que entró por el trending y luego aparece en un inventario
+    no se distinguiría sin él.
+    """
     if not names:
         return
-    rows = [{"market_hash_name": n, "source": source} for n in dict.fromkeys(names)]
+    unicos = list(dict.fromkeys(names))
+    rows = [{"market_hash_name": n, "source": source} for n in unicos]
+    ahora = datetime.now(timezone.utc).isoformat()
+    vivo = {"last_seen": ahora}
+    if source == "inventory":
+        vivo["inventory_seen_at"] = ahora
 
     def _do() -> None:
-        (get_supabase().table(_TRACKED)
+        sb = get_supabase()
+        (sb.table(_TRACKED)
             .upsert(rows, on_conflict="market_hash_name", ignore_duplicates=True)
             .execute())
+        for i in range(0, len(unicos), _IN_CHUNK):
+            (sb.table(_TRACKED)
+                .update(vivo)
+                .in_("market_hash_name", unicos[i:i + _IN_CHUNK])
+                .execute())
 
     await asyncio.to_thread(_do)
 
 
 async def fetch_tracked(limit: int, before: str | None = None) -> list[str]:
-    """Hasta `limit` nombres, menos-recientemente-capturados primero (nulls primero).
+    """Hasta `limit` nombres de la cola del price-tick, en orden de prioridad.
+
+    Lee la vista `price_tick_queue`, que ya excluye las skins que nadie ha
+    visto en 30 días (salvo con alerta activa) y calcula `prioridad`:
+    0 alerta activa, 1 en un inventario reciente, 2 el resto. Dentro de cada
+    prioridad, menos-recientemente-capturadas primero (nulls primero).
 
     `before` (fecha ISO) excluye las ya capturadas ese día. Es lo que hace que
     el price-tick pueda trocearse: cada llamada devuelve el siguiente lote de
-    pendientes en vez de repetir siempre las mismas. Sin él, la llamada N+1
-    volvería a traer el lote de la N (que ya tiene last_captured = hoy pero
-    sigue siendo de las más antiguas si el resto también lo es).
+    pendientes en vez de repetir siempre las mismas.
     """
     def _do() -> list[str]:
-        q = (get_supabase().table(_TRACKED)
+        q = (get_supabase().table(_QUEUE)
              .select("market_hash_name")
+             .order("prioridad", desc=False)
              .order("last_captured", desc=False, nullsfirst=True)
              .limit(limit))
         if before is not None:
@@ -66,11 +96,29 @@ async def fetch_tracked(limit: int, before: str | None = None) -> list[str]:
 
 
 async def count_pending(before: str) -> int:
-    """Skins sin capturar en la fecha `before` (ISO). Cursor del troceado."""
+    """Skins de la cola sin capturar en la fecha `before` (ISO). Cursor del troceado."""
+    def _do() -> int:
+        resp = (get_supabase().table(_QUEUE)
+                .select("market_hash_name", count="exact")
+                .or_(f"last_captured.is.null,last_captured.lt.{before}")
+                .execute())
+        return resp.count or 0
+
+    return await asyncio.to_thread(_do)
+
+
+async def count_captured_on(date_iso: str) -> int:
+    """Lookups que el price-tick ya gastó el día `date_iso` (PERF-11).
+
+    Cada skin intentada queda con last_captured = hoy, con éxito o sin él, y
+    cada intento es una request a steamwebapi. Contarlas en la BD hace que el
+    presupuesto diario se respete a través de los lotes sin estado en memoria
+    (Render reinicia el proceso cuando quiere).
+    """
     def _do() -> int:
         resp = (get_supabase().table(_TRACKED)
                 .select("market_hash_name", count="exact")
-                .or_(f"last_captured.is.null,last_captured.lt.{before}")
+                .eq("last_captured", date_iso)
                 .execute())
         return resp.count or 0
 
