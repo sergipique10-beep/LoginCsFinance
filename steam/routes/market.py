@@ -625,6 +625,8 @@ async def get_market_index(
         "hottestItem": {
             "name": top["markethashname"] if top else "—",
             "change24h": float(top["change24h"]) if top else 0.0,
+            # UX-38: el precio pone el porcentaje en contexto (+450 % de 0,17 $).
+            "price": float(top["price"]) if top and top.get("price") is not None else None,
         },
         "history": [_map_market_index_point(p) for p in raw_points],
     }
