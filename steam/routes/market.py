@@ -619,6 +619,9 @@ async def get_market_index(
         "turnover24h": turnover24h,
         "sold24h": sold24h,
         "delta24h": delta_24h,
+        # UX-35: no es «el más activo» sino el que más ha subido de precio en 24 h
+        # (gainers[0]); change24h es ese porcentaje. El nombre del campo se conserva
+        # por contrato con el front.
         "hottestItem": {
             "name": top["markethashname"] if top else "—",
             "change24h": float(top["change24h"]) if top else 0.0,
