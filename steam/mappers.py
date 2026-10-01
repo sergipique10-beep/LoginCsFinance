@@ -255,9 +255,11 @@ def _map_topmovers_item(raw: dict) -> dict:
     """Maps a topmovers gainer/loser object from /market-index/cs2 to ISkinCard shape.
 
     The topmovers payload only contains {markethashname, price, change24h}.
-    change24h is an absolute price value, not a percentage — it cannot be used
-    as a delta. All price deltas are set to 0.0; _change24h is kept as an
-    internal sort key for _build_movers_from_topmovers.
+    change24h is the 24h price change as a PERCENTAGE (UX-35, checked against a
+    real response on 2026-10-02: a 0.17 $ sticker with change24h=450, losers
+    between -52 and -37). This docstring used to say it was an absolute amount.
+    The price deltas of the card are still 0.0 (nothing reads them from here);
+    _change24h is kept as an internal sort key for _build_movers_from_topmovers.
     """
     latest = float(raw.get("price") or 0)
     change = float(raw.get("change24h") or 0)
