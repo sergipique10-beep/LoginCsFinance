@@ -9,7 +9,7 @@ from settings import STEAM_API_KEY
 from stores import (
     ITEM_HISTORY_CACHE_TTL, IMAGE_CACHE_TTL, MARKET_LOOKUP_CACHE_TTL,
     MARKET_PROVIDERS_CACHE_TTL, FX_CACHE_TTL,
-    _item_history_cache, _item_image_cache, _image_cache_meta,
+    _item_history_cache, _item_image_cache, _item_rarity_cache, _image_cache_meta,
     _market_lookup_cache, _market_providers_cache, _fx_cache,
 )
 from steam.mappers import _delta_from_history, _map_topmovers_item
@@ -211,6 +211,21 @@ def _enrich_images_from_cache(items: list) -> None:
             item["image"] = img
 
 
+def _rarity_of(item: dict) -> tuple[str, str] | None:
+    """(rareza, color hex sin '#') de un ítem del catálogo estático, o None si no la trae."""
+    rarity = item.get("rarity") or {}
+    name, color = rarity.get("name"), (rarity.get("color") or "").lstrip("#")
+    return (name, color) if name and color else None
+
+
+def _register_keys(keys: list[str], item: dict, image: str) -> None:
+    rarity = _rarity_of(item)
+    for key in keys:
+        _item_image_cache[key] = image
+        if rarity:
+            _item_rarity_cache[key] = rarity
+
+
 def _register_skin(item: dict) -> None:
     name = item.get("name", "")
     image = item.get("image", "")
@@ -219,27 +234,29 @@ def _register_skin(item: dict) -> None:
     wears = [w.get("name", "") for w in item.get("wears", []) if w.get("name")]
     if not wears:
         wears = _WEAR_NAMES
-    _item_image_cache[name] = image
-    _item_image_cache[f"★ {name}"] = image
-    for wear in wears:
-        _item_image_cache[f"{name} ({wear})"] = image
-        _item_image_cache[f"★ {name} ({wear})"] = image
+    bases = [name, f"★ {name}"]
     if item.get("stattrak"):
-        _item_image_cache[f"StatTrak™ {name}"] = image
-        _item_image_cache[f"★ StatTrak™ {name}"] = image
-        for wear in wears:
-            _item_image_cache[f"StatTrak™ {name} ({wear})"] = image
-            _item_image_cache[f"★ StatTrak™ {name} ({wear})"] = image
+        bases += [f"StatTrak™ {name}", f"★ StatTrak™ {name}"]
+    keys = bases + [f"{base} ({wear})" for base in bases for wear in wears]
+    _register_keys(keys, item, image)
 
 
 def _register_flat(item: dict) -> None:
     image = item.get("image", "")
     if not image:
         return
-    for key_field in ("market_hash_name", "name"):
-        key = item.get(key_field, "")
-        if key:
-            _item_image_cache[key] = image
+    keys = [item.get(field, "") for field in ("market_hash_name", "name")]
+    _register_keys([k for k in keys if k], item, image)
+
+
+def _rarity_from_cache(name: str) -> tuple[str, str] | None:
+    """Rareza de un market_hash_name según el catálogo estático (UX-39). Sirve para
+    payloads que no la traen, como topmovers. None si el ítem no está en el catálogo
+    (p. ej. sticker slabs): quien pinta decide qué hacer sin ella."""
+    found = _item_rarity_cache.get(name)
+    if not found and name.startswith("Souvenir "):
+        found = _item_rarity_cache.get(name[len("Souvenir "):])
+    return found
 
 
 async def _fetch_static_images(client: httpx.AsyncClient) -> None:

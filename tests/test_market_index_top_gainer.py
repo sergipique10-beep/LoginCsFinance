@@ -7,8 +7,11 @@ Un sticker de 0,17 $ no puede haber subido 450 $: es un +450 %. El docstring de
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from steam.routes import market
-from steam.services import _build_movers_from_topmovers
+from steam.services import _build_movers_from_topmovers, _register_flat, _register_skin, _rarity_from_cache
+from stores import _image_cache_meta, _item_image_cache, _item_rarity_cache
 
 TOPMOVERS = {
     "gainers": [
@@ -37,18 +40,70 @@ class _Client:
         return _Resp()
 
 
-def test_hottest_item_es_el_mayor_gainer_con_su_porcentaje():
+# Entradas reales del catálogo de ByMykel (stickers.json y skins.json, 2026-10-02).
+STICKER = {
+    "name": "Sticker | Run Boost Lift Kits", "market_hash_name": "Sticker | Run Boost Lift Kits",
+    "image": "https://example.test/sticker.png",
+    "rarity": {"id": "rarity_rare", "name": "High Grade", "color": "#4b69ff"},
+}
+SKIN = {
+    "name": "MAC-10 | Tornado", "image": "https://example.test/mac10.png", "stattrak": False,
+    "wears": [{"name": "Battle-Scarred"}],
+    "rarity": {"id": "rarity_common_weapon", "name": "Consumer Grade", "color": "#b0c3d9"},
+}
+
+
+@pytest.fixture
+def catalogo():
+    """Catálogo estático con dos entradas y marcado como recién cargado, para que
+    /market/index no salga a la red a por el de verdad."""
+    import time
+    saved = (dict(_item_image_cache), dict(_item_rarity_cache), dict(_image_cache_meta))
+    _item_image_cache.clear(); _item_rarity_cache.clear()
+    _register_flat(STICKER)
+    _register_skin(SKIN)
+    _image_cache_meta["ts"] = time.monotonic()
+    yield
+    for store, old in zip((_item_image_cache, _item_rarity_cache, _image_cache_meta), saved):
+        store.clear(); store.update(old)
+
+
+def _index():
     market._market_index_cache.clear()
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(http_client=_Client())))
     try:
-        result = asyncio.run(market.get_market_index(request, tf="24h", user={}))
+        return asyncio.run(market.get_market_index(request, tf="24h", user={}))
     finally:
         market._market_index_cache.clear()
         market._topmovers_raw_cache.clear()
 
+
+def test_hottest_item_es_el_mayor_gainer_con_su_porcentaje(catalogo):
+    result = _index()
+
     # UX-38: el precio viaja con el porcentaje para que la card lo ponga en contexto.
-    assert result["hottestItem"] == {"name": "Sticker | Run Boost Lift Kits", "change24h": 450.0, "price": 0.17}
+    # UX-39: y la rareza, que topmovers no trae, sale del catálogo estático.
+    assert result["hottestItem"] == {
+        "name": "Sticker | Run Boost Lift Kits", "change24h": 450.0, "price": 0.17,
+        "rarity": "High Grade", "rarityColor": "4b69ff",
+    }
     assert result["sold24h"] == 1214016
+
+
+def test_hottest_item_sin_rareza_si_no_esta_en_el_catalogo(catalogo):
+    _item_rarity_cache.clear()
+    hottest = _index()["hottestItem"]
+    assert hottest["rarity"] is None and hottest["rarityColor"] is None
+    assert hottest["price"] == 0.17
+
+
+def test_rareza_del_catalogo_cubre_desgastes_y_souvenir(catalogo):
+    assert _rarity_from_cache("MAC-10 | Tornado (Battle-Scarred)") == ("Consumer Grade", "b0c3d9")
+    assert _rarity_from_cache("Souvenir MAC-10 | Tornado (Battle-Scarred)") == ("Consumer Grade", "b0c3d9")
+    assert _rarity_from_cache("Sticker Slab | Mood Ring Strafe (Holo)") is None
+    # El caché de imágenes no cambia de forma por registrar la rareza.
+    assert _item_image_cache["MAC-10 | Tornado (Battle-Scarred)"] == SKIN["image"]
+    assert _item_image_cache["★ MAC-10 | Tornado"] == SKIN["image"]
 
 
 def test_change24h_es_un_porcentaje_no_un_importe():
