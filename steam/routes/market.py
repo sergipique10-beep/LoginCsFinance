@@ -28,6 +28,7 @@ from ..services import (
     _cache_images,
     _enrich_images_from_cache,
     _fetch_static_images,
+    _rarity_from_cache,
     _build_movers_from_topmovers,
 )
 from steam.price_capture import capture as price_capture_run
@@ -615,6 +616,12 @@ async def get_market_index(
         logger.error("[market-index] unexpected top-level type: %s", type(data).__name__)
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
+    # UX-39: topmovers no trae la rareza; sale del catálogo estático (23 h, sin cuota).
+    rarity = None
+    if top:
+        await _fetch_static_images(request.app.state.http_client)
+        rarity = _rarity_from_cache(top["markethashname"])
+
     result = {
         "turnover24h": turnover24h,
         "sold24h": sold24h,
@@ -627,6 +634,8 @@ async def get_market_index(
             "change24h": float(top["change24h"]) if top else 0.0,
             # UX-38: el precio pone el porcentaje en contexto (+450 % de 0,17 $).
             "price": float(top["price"]) if top and top.get("price") is not None else None,
+            "rarity": rarity[0] if rarity else None,
+            "rarityColor": rarity[1] if rarity else None,
         },
         "history": [_map_market_index_point(p) for p in raw_points],
     }

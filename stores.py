@@ -61,6 +61,8 @@ _item_price_cache: dict[str, tuple[Any, float]] = {}  # markethashname.lower() �
 _market_prices_cache: dict[str, tuple[Any, float]] = {}
 _news_cache: dict[int, tuple[list, float]] = {}  # count → (items, ts)
 _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image URL
+# UX-39: rareza del catálogo estático (ByMykel), poblada junto al caché de imágenes.
+_item_rarity_cache: dict[str, tuple[str, str]] = {}  # markethashname → (rareza, color hex sin '#')
 _image_cache_meta: dict[str, float] = {}  # "ts" → monotonic timestamp of last successful population
 _market_lookup_cache: dict[str, tuple[dict, float]] = {}  # market → ({name: price}, ts)
 _market_providers_cache: dict[str, tuple[list, float]] = {}  # "providers" → (list, ts)
