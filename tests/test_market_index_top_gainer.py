@@ -46,7 +46,8 @@ def test_hottest_item_es_el_mayor_gainer_con_su_porcentaje():
         market._market_index_cache.clear()
         market._topmovers_raw_cache.clear()
 
-    assert result["hottestItem"] == {"name": "Sticker | Run Boost Lift Kits", "change24h": 450.0}
+    # UX-38: el precio viaja con el porcentaje para que la card lo ponga en contexto.
+    assert result["hottestItem"] == {"name": "Sticker | Run Boost Lift Kits", "change24h": 450.0, "price": 0.17}
     assert result["sold24h"] == 1214016
 
 
