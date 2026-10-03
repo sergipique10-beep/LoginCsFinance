@@ -12,7 +12,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from settings import COOKIE_SECURE, JWT_SECRET
 from stores import (
     NONCE_TTL, CODE_TTL,
-    RATE_LIMIT_CALLS, RATE_LIMIT_WINDOW, MARKET_RATE_LIMIT_CALLS,
+    RATE_LIMIT_CALLS, RATE_LIMIT_WINDOW, MARKET_RATE_LIMIT_CALLS, STATS_RATE_LIMIT_CALLS,
     ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL, TOKEN_AUDIENCE,
     _nonces, _rate_store,
 )
@@ -83,6 +83,12 @@ def market_rate_limit(request: Request) -> None:
     en el decorador para no tocar la firma de cada handler.
     """
     _rate_limit(_get_client_ip(request), limit=MARKET_RATE_LIMIT_CALLS, bucket="market")
+
+
+def leetify_rate_limit(request: Request) -> None:
+    """SEC-09 — dependencia del router de /me/stats*. Cada llamada que no acierta
+    la caché consume cuota de Leetify, así que tiene su propio cupo por IP."""
+    _rate_limit(_get_client_ip(request), limit=STATS_RATE_LIMIT_CALLS, bucket="stats")
 
 
 def _issue_nonce(redirect_origin: str) -> str:

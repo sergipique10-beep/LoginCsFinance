@@ -119,6 +119,8 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
 | GET | `/` | — | Health check |
+| GET | `/me/stats` | Bearer | Perfil de Leetify del propio usuario (SEC-09). SteamID del `sub`, clave en el servidor, caché 5 min, 20/60 s por IP. 404 = sin perfil de Leetify, 503 = `LEETIFY_API_KEY` sin definir |
+| GET | `/me/stats/matches` | Bearer | Últimas partidas de Leetify del propio usuario (mismas reglas) |
 | GET | `/auth/steam` | — | Rate-limited; accepts `?platform=android` for Android redirect origin |
 | GET | `/auth/steam/callback` | — | Validates nonce + Steam, emits one-time auth code |
 | POST | `/auth/token` | — | Exchanges auth code → access token + refresh (cookie en web, cuerpo si `Origin: https://localhost`) |
@@ -305,6 +307,14 @@ lecturas `/market/*`** (`market_rate_limit`, 60/60 s por IP, bucket `market`), d
 un bucle o un bug de reintentos del frontend recibe 429 antes de agotar la cuota compartida
 de steamwebapi. Sigue siendo en memoria y single-worker (CAL-04).
 
+## Proxy de Leetify (`stats/`, SEC-09)
+
+`stats/router.py` sirve `/me/stats` y `/me/stats/matches`. La clave (`LEETIFY_API_KEY`) viaja a
+Leetify en `Authorization: Bearer`, nunca en la URL, y el SteamID sale **solo** del `sub` del JWT:
+un `?steam64_id=` del cliente se ignora. Caché en memoria 5 min por `(steam_id, ruta)`
+(`_leetify_cache`), errores sin cachear; bucket de rate limit propio `stats` (20/60 s por IP).
+Antes el frontend llamaba a Leetify directo con la clave incrustada en el bundle.
+
 ## Dependencias (CLEAN-02)
 
 `requirements.txt` es ASCII con CRLF (ya no UTF-16). `APScheduler` y `tzlocal` se quitaron
@@ -374,6 +384,7 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `FRONTEND_URL` | `http://localhost:4200` | CORS origin and post-login redirect target |
 | `JWT_SECRET` | `change-this-secret` | Signs all tokens. Startup warns if default or < 32 chars. Use `secrets.token_urlsafe(48)` to generate. |
 | `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. |
+| `LEETIFY_API_KEY` | *(empty)* | Clave de la API pública de Leetify (SEC-09). Sin ella `/me/stats*` da 503. También en Render. |
 | `STEAM_GAME` | `cs2` | Game ID passed to the steamwebapi.com inventory endpoint |
 | `ALLOWED_REDIRECT_ORIGINS` | *(value of FRONTEND_URL)* | Comma-separated whitelist of allowed post-login redirect origins (add `myapp://` for Android) |
 | `DEBUG` | `false` | Set `true` to activate `POST /auth/dev-token`. No basta por sí sola: también hace falta `ENV != production`. |

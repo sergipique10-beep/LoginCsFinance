@@ -29,6 +29,10 @@ DEV_TOKEN_ENABLED = DEBUG and ENV != "production"
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 
+# Leetify (SEC-09): la clave de la API pública vive SOLO en el backend. El frontend
+# la incrustaba en el bundle; ahora llama a /me/stats y nunca la ve.
+LEETIFY_API_KEY = os.getenv("LEETIFY_API_KEY", "")
+
 # Token que protege POST /internal/cap-tick (cron externo de GitHub Actions).
 CAP_TICK_TOKEN = os.getenv("CAP_TICK_TOKEN", "")
 

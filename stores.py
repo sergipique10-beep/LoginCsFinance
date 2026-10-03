@@ -17,6 +17,7 @@ NONCE_TTL = 300              # seconds a nonce remains valid
 CODE_TTL = 30                # seconds a one-time auth code remains valid
 RATE_LIMIT_CALLS = 10        # max requests per window per IP
 MARKET_RATE_LIMIT_CALLS = 60  # SEC-03: lecturas /market/* por IP y ventana (Market abre ~6 llamadas)
+STATS_RATE_LIMIT_CALLS = 20   # SEC-09: /me/stats* por IP y ventana (el perfil abre 2 llamadas)
 RATE_LIMIT_WINDOW = 60       # seconds
 
 ACCESS_TOKEN_TTL = timedelta(minutes=30)
@@ -44,6 +45,7 @@ MARKET_PRICES_CACHE_TTL = 300  # 5 min — live market prices, updated frequentl
 IMAGE_CACHE_TTL = 82800      # 23 h — same budget as other free-plan caches; CDN URLs are stable
 MARKET_LOOKUP_CACHE_TTL = 82800  # 23 h — full price list per market (premium endpoint, same daily budget)
 MARKET_PROVIDERS_CACHE_TTL = 82800  # 23 h — market list is mostly static
+LEETIFY_CACHE_TTL = 300       # 5 min — misma frescura que tenía el staleTime del front (SEC-09)
 NEWS_CACHE_TTL = 1800        # 30 min — /news/cs2 llama a Steam + scrapea 5 og:image por petición (PERF-06)
 FX_CACHE_TTL = 86400         # 24 h — el BCE publica un tipo al día (UX-08)
 
@@ -59,6 +61,7 @@ _topmovers_raw_cache: dict[str, tuple[list, list, float]] = {}  # "latest" → (
 _search_cache: dict[str, tuple[list, float]] = {}
 _item_price_cache: dict[str, tuple[Any, float]] = {}  # markethashname.lower() → (ISkinCard, ts)
 _market_prices_cache: dict[str, tuple[Any, float]] = {}
+_leetify_cache: dict[tuple[str, str], tuple[Any, float]] = {}  # (steam_id, ruta) → (json, ts)
 _news_cache: dict[int, tuple[list, float]] = {}  # count → (items, ts)
 _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image URL
 # UX-39: rareza del catálogo estático (ByMykel), poblada junto al caché de imágenes.
