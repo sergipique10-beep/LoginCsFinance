@@ -578,7 +578,6 @@ async def get_market_index(
 
     if isinstance(data, list):
         raw_points = data
-        delta_24h = 0.0
         top = None
         turnover24h = 0.0
         sold24h = 0
@@ -594,13 +593,6 @@ async def get_market_index(
         else:
             logger.error("[market-index] 'history' unexpected type: %s | sample: %s", type(history).__name__, str(history)[:200])
             raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
-
-        changes_24h = data.get("changes", {}).get("24h", {})
-        delta_24h = 0.0
-        if isinstance(changes_24h, dict):
-            pi_change = changes_24h.get("priceindex", {})
-            if isinstance(pi_change, dict):
-                delta_24h = float(pi_change.get("change") or 0)
 
         topmovers = data.get("topmovers", {})
         gainers = topmovers.get("gainers", [])
@@ -625,7 +617,6 @@ async def get_market_index(
     result = {
         "turnover24h": turnover24h,
         "sold24h": sold24h,
-        "delta24h": delta_24h,
         # UX-35: no es «el más activo» sino el que más ha subido de precio en 24 h
         # (gainers[0]); change24h es ese porcentaje. El nombre del campo se conserva
         # por contrato con el front.

@@ -31,7 +31,7 @@ class _Resp:
     status_code = 200
 
     def json(self):
-        return {"history": [], "changes": {"24h": None}, "topmovers": TOPMOVERS,
+        return {"history": [], "topmovers": TOPMOVERS,
                 "turnover24h": 2237753.25, "sold24h": 1214016}
 
 
