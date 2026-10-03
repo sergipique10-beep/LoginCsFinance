@@ -135,7 +135,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | GET | `/market/price` | Bearer | Datos completos de un item (incluye `liquidityBreakdown`). |
 | GET | `/market/prices` | Bearer | Precios en tiempo real de un item por mercado. |
 | GET | `/market/providers` | Bearer | Mercados soportados como price provider. |
-| GET | `/market/index` | Bearer | Market index: `turnover24h`, `sold24h`, `delta24h`, `hottestItem`, `history[]` |
+| GET | `/market/index` | Bearer | Market index: `turnover24h`, `sold24h`, `hottestItem`, `history[]` |
 | GET | `/market/cap-history` | Bearer | CS2 price-index history from Supabase, downsampled per `?tf=` (`7d`/`1m`/`3m`/`6m`/`1y`/`3y`). Returns `[{ ts, v, priceindex, realpriceindex, buyorderpriceindex, turnover24h }]`; `v = priceindex` (frontend contract). Invalid `tf` → 400. |
 | POST | `/internal/cap-tick` | `X-Cap-Token` | Hourly capture (called by external cron). Fetches `market-index/cs2`, upserts an hour-floored snapshot of the 4 fields into Supabase. Token compared via `secrets.compare_digest`; bad/missing → 401. |
 | POST | `/internal/trending-tick` | `X-Cap-Token` | Cron **horario** (`market-tick.yml`). Captura ~`_TRENDING_CAPTURE_LIMIT` items con 1 request a `/items` y hace **upsert por `name`** (no replace-all: borraría el enriquecimiento acumulado). Marca `seen_at` y purga las filas con >`_TRENDING_STALE_DAYS` sin aparecer. Devuelve `{ok, count, purged}`. |
