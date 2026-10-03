@@ -104,6 +104,23 @@ Response `200`: array of inventory item objects (structure defined by steamwebap
 
 ---
 
+### `GET /me/stats` · `GET /me/stats/matches`
+
+Estadísticas de Leetify del usuario autenticado (perfil y últimas partidas). El SteamID sale del
+`sub` del JWT; no hay parámetros. Respuesta: el JSON de Leetify tal cual. Caché de 5 min.
+Rate limit: 20 / 60 s por IP.
+
+| Status | Cause |
+|--------|-------|
+| `401` | Sin Bearer válido |
+| `404` | El usuario no tiene perfil de Leetify |
+| `429` | Rate limit propio |
+| `502` | Leetify caído o devolvió un error (incluida una clave rechazada) |
+| `503` | `LEETIFY_API_KEY` sin definir |
+| `504` | Timeout contra Leetify |
+
+---
+
 ## `GET /`
 Health check.
 ```json

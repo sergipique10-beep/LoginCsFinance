@@ -23,6 +23,7 @@ from alerts.router import router as alerts_router
 from portfolio.router import router as portfolio_router
 from rag.router import router as rag_router
 from chat.router import router as chat_router
+from stats.router import router as stats_router
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -128,6 +129,7 @@ app.include_router(alerts_router)
 app.include_router(portfolio_router)
 app.include_router(rag_router)
 app.include_router(chat_router)
+app.include_router(stats_router)
 
 
 # HEAD además de GET: los pingers gratuitos (UptimeRobot) solo hacen HEAD (PERF-07).
