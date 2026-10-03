@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
@@ -7,10 +9,48 @@ from main import app
 from auth.service import require_jwt
 from stores import (
     _auth_codes, _inventory_cache, _inventory_refresh_cooldown,
-    _nonces, _rate_store, _refresh_store,
+    _nonces, _rate_store,
 )
+from auth import refresh_repo
 
 STEAM_ID = "test_steam_id"
+
+# SEC-11: la tabla refresh_tokens, en memoria. jti → (steam_id, expires_at).
+REFRESH_DB: dict[str, tuple[str, datetime]] = {}
+
+
+async def _fake_save(jti, steam_id, expires_at):
+    REFRESH_DB[jti] = (steam_id, expires_at)
+
+
+async def _fake_consume(jti, steam_id):
+    """Misma semántica que el DELETE ... RETURNING real: vigente, del mismo usuario, un solo uso."""
+    fila = REFRESH_DB.get(jti)
+    if not fila or fila[0] != steam_id or fila[1] <= datetime.now(timezone.utc):
+        return False
+    del REFRESH_DB[jti]
+    return True
+
+
+async def _fake_revoke(jti):
+    REFRESH_DB.pop(jti, None)
+
+
+async def _fake_delete_all_for_user(steam_id):
+    for jti in [j for j, (sid, _) in REFRESH_DB.items() if sid == steam_id]:
+        del REFRESH_DB[jti]
+
+
+@pytest.fixture(autouse=True)
+def _fake_refresh_repo(monkeypatch):
+    """Ningún test habla con Supabase por el store de refresh."""
+    REFRESH_DB.clear()
+    monkeypatch.setattr(refresh_repo, "save", _fake_save)
+    monkeypatch.setattr(refresh_repo, "consume", _fake_consume)
+    monkeypatch.setattr(refresh_repo, "revoke", _fake_revoke)
+    monkeypatch.setattr(refresh_repo, "delete_all_for_user", _fake_delete_all_for_user)
+    yield
+    REFRESH_DB.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -23,10 +63,10 @@ def _clean_auth_stores():
     o /auth/review-login recibe un 429 que no tiene nada que ver con lo que
     estaba comprobando, y el fichero pasa o falla según el orden de ejecución.
     """
-    for store in (_nonces, _auth_codes, _refresh_store, _rate_store):
+    for store in (_nonces, _auth_codes, _rate_store):
         store.clear()
     yield
-    for store in (_nonces, _auth_codes, _refresh_store, _rate_store):
+    for store in (_nonces, _auth_codes, _rate_store):
         store.clear()
 
 

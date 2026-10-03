@@ -126,7 +126,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/auth/review-login` | — | Credenciales fijas (`REVIEW_USER`/`REVIEW_PASSWORD`) para la revisión de Google Play, sin pasar por Steam. 404 si las tres vars no están puestas. |
 | POST | `/auth/refresh` | cookie o cuerpo | Rotates refresh token |
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
-| DELETE | `/me` | Bearer (+cookie/body refresh) | **Borrado de cuenta (LAUNCH-04)**: borra `device_tokens` y `price_alerts` del SteamID, vacía sus cachés en memoria, revoca el refresh y limpia la cookie. Idempotente. Es la URL de borrado que exige Google Play, vía botón en Perfil |
+| DELETE | `/me` | Bearer (+cookie/body refresh) | **Borrado de cuenta (LAUNCH-04)**: borra `device_tokens`, `price_alerts`, `portfolio_history` y **todos** sus `refresh_tokens` (SEC-11) del SteamID, vacía sus cachés en memoria, revoca el refresh y limpia la cookie. Idempotente. Es la URL de borrado que exige Google Play, vía botón en Perfil |
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
 | GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item` + enrichment below) |
 | POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio en `stores.py`). |
@@ -242,11 +242,12 @@ Dos invariantes del troceado, ambos load-bearing:
 
 All stores live in `stores.py`. **TODO:** replace with Redis before running multiple workers.
 
+**Excepción — refresh tokens (SEC-11):** viven en la tabla Supabase `refresh_tokens` (`auth/refresh_repo.py`, DDL en `docs/sql/refresh_tokens.sql`), no en memoria: un dict se vaciaba en cada deploy o despertar de Render y cerraba la sesión de todos. Fila existe y no ha caducado = válido; `consume` es un `DELETE ... RETURNING` (rotación de un solo uso sin carrera) y purga caducados. Si Supabase falla, `session_store()` responde **503, nunca 401**: un 401 hace que el cliente nativo borre su refresh. En tests, `conftest.py` sustituye el repo por `REFRESH_DB` (dict).
+
 | Store | Key → Value | Purpose |
 |-------|------------|---------|
 | `_nonces` | nonce → (issued_at, redirect_origin) | CSRF protection for OpenID |
 | `_auth_codes` | code → (steam_id, expires_at) | One-time codes (TTL 30 s) |
-| `_refresh_store` | jti → expires_at | Refresh token revocation list |
 | `_rate_store` | ip → [timestamps] | Sliding-window rate limiter |
 | `_profile_cache` | steam_id → (data, cached_at) | 23 h cache — steamwebapi Starter: 20 req/60s per endpoint, 2k/day |
 | `_inventory_cache` | steam_id → (data, cached_at) | 23 h cache |
