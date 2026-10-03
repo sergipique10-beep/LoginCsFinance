@@ -128,9 +128,9 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/auth/review-login` | — | Credenciales fijas (`REVIEW_USER`/`REVIEW_PASSWORD`) para la revisión de Google Play, sin pasar por Steam. 404 si las tres vars no están puestas. |
 | POST | `/auth/refresh` | cookie o cuerpo | Rotates refresh token |
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
-| DELETE | `/me` | Bearer (+cookie/body refresh) | **Borrado de cuenta (LAUNCH-04)**: borra `device_tokens`, `price_alerts`, `portfolio_history` y **todos** sus `refresh_tokens` (SEC-11) del SteamID, vacía sus cachés en memoria, revoca el refresh y limpia la cookie. Idempotente. Es la URL de borrado que exige Google Play, vía botón en Perfil |
+| DELETE | `/me` | Bearer (+cookie/body refresh) | **Borrado de cuenta (LAUNCH-04)**: borra `device_tokens`, `price_alerts`, `portfolio_history`, `inventory_snapshots` (PERF-14) y **todos** sus `refresh_tokens` (SEC-11) del SteamID, vacía sus cachés en memoria, revoca el refresh y limpia la cookie. Idempotente. Es la URL de borrado que exige Google Play, vía botón en Perfil |
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
-| GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item` + enrichment below) |
+| GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item` + enrichment below). **Ante un 429 de steamwebapi (PERF-14)** devuelve el último snapshot con las cabeceras `X-Inventory-Stale: 1` y `X-Inventory-Captured-At` (ISO-8601); el cuerpo sigue siendo la lista. Ver «Degradación ante 429» |
 | POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio en `stores.py`). |
 | GET | `/market/movers` | Bearer | Top gainers/losers 24 h (hot & cold), servido del snapshot de `market_movers`. |
 | GET | `/market/items` | Bearer | **Búsqueda** por nombre — `?q=` es obligatorio (400 si falta). No es un listado. |
@@ -386,6 +386,7 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. |
 | `LEETIFY_API_KEY` | *(empty)* | Clave de la API pública de Leetify (SEC-09). Sin ella `/me/stats*` da 503. También en Render. |
 | `STEAM_GAME` | `cs2` | Game ID passed to the steamwebapi.com inventory endpoint |
+| `INVENTORY_429_MAX_RETRIES` / `_BACKOFF_BASE` / `_BACKOFF_CAP` | `4` / `5` s / `120` s | Reintento en segundo plano del inventario tras un 429 (PERF-14) |
 | `ALLOWED_REDIRECT_ORIGINS` | *(value of FRONTEND_URL)* | Comma-separated whitelist of allowed post-login redirect origins (add `myapp://` for Android) |
 | `DEBUG` | `false` | Set `true` to activate `POST /auth/dev-token`. No basta por sí sola: también hace falta `ENV != production`. |
 | `ENV` | `development` | `development` \| `production`. En Render va **siempre** `production`: mata `/auth/dev-token` aunque `DEBUG` se cuele a `true`. |
@@ -436,3 +437,17 @@ Before any production deployment:
 - `.env`: `BASE_URL` and `FRONTEND_URL` → `https://` URLs
 - uvicorn: add `--ssl-certfile` / `--ssl-keyfile` (or terminate TLS at a reverse proxy)
 - Replace `stores.py` in-memory dicts with Redis before running multiple workers
+
+## Degradación ante 429 de steamwebapi (PERF-14)
+
+Dos errores distintos, dos tratamientos — no confundirlos:
+
+| steamwebapi | Significa | `/inventory` |
+|---|---|---|
+| **429** | Límite por minuto (20/60 s en Starter): transitorio | Sirve el snapshot + **reintenta en segundo plano** |
+| **402** | Cuota mensual agotada (PERF-09): dura hasta el día 10 | Sirve el snapshot si lo hay, **nunca reintenta** (sin snapshot: 502, como antes) |
+
+- **Snapshot durable**: tabla Supabase `inventory_snapshots` (`steam_id` PK, `items` jsonb, `captured_at`), DDL en **`docs/sql/inventory_snapshots.sql` — hay que ejecutarlo a mano en Supabase antes de desplegar** (sin la tabla el guardado falla en silencio y un 429 vuelve a dar error). Una fila por usuario, sobrescrita en cada lectura 200 (`_store` en `steam/routes/items.py`). No sirve `_inventory_cache`: se vacía cuando Render duerme y solo guarda un `monotonic()`. Es dato personal: RLS sin políticas y se borra con la cuenta.
+- **Reintento**: `_retry_inventory`, una tarea `asyncio` por usuario (`_retry_tasks`), backoff exponencial con jitter (`_backoff`: mitad fija + mitad aleatoria, nunca menos que `Retry-After`). Mientras haya uno en curso, `GET /inventory` sirve el snapshot **sin llamar a steamwebapi** (cada llamada extra sería otro 429). Si recupera, rellena `_inventory_cache` y el snapshot. **Ceiling:** vive en el proceso: si Render duerme se pierde y el siguiente GET reintenta por su cuenta.
+- **Sin snapshot** (usuario que nunca tuvo una lectura buena) el 429 sigue siendo un 429: no hay nada que enseñar. El reintento se programa igualmente para calentar la caché.
+- **Detectar recurrencia** (criterio para subir de plan): una línea por 429, `[inventory-429] user= origin= retry_after= served= last_hour=`. `last_hour` es el conteo de los últimos 60 min en ese proceso; `grep inventory-429` en los logs de Render. CORS expone las dos cabeceras (`expose_headers` en `main.py`): sin eso el WebView no las lee.
