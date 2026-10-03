@@ -38,6 +38,7 @@ from auth import refresh_repo
 from notifications import repo as notifications_repo
 from alerts import repo as alerts_repo
 from portfolio import repo as portfolio_repo
+from steam import inventory_snapshot_repo
 
 STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
 
@@ -282,6 +283,7 @@ async def delete_me(
     await notifications_repo.delete_device_tokens_for(steam_id)
     await alerts_repo.delete_all_for_user(steam_id)
     await portfolio_repo.delete_all_for_user(steam_id)
+    await inventory_snapshot_repo.delete_for_user(steam_id)
     with session_store():
         await refresh_repo.delete_all_for_user(steam_id)
     for cache in (_profile_cache, _inventory_cache, _inventory_refresh_cooldown):

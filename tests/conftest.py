@@ -12,8 +12,33 @@ from stores import (
     _nonces, _rate_store,
 )
 from auth import refresh_repo
+from steam import inventory_snapshot_repo
 
 STEAM_ID = "test_steam_id"
+
+# PERF-14: la tabla inventory_snapshots, en memoria. steam_id → (items, captured_at).
+SNAPSHOT_DB: dict[str, tuple[list, str]] = {}
+
+
+@pytest.fixture(autouse=True)
+def _fake_snapshot_repo(monkeypatch):
+    """Ningún test escribe en el Supabase real por el snapshot de inventario."""
+    SNAPSHOT_DB.clear()
+
+    async def _save(steam_id, items):
+        SNAPSHOT_DB[steam_id] = (items, "2026-10-03T10:00:00+00:00")
+
+    async def _load(steam_id):
+        return SNAPSHOT_DB.get(steam_id)
+
+    async def _delete(steam_id):
+        SNAPSHOT_DB.pop(steam_id, None)
+
+    monkeypatch.setattr(inventory_snapshot_repo, "save", _save)
+    monkeypatch.setattr(inventory_snapshot_repo, "load", _load)
+    monkeypatch.setattr(inventory_snapshot_repo, "delete_for_user", _delete)
+    yield
+    SNAPSHOT_DB.clear()
 
 # SEC-11: la tabla refresh_tokens, en memoria. jti → (steam_id, expires_at).
 REFRESH_DB: dict[str, tuple[str, datetime]] = {}

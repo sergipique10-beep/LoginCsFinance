@@ -164,6 +164,12 @@ ALERTS_TICK_TOKEN = os.getenv("ALERTS_TICK_TOKEN", "")
 # con el cron horario. Las que no entran rotan al siguiente tick (LRU por
 # last_checked_at).
 ALERTS_LOOKUP_CAP = int(os.getenv("ALERTS_LOOKUP_CAP", "18"))
+# PERF-14: reintento en segundo plano del inventario tras un 429 de steamwebapi (límite
+# por minuto, transitorio; el 402 de cuota mensual NO se reintenta). Backoff exponencial
+# con jitter: espera = max(Retry-After, BASE·2^intento) acotada a CAP, con ±50 % de jitter.
+INVENTORY_429_MAX_RETRIES = int(os.getenv("INVENTORY_429_MAX_RETRIES", "4"))
+INVENTORY_429_BACKOFF_BASE = float(os.getenv("INVENTORY_429_BACKOFF_BASE", "5"))   # s
+INVENTORY_429_BACKOFF_CAP = float(os.getenv("INVENTORY_429_BACKOFF_CAP", "120"))   # s
 # Tope de alertas activas por usuario: acota la cuota que un solo usuario
 # puede consumir y el tamaño de la rueda.
 ALERTS_MAX_PER_USER = int(os.getenv("ALERTS_MAX_PER_USER", "20"))
