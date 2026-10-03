@@ -3,7 +3,7 @@ In-memory stores and TTL constants.
 
 WARNING: these stores are only valid for single-worker deployments.
 In multi-worker or multi-instance environments, replace with Redis (TTL-native).
-TODO: replace _nonces, _auth_codes, _refresh_store, _rate_store,
+TODO: replace _nonces, _auth_codes, _rate_store,
       _profile_cache, _inventory_cache, _market_index_cache and
       _item_history_cache with Redis.
 """
@@ -28,7 +28,7 @@ TOKEN_AUDIENCE = "cs-finance"
 
 _nonces: dict[str, tuple[float, str]] = {}       # nonce → (issued_at, redirect_origin)
 _auth_codes: dict[str, tuple[str, float]] = {}   # code → (steam_id, expires_at)
-_refresh_store: dict[str, float] = {}            # jti → expires_at (monotonic)
+# Refresh tokens: persisten en Supabase desde SEC-11, ver auth/refresh_repo.py.
 _rate_store: dict[str, list[float]] = defaultdict(list)
 
 # ── Cache constants ────────────────────────────────────────────────────────────

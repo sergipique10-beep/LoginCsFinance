@@ -1,6 +1,7 @@
 import secrets
 import time
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import jwt
@@ -13,10 +14,26 @@ from stores import (
     NONCE_TTL, CODE_TTL,
     RATE_LIMIT_CALLS, RATE_LIMIT_WINDOW, MARKET_RATE_LIMIT_CALLS,
     ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL, TOKEN_AUDIENCE,
-    _nonces, _refresh_store, _rate_store,
+    _nonces, _rate_store,
 )
+from auth import refresh_repo
 
 logger = logging.getLogger("uvicorn.error")
+
+
+@contextmanager
+def session_store():
+    """Traduce un fallo de Supabase en el store de refresh a 503, nunca a 401 (SEC-11).
+
+    Un 401 hace que el cliente nativo borre el refresh guardado y la sesión se pierde
+    de verdad; con un 503 lo conserva y reintenta en la siguiente apertura.
+    Envolver SOLO la llamada al repo: un HTTPException de dentro también se tragaría.
+    """
+    try:
+        yield
+    except Exception as exc:  # noqa: BLE001 — red, credenciales o PostgREST: todo es "no disponible"
+        logger.error("refresh store no disponible: %r", exc)
+        raise HTTPException(status_code=503, detail="Session store unavailable") from exc
 
 
 def token_matches(given: str | None, expected: str) -> bool:
@@ -88,12 +105,12 @@ def _consume_nonce(nonce: str) -> str | None:
     return redirect_origin
 
 
-def _issue_tokens(steam_id: str) -> tuple[str, str]:
+async def _issue_tokens(steam_id: str) -> tuple[str, str]:
     """Issues an (access_token, refresh_token) pair for the given steam_id.
 
     The access_token carries type="access" and expires in ACCESS_TOKEN_TTL.
     The refresh_token carries type="refresh", a unique jti, and expires in REFRESH_TOKEN_TTL.
-    The jti is registered in _refresh_store to allow revocation.
+    The jti is persisted in Supabase (SEC-11) to allow rotation and revocation.
     """
     now = datetime.now(timezone.utc)
 
@@ -125,7 +142,8 @@ def _issue_tokens(steam_id: str) -> tuple[str, str]:
         algorithm="HS256",
     )
 
-    _refresh_store[jti] = time.monotonic() + REFRESH_TOKEN_TTL.total_seconds()
+    with session_store():
+        await refresh_repo.save(jti, steam_id, refresh_exp)
 
     return access_token, refresh_token
 

@@ -13,8 +13,9 @@ from auth.service import _consume_nonce, _issue_nonce, _issue_tokens, require_jw
 from settings import JWT_SECRET
 from stores import (
     ACCESS_TOKEN_TTL, NONCE_TTL, REFRESH_TOKEN_TTL, TOKEN_AUDIENCE,
-    _nonces, _refresh_store,
+    _nonces,
 )
+from tests.conftest import REFRESH_DB
 
 STEAM_ID = "76561198000000000"
 
@@ -31,8 +32,8 @@ def _bearer(token: str):
 
 # ── Claims y caducidades ──────────────────────────────────────────────────────
 
-def test_access_token_carries_expected_claims():
-    access, _ = _issue_tokens(STEAM_ID)
+async def test_access_token_carries_expected_claims():
+    access, _ = await _issue_tokens(STEAM_ID)
     payload = _decode(access)
 
     assert payload["sub"] == STEAM_ID
@@ -42,16 +43,16 @@ def test_access_token_carries_expected_claims():
     assert "steam_id" not in payload
 
 
-def test_access_token_expires_in_thirty_minutes():
-    access, _ = _issue_tokens(STEAM_ID)
+async def test_access_token_expires_in_thirty_minutes():
+    access, _ = await _issue_tokens(STEAM_ID)
     payload = _decode(access)
 
     ttl = payload["exp"] - payload["iat"]
     assert ttl == int(ACCESS_TOKEN_TTL.total_seconds()) == 1800
 
 
-def test_refresh_token_carries_jti_and_expires_in_seven_days():
-    _, refresh = _issue_tokens(STEAM_ID)
+async def test_refresh_token_carries_jti_and_expires_in_seven_days():
+    _, refresh = await _issue_tokens(STEAM_ID)
     payload = _decode(refresh)
 
     assert payload["type"] == "refresh"
@@ -60,30 +61,30 @@ def test_refresh_token_carries_jti_and_expires_in_seven_days():
     assert ttl == int(REFRESH_TOKEN_TTL.total_seconds()) == 7 * 24 * 3600
 
 
-def test_each_issue_produces_a_unique_jti():
-    _, first = _issue_tokens(STEAM_ID)
-    _, second = _issue_tokens(STEAM_ID)
+async def test_each_issue_produces_a_unique_jti():
+    _, first = await _issue_tokens(STEAM_ID)
+    _, second = await _issue_tokens(STEAM_ID)
 
     assert _decode(first)["jti"] != _decode(second)["jti"]
 
 
-def test_issued_jti_is_registered_for_revocation():
+async def test_issued_jti_is_registered_for_revocation():
     """Si el jti no entra en el store, /auth/refresh lo rechazaría siempre."""
-    _, refresh = _issue_tokens(STEAM_ID)
-    assert _decode(refresh)["jti"] in _refresh_store
+    _, refresh = await _issue_tokens(STEAM_ID)
+    assert _decode(refresh)["jti"] in REFRESH_DB
 
 
 # ── require_jwt: lo que tiene que rechazar ────────────────────────────────────
 
-def test_require_jwt_accepts_a_fresh_access_token():
-    access, _ = _issue_tokens(STEAM_ID)
+async def test_require_jwt_accepts_a_fresh_access_token():
+    access, _ = await _issue_tokens(STEAM_ID)
     payload = require_jwt(_bearer(access))
     assert payload["sub"] == STEAM_ID
 
 
-def test_require_jwt_rejects_a_refresh_token_presented_as_access():
+async def test_require_jwt_rejects_a_refresh_token_presented_as_access():
     """Una cookie robada no puede servir para llamar a la API."""
-    _, refresh = _issue_tokens(STEAM_ID)
+    _, refresh = await _issue_tokens(STEAM_ID)
 
     with pytest.raises(HTTPException) as exc:
         require_jwt(_bearer(refresh))

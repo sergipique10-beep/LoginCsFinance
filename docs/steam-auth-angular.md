@@ -89,7 +89,7 @@ Response `200 OK`:
 ```json
 { "access_token": "<new JWT>" }
 ```
-Sets a new `refresh_token` cookie; old `jti` is revoked in `_refresh_store`.
+Sets a new `refresh_token` cookie; old `jti` is consumed from the Supabase `refresh_tokens` table (SEC-11).
 
 Errors: `401` if cookie missing, expired, revoked, or wrong type.
 
@@ -118,7 +118,7 @@ Errors: `401 Token expired` / `401 Invalid token`
 | Token | Type | TTL | Transport | Storage |
 |-------|------|-----|-----------|---------|
 | Access token | JWT HS256 | 30 min | `Authorization: Bearer` header | Angular in-memory only |
-| Refresh token | JWT HS256 | 7 days | `refresh_token` cookie | `_refresh_store` (in-memory; TODO Redis) |
+| Refresh token | JWT HS256 | 7 days | `refresh_token` cookie | Supabase `refresh_tokens` (SEC-11) |
 
 **Access token claims:** `sub` (SteamID), `type: "access"`, `aud: "cs-finance"`, `iat`, `exp`
 
@@ -324,4 +324,4 @@ Key variables for this flow:
 - The refresh token travels only via `HttpOnly` cookie — invisible to JavaScript.
 - CSRF on the refresh/logout endpoints is mitigated by `SameSite=Strict`.
 - Nonces (TTL 300 s) prevent replay of the Steam OpenID callback.
-- `_refresh_store` is in-memory and is lost on restart. Migrate to Redis before horizontal scaling.
+- Refresh JTIs persist in Supabase `refresh_tokens` since SEC-11: sessions survive restarts and deploys.

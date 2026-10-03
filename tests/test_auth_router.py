@@ -20,7 +20,8 @@ import pytest
 import auth.router as auth_router
 import auth.service as auth_service
 from settings import JWT_SECRET
-from stores import CODE_TTL, TOKEN_AUDIENCE, _auth_codes, _refresh_store
+from stores import CODE_TTL, TOKEN_AUDIENCE, _auth_codes
+from tests.conftest import REFRESH_DB
 
 STEAM_ID = "76561198000000000"
 
@@ -99,8 +100,8 @@ def test_refresh_rotates_the_jti(client):
     assert resp.status_code == 200
     new_jti = _decode(resp.cookies["refresh_token"])["jti"]
     assert new_jti != old_jti
-    assert old_jti not in _refresh_store
-    assert new_jti in _refresh_store
+    assert old_jti not in REFRESH_DB
+    assert new_jti in REFRESH_DB
 
 
 def test_old_refresh_token_stops_working_after_rotation(client):
@@ -165,7 +166,7 @@ def test_logout_revokes_the_refresh_token(client):
     resp = client.post("/auth/logout", cookies={"refresh_token": refresh})
 
     assert resp.status_code == 200
-    assert jti not in _refresh_store
+    assert jti not in REFRESH_DB
 
 
 def test_refresh_after_logout_fails(client):
@@ -213,7 +214,7 @@ def test_delete_me_wipes_tokens_alerts_caches_and_revokes_refresh(client, monkey
     portfolio.assert_awaited_once_with(JWT_SUB)   # UX-16: la serie de cartera también se borra
     assert JWT_SUB not in _profile_cache and JWT_SUB not in _inventory_cache
     assert JWT_SUB not in _inventory_refresh_cooldown
-    assert jti not in _refresh_store
+    assert jti not in REFRESH_DB
     assert "refresh_token=" in resp.headers["set-cookie"]  # cookie borrada
 
 
@@ -525,7 +526,7 @@ def test_native_refresh_from_body_rotates_and_answers_in_body(client):
     assert resp.status_code == 200
     new_refresh = resp.json()["refresh_token"]
     assert _decode(new_refresh)["jti"] != old_jti
-    assert old_jti not in _refresh_store
+    assert old_jti not in REFRESH_DB
     assert "refresh_token" not in resp.cookies
     assert client.post("/auth/refresh", json={"refresh_token": old_refresh}, headers=NATIVE).status_code == 401
 
@@ -535,7 +536,7 @@ def test_native_logout_from_body_revokes_the_jti(client):
     jti = _decode(refresh)["jti"]
 
     assert client.post("/auth/logout", json={"refresh_token": refresh}, headers=NATIVE).status_code == 200
-    assert jti not in _refresh_store
+    assert jti not in REFRESH_DB
 
 
 def test_refresh_with_empty_or_malformed_body_is_a_401_not_a_500(client):
@@ -562,3 +563,67 @@ def test_review_login_and_dev_token_follow_the_same_native_rule(client, review_c
     dev = client.post("/auth/dev-token", json={"steam_id": STEAM_ID}, headers=NATIVE)
     assert dev.status_code == 200
     assert "refresh_token" in dev.json() and "refresh_token" not in dev.cookies
+
+
+# ── SEC-11: el store de refresh vive en Supabase ─────────────────────────────
+
+def test_refresh_survives_a_process_restart(client):
+    """Lo que falló el 03-10: el proceso nuevo no tiene nada en memoria, la sesión sigue.
+
+    Simulado vaciando todo lo que vive en memoria del proceso; REFRESH_DB es la tabla.
+    """
+    refresh = _login(client)
+    _auth_codes.clear()
+
+    resp = client.post("/auth/refresh", cookies={"refresh_token": refresh})
+
+    assert resp.status_code == 200
+
+
+def test_refresh_store_down_is_a_503_not_a_401(client, monkeypatch):
+    """Un 401 haría que el cliente nativo borrase su refresh: la sesión se perdería de verdad."""
+    from auth import refresh_repo
+    refresh = _login(client)
+
+    async def _caido(*_):
+        raise ConnectionError("supabase no responde")
+    monkeypatch.setattr(refresh_repo, "consume", _caido)
+
+    resp = client.post("/auth/refresh", cookies={"refresh_token": refresh})
+
+    assert resp.status_code == 503
+
+
+def test_login_with_refresh_store_down_is_a_503(client, monkeypatch):
+    from auth import refresh_repo
+
+    async def _caido(*_):
+        raise ConnectionError("supabase no responde")
+    monkeypatch.setattr(refresh_repo, "save", _caido)
+
+    assert client.post("/auth/token", json={"code": _seed_code()}).status_code == 503
+
+
+def test_expired_row_is_rejected_even_with_a_valid_signature(client):
+    from datetime import datetime, timezone
+    refresh = _login(client)
+    jti = _decode(refresh)["jti"]
+    REFRESH_DB[jti] = (REFRESH_DB[jti][0], datetime.now(timezone.utc))
+
+    assert client.post("/auth/refresh", cookies={"refresh_token": refresh}).status_code == 401
+
+
+def test_delete_me_closes_every_session_of_the_user(client, monkeypatch):
+    """LAUNCH-04 + SEC-11: el borrado de cuenta revoca también los refresh de otros dispositivos."""
+    from unittest.mock import AsyncMock
+    from tests.conftest import STEAM_ID as JWT_SUB
+    for attr, repo in (("delete_device_tokens_for", auth_router.notifications_repo),
+                       ("delete_all_for_user", auth_router.alerts_repo),
+                       ("delete_all_for_user", auth_router.portfolio_repo)):
+        monkeypatch.setattr(repo, attr, AsyncMock())
+    otro_dispositivo = _login(client)
+    REFRESH_DB[_decode(otro_dispositivo)["jti"]] = (JWT_SUB, REFRESH_DB[_decode(otro_dispositivo)["jti"]][1])
+
+    assert client.delete("/me").status_code == 200
+
+    assert not any(sid == JWT_SUB for sid, _ in REFRESH_DB.values())

@@ -20,7 +20,7 @@ from settings import (
     REVIEW_USER,
 )
 from stores import (
-    _auth_codes, CODE_TTL, _refresh_store, TOKEN_AUDIENCE,
+    _auth_codes, CODE_TTL, TOKEN_AUDIENCE,
     _profile_cache, _inventory_cache, _inventory_refresh_cooldown,
 )
 from auth.service import (
@@ -32,7 +32,9 @@ from auth.service import (
     _refresh_token_from_body,
     _token_response,
     require_jwt,
+    session_store,
 )
+from auth import refresh_repo
 from notifications import repo as notifications_repo
 from alerts import repo as alerts_repo
 from portfolio import repo as portfolio_repo
@@ -131,7 +133,7 @@ async def exchange_token(request: Request):
     if time.monotonic() > expires_at:
         raise HTTPException(status_code=400, detail="Code expired")
 
-    access_token, refresh_token = _issue_tokens(steam_id)
+    access_token, refresh_token = await _issue_tokens(steam_id)
 
     return _token_response(request, access_token, refresh_token)
 
@@ -149,7 +151,7 @@ async def dev_token(request: Request):
     if not re.match(r"^\d{17}$", steam_id):
         raise HTTPException(status_code=400, detail="steam_id must be exactly 17 digits")
 
-    access_token, refresh_token = _issue_tokens(steam_id)
+    access_token, refresh_token = await _issue_tokens(steam_id)
     return _token_response(request, access_token, refresh_token)
 
 
@@ -177,7 +179,7 @@ async def review_login(request: Request):
     if not (_eq(user, REVIEW_USER) and _eq(password, REVIEW_PASSWORD)):
         raise HTTPException(status_code=401, detail="Invalid review credentials")
 
-    access_token, refresh_token = _issue_tokens(REVIEW_STEAM_ID)
+    access_token, refresh_token = await _issue_tokens(REVIEW_STEAM_ID)
     return _token_response(request, access_token, refresh_token)
 
 
@@ -192,12 +194,6 @@ async def refresh_tokens(
     refresh_token = refresh_token or await _refresh_token_from_body(request)
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Missing refresh token")
-
-    # Lazy cleanup: purge expired JTIs before operating on the store
-    now_mono = time.monotonic()
-    expired_jtis = [jti for jti, exp in _refresh_store.items() if now_mono > exp]
-    for jti in expired_jtis:
-        del _refresh_store[jti]
 
     try:
         payload = jwt.decode(
@@ -215,16 +211,18 @@ async def refresh_tokens(
         raise HTTPException(status_code=401, detail="Invalid token type")
 
     jti = payload.get("jti")
-    if not jti or jti not in _refresh_store:
-        # JTI not found: never valid, already rotated, or revoked
+    steam_id: str = payload["sub"]
+    if not jti:
         raise HTTPException(status_code=401, detail="Refresh token revoked or reused")
 
-    steam_id: str = payload["sub"]
+    # Rotación: consume borra el JTI en la misma sentencia que lo valida (un solo uso).
+    with session_store():
+        vigente = await refresh_repo.consume(jti, steam_id)
+    if not vigente:
+        # Nunca emitido, ya rotado o revocado
+        raise HTTPException(status_code=401, detail="Refresh token revoked or reused")
 
-    # Revoke previous JTI (rotation: each refresh_token is single-use)
-    del _refresh_store[jti]
-
-    access_token, new_refresh_token = _issue_tokens(steam_id)
+    access_token, new_refresh_token = await _issue_tokens(steam_id)
 
     return _token_response(request, access_token, new_refresh_token)
 
@@ -234,7 +232,7 @@ async def logout(
     request: Request,
     refresh_token: str | None = Cookie(default=None),
 ):
-    _revoke_refresh(refresh_token or await _refresh_token_from_body(request))
+    await _revoke_refresh(refresh_token or await _refresh_token_from_body(request))
 
     response = JSONResponse({"message": "Logged out"})
     _delete_refresh_cookie(response)
@@ -253,7 +251,7 @@ def _delete_refresh_cookie(response: JSONResponse) -> None:
     )
 
 
-def _revoke_refresh(refresh_token: str | None) -> None:
+async def _revoke_refresh(refresh_token: str | None) -> None:
     if not refresh_token:
         return
     try:
@@ -262,7 +260,8 @@ def _revoke_refresh(refresh_token: str | None) -> None:
         return  # inválido o caducado: no hay JTI que revocar
     jti = payload.get("jti")
     if jti:
-        _refresh_store.pop(jti, None)
+        with session_store():
+            await refresh_repo.revoke(jti)
 
 
 @router.delete("/me", summary="Borra los datos del usuario y cierra la sesión (LAUNCH-04)")
@@ -283,9 +282,11 @@ async def delete_me(
     await notifications_repo.delete_device_tokens_for(steam_id)
     await alerts_repo.delete_all_for_user(steam_id)
     await portfolio_repo.delete_all_for_user(steam_id)
+    with session_store():
+        await refresh_repo.delete_all_for_user(steam_id)
     for cache in (_profile_cache, _inventory_cache, _inventory_refresh_cooldown):
         cache.pop(steam_id, None)
-    _revoke_refresh(refresh_token or await _refresh_token_from_body(request))
+    await _revoke_refresh(refresh_token or await _refresh_token_from_body(request))
 
     response = JSONResponse({"message": "Deleted"})
     _delete_refresh_cookie(response)
