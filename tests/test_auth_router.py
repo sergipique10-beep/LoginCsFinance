@@ -203,12 +203,15 @@ def test_delete_me_wipes_tokens_alerts_caches_and_revokes_refresh(client, monkey
     _profile_cache[JWT_SUB] = ({"name": "x"}, 0.0)
     _inventory_cache[JWT_SUB] = ([], 0.0)
     _inventory_refresh_cooldown[JWT_SUB] = 0.0
+    from tests.conftest import SNAPSHOT_DB
+    SNAPSHOT_DB[JWT_SUB] = ([], "2026-10-03T10:00:00+00:00")   # PERF-14
     refresh = _login(client)
     jti = _decode(refresh)["jti"]
 
     resp = client.delete("/me", cookies={"refresh_token": refresh})
 
     assert resp.status_code == 200
+    assert JWT_SUB not in SNAPSHOT_DB   # PERF-14: el snapshot de inventario también se borra
     tokens.assert_awaited_once_with(JWT_SUB)
     alerts.assert_awaited_once_with(JWT_SUB)
     portfolio.assert_awaited_once_with(JWT_SUB)   # UX-16: la serie de cartera también se borra

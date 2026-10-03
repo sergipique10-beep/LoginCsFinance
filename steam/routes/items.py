@@ -1,11 +1,18 @@
+import asyncio
 import logging
+import random
 import time
+from collections import deque
 from datetime import date, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
-from settings import STEAM_API_KEY, STEAM_GAME
+from settings import (
+    STEAM_API_KEY, STEAM_GAME,
+    INVENTORY_429_MAX_RETRIES, INVENTORY_429_BACKOFF_BASE, INVENTORY_429_BACKOFF_CAP,
+)
 from stores import (
     PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, ITEM_HISTORY_CACHE_TTL,
     INVENTORY_REFRESH_COOLDOWN,
@@ -13,7 +20,9 @@ from stores import (
     _inventory_refresh_cooldown,
 )
 from auth.service import require_jwt, _get_client_ip, _rate_limit
+from .. import inventory_snapshot_repo
 from ..mappers import _map_item
+from ..price_capture import QuotaExhausted
 from ..services import (
     STEAM_WEB_API,
     STEAM_MARKET_API,
@@ -28,6 +37,26 @@ _HISTORY_MARKETS = {"buff", "csfloat"}
 logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter()
+
+
+class SteamRateLimited(Exception):
+    """429 de steamwebapi: límite por minuto, transitorio, se reintenta (PERF-14).
+
+    No confundir con el 402 (`QuotaExhausted`, cuota mensual agotada): ese no se
+    reintenta porque cada intento daría otro 402 hasta el reset del día 10.
+    """
+
+    def __init__(self, retry_after: float | None):
+        super().__init__("steamwebapi 429")
+        self.retry_after = retry_after
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    # ponytail: solo la forma en segundos; la forma fecha-HTTP se trata como ausente.
+    try:
+        return max(0.0, float(value)) if value else None
+    except ValueError:
+        return None
 
 
 @router.get("/me", summary="Info del usuario autenticado")
@@ -97,8 +126,10 @@ async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
         raise HTTPException(status_code=403, detail="Inventory is private")
     if resp.status_code in (410, 411):
         return []
+    if resp.status_code == 402:
+        raise QuotaExhausted("steamwebapi /inventory 402")
     if resp.status_code == 429:
-        raise HTTPException(status_code=429, detail="Steam rate limit — retry later")
+        raise SteamRateLimited(_parse_retry_after(resp.headers.get("Retry-After")))
     if resp.status_code != 200:
         logger.error("steamwebapi /inventory → %s: %.500s", resp.status_code, resp.text)
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
@@ -124,6 +155,107 @@ async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
     return items
 
 
+# ── PERF-14: degradación elegante ante 429 ────────────────────────────────────
+
+_retry_tasks: dict[str, asyncio.Task] = {}   # steam_id → reintento en curso (a la vez, uno)
+_recent_429: deque[float] = deque()          # time.time() de los 429 de la última hora
+
+
+def _log_429(steam_id: str, origin: str, retry_after: float | None, served: str) -> None:
+    """Una línea por 429, con el conteo de la última hora: es lo que dice si son
+    recurrentes (criterio para subir de plan). `grep inventory-429` en los logs."""
+    now = time.time()
+    _recent_429.append(now)
+    while _recent_429[0] < now - 3600:
+        _recent_429.popleft()
+    logger.warning(
+        "[inventory-429] user=%s origin=%s retry_after=%s served=%s last_hour=%d",
+        steam_id, origin, retry_after, served, len(_recent_429),
+    )
+
+
+async def _store(steam_id: str, items: list, now: float) -> None:
+    _inventory_cache[steam_id] = (items, now)
+    try:
+        await inventory_snapshot_repo.save(steam_id, items)
+    except Exception as exc:  # noqa: BLE001 — best-effort: nunca romper /inventory
+        logger.warning("[inventory] no se pudo guardar el snapshot: %s", exc)
+
+
+async def _snapshot_response(steam_id: str) -> JSONResponse | None:
+    """El último inventario bueno, con su fecha, o None si no hay. El cuerpo sigue
+    siendo la lista de siempre: el aviso de dato viejo va en cabeceras."""
+    try:
+        snap = await inventory_snapshot_repo.load(steam_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[inventory] no se pudo leer el snapshot: %s", exc)
+        return None
+    if snap is None:
+        return None
+    items, captured_at = snap
+    return JSONResponse(items, headers={
+        "X-Inventory-Stale": "1",
+        "X-Inventory-Captured-At": captured_at,
+    })
+
+
+def _backoff(attempt: int, retry_after: float | None) -> float:
+    """Exponencial con jitter «equal» (mitad fija, mitad aleatoria), y nunca menos
+    de lo que pidió steamwebapi en Retry-After."""
+    exp = min(INVENTORY_429_BACKOFF_CAP, INVENTORY_429_BACKOFF_BASE * 2 ** attempt)
+    return max(retry_after or 0.0, exp / 2 + random.uniform(0, exp / 2))
+
+
+async def _retry_inventory(request: Request, steam_id: str, retry_after: float | None) -> None:
+    # ponytail: tarea en proceso, no cola persistente — si Render duerme se pierde, y
+    # el siguiente GET reintenta por su cuenta. Cola (Supabase/Redis) si hace falta.
+    try:
+        for attempt in range(INVENTORY_429_MAX_RETRIES):
+            await asyncio.sleep(_backoff(attempt, retry_after))
+            try:
+                items = await _fetch_fresh_inventory(request, steam_id)
+            except SteamRateLimited as exc:
+                retry_after = exc.retry_after
+                _log_429(steam_id, f"retry-{attempt + 1}", retry_after, "none")
+                continue
+            except QuotaExhausted:
+                logger.warning("[inventory-402] user=%s cuota agotada en el reintento; se aborta", steam_id)
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[inventory] reintento de %s abortado: %r", steam_id, exc)
+                return
+            await _store(steam_id, items, time.monotonic())
+            logger.info("[inventory-429] user=%s recuperado en el reintento %d", steam_id, attempt + 1)
+            return
+        logger.warning("[inventory-429] user=%s sin recuperar tras %d reintentos",
+                       steam_id, INVENTORY_429_MAX_RETRIES)
+    finally:
+        _retry_tasks.pop(steam_id, None)
+
+
+def _schedule_retry(request: Request, steam_id: str, retry_after: float | None) -> None:
+    if steam_id in _retry_tasks:
+        return
+    # El dict guarda la referencia: asyncio solo tiene referencias débiles a las tareas.
+    _retry_tasks[steam_id] = asyncio.create_task(_retry_inventory(request, steam_id, retry_after))
+
+
+async def _degraded_inventory(request: Request, steam_id: str, exc: Exception, origin: str):
+    """429 → snapshot + reintento en segundo plano. 402 → snapshot, SIN reintento."""
+    snap = await _snapshot_response(steam_id)
+    if isinstance(exc, SteamRateLimited):
+        _log_429(steam_id, origin, exc.retry_after, "snapshot" if snap else "none")
+        _schedule_retry(request, steam_id, exc.retry_after)
+        if snap is None:
+            raise HTTPException(status_code=429, detail="Steam rate limit — retry later")
+    else:
+        logger.warning("[inventory-402] user=%s origin=%s cuota agotada served=%s",
+                       steam_id, origin, "snapshot" if snap else "none")
+        if snap is None:
+            raise HTTPException(status_code=502, detail="Steam returned 402")
+    return snap
+
+
 @router.get("/inventory", summary="Inventario CS2 del usuario autenticado")
 async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
     steam_id: str = user["sub"]
@@ -133,8 +265,15 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
     if cached and now - cached[1] < INVENTORY_CACHE_TTL:
         return cached[0]
 
-    items = await _fetch_fresh_inventory(request, steam_id)
-    _inventory_cache[steam_id] = (items, now)
+    # Con un reintento en curso no se vuelve a llamar: cada GET extra sería otro 429.
+    if steam_id in _retry_tasks and (snap := await _snapshot_response(steam_id)):
+        return snap
+
+    try:
+        items = await _fetch_fresh_inventory(request, steam_id)
+    except (SteamRateLimited, QuotaExhausted) as exc:
+        return await _degraded_inventory(request, steam_id, exc, "get")
+    await _store(steam_id, items, now)
     return items
 
 
@@ -148,8 +287,14 @@ async def refresh_inventory(request: Request, user: dict = Depends(require_jwt))
         remaining = int(INVENTORY_REFRESH_COOLDOWN - (now - cooldown_start))
         raise HTTPException(status_code=429, detail=f"Refresh cooldown active — retry in {remaining}s")
 
-    items = await _fetch_fresh_inventory(request, steam_id)
-    _inventory_cache[steam_id] = (items, now)
+    if steam_id in _retry_tasks and (snap := await _snapshot_response(steam_id)):
+        return snap
+
+    try:
+        items = await _fetch_fresh_inventory(request, steam_id)
+    except (SteamRateLimited, QuotaExhausted) as exc:
+        return await _degraded_inventory(request, steam_id, exc, "refresh")
+    await _store(steam_id, items, now)
     _inventory_refresh_cooldown[steam_id] = now
     return items
 
