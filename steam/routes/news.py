@@ -21,7 +21,7 @@ router = APIRouter()
 
 @router.get("/news/cs2", summary="Últimas noticias de CS2 vía Steam News API")
 async def get_cs2_news(request: Request, count: int = 5):
-    _rate_limit(_get_client_ip(request))
+    _rate_limit(_get_client_ip(request), bucket="news")  # SEC-16: fuera del cupo de auth
 
     # PERF-06: sin caché cada petición costaba 5,6–12,3 s desde Render (Steam +
     # un GET por noticia para el og:image). Misma forma que _inventory_cache.

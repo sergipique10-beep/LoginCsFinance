@@ -19,7 +19,7 @@ from stores import (
     _profile_cache, _inventory_cache, _item_history_cache,
     _inventory_refresh_cooldown,
 )
-from auth.service import require_jwt, _get_client_ip, _rate_limit
+from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
 from ..mappers import _map_item
 from ..price_capture import QuotaExhausted
@@ -299,7 +299,7 @@ async def refresh_inventory(request: Request, user: dict = Depends(require_jwt))
     return items
 
 
-@router.get("/item/history", summary="Historial de precios de un item CS2")
+@router.get("/item/history", dependencies=[Depends(item_history_rate_limit)], summary="Historial de precios de un item CS2")
 async def get_item_history(
     request: Request,
     name: str,
@@ -308,8 +308,6 @@ async def get_item_history(
     days: int = 35,
     user: dict = Depends(require_jwt),
 ):
-    _rate_limit(_get_client_ip(request))
-
     market = market.lower() if market else None
     days = max(1, min(days, 365))  # el frontend pide por timeframe; acotar el rango
     cache_key = f"{name}:{interval}:{market or 'steam'}:{days}"

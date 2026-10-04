@@ -99,7 +99,7 @@ async def rag_chat(
     request: Request,
     _claims: dict = Depends(require_jwt),
 ):
-    _rate_limit(_get_client_ip(request))
+    _rate_limit(_get_client_ip(request), bucket="chat")  # SEC-16: fuera del cupo de auth
 
     message = payload.message.strip()
     if not message:
