@@ -40,7 +40,7 @@ def steam_auth_headers() -> dict[str, str]:
 class _SlidingWindowLimiter:
     """Caps calls to at most `limit` per `window` seconds, process-wide.
 
-    steamwebapi Starter allows 20 req/60s *per endpoint*. _enrich_prices fires
+    steamwebapi Starter allows 20 req/60s *per endpoint*. enrich_prices fires
     one csfloat/history call per item (up to 80 for trending) — without this,
     everything past the 20th got HTTP 429 → empty history → priceDelta7d=None →
     "N/A" badges. Callers that exceed the window wait their turn instead of failing.

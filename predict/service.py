@@ -24,7 +24,7 @@ async def _historico(client: httpx.AsyncClient, name: str) -> list[dict]:
 
     1. `precios_historicos` (Supabase): la captura diaria de `/internal/price-tick`.
        Es nuestra, no gasta cuota de steamwebapi y crece sin techo.
-    2. Si aún no hay suficientes puntos, cae a `_fetch_history_for_item`
+    2. Si aún no hay suficientes puntos, cae a `pricing.fetch_history_for_item`
        (CSFloat, 35 días), que respeta el limiter de 18/60s y su caché de 23h.
 
     Ambas fuentes devuelven la misma forma `[{"date", "price", "volume"}]`.
@@ -38,8 +38,8 @@ async def _historico(client: httpx.AsyncClient, name: str) -> list[dict]:
     except Exception as exc:  # noqa: BLE001 — sin Supabase seguimos con CSFloat
         logger.warning("[predict] fetch_prices falló para %s: %s", name, exc)
 
-    from steam.services import _fetch_history_for_item
-    return await _fetch_history_for_item(client, name)
+    from steam.services import pricing
+    return await pricing.fetch_history_for_item(client, name)
 
 
 async def predecir_tendencia(

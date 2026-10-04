@@ -79,3 +79,21 @@ class HistoryBusy(Exception):
     ningún `await` entre medias, así que una cancelación durante la espera no deja
     un hueco fantasma en la ventana.
     """
+
+
+class UnexpectedPayload(Exception):
+    """Un 200 con JSON válido pero con una forma que no se esperaba (p. ej. un dict
+    donde va una lista). Las rutas lo traducen a 502 con el mensaje como `detail`.
+
+    Aparte de `InvalidPayload` (JSON ilegible) porque hoy cada uno da un status
+    distinto: este 502, aquel 500 (CAL-14).
+    """
+
+
+# SEC-16: cuerpo del 503 cuando steamwebapi da 402 (cuota MENSUAL agotada, reset el
+# día 10). No es un 429: el usuario no va «demasiado rápido» y reintentar no sirve.
+# `code` es el contrato con el front (error.interceptor.ts); el texto puede cambiar.
+UPSTREAM_QUOTA_DETAIL = {"code": "upstream_quota", "message": "steamwebapi monthly quota exhausted"}
+# SEC-16: y cuando lo lleno es el límite POR MINUTO (20/60 s): transitorio, con Retry-After.
+UPSTREAM_RATE_LIMIT_DETAIL = {"code": "upstream_rate_limit", "message": "steamwebapi per-minute limit reached"}
+UNEXPECTED_FORMAT = "Unexpected response format from Steam API"

@@ -137,7 +137,7 @@ def _map_item(item: dict) -> SkinCard:
         # Deltas contra la familia pricereal, la única cuyos campos por timeframe
         # traen valores históricos de verdad. pricelatestsell24h/7d/30d vienen
         # siempre iguales a pricelatestsell, así que daban None → "N/A" en todo.
-        # _enrich_prices puede sobrescribirlos con valores derivados del histórico
+        # pricing.enrich_prices puede sobrescribirlos con valores derivados del histórico
         # de csfloat en los endpoints que la llaman (market, trending, movers).
         "priceDelta24h":  _inline_delta(real, d.get("pricereal24h")),
         "priceDelta7d":   _inline_delta(real, d.get("pricereal7d")),

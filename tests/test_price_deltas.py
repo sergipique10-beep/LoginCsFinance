@@ -7,7 +7,7 @@ badge "N/A" en todas las skins del inventario. Los campos `pricereal*` sí son
 valores históricos reales y coinciden con lo que muestran otros trackers.
 """
 from steam.mappers.items import _map_item
-from steam.routes.market import _MOVERS_SELECT
+from steam.services.market import _MOVERS_SELECT
 
 
 # Respuesta real de steamwebapi /items para esta skin (campos relevantes, 2026-07-14).

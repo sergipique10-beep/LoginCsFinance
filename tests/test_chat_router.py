@@ -105,7 +105,7 @@ def test_chat_apagado_da_404_tambien_sin_autenticar(monkeypatch):
     from fastapi.testclient import TestClient
     import main as main_module
 
-    monkeypatch.setattr(main_module, "_fetch_static_images", AsyncMock())
+    monkeypatch.setattr(main_module, "fetch_static_images", AsyncMock())
     monkeypatch.setattr(chat_router, "CHAT_ENABLED", False)
 
     # Sin dependency_overrides: este cliente es anónimo a propósito.

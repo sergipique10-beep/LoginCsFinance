@@ -11,7 +11,8 @@ import httpx
 import pytest
 
 import main
-from steam.routes import market as market_routes
+from steam.rankings_repo import movers_repo, trending_repo
+from steam.services import catalog
 from stores import (
     _fx_cache, _item_history_cache, _item_price_cache,
     _market_index_cache, _market_lookup_cache, _market_prices_cache,
@@ -72,7 +73,7 @@ def api(client, monkeypatch):
         c.clear()
     monkeypatch.setattr(main.app.state, "http_client", httpx.AsyncClient(transport=httpx.MockTransport(_handler)))
     # El catálogo de ByMykel no forma parte del contrato de estos endpoints.
-    monkeypatch.setattr(market_routes, "_fetch_static_images", AsyncMock())
+    monkeypatch.setattr(catalog, "fetch_static_images", AsyncMock())
     yield client
     for c in CACHES:
         c.clear()
@@ -129,8 +130,8 @@ def test_index(api):
 
 def test_movers_y_trending_sirven_snapshots(api, monkeypatch):
     rows = [_to_row(SAMPLE, 0, "hot"), _to_row(SAMPLE, 0, "cold")]
-    monkeypatch.setattr(market_routes.movers_repo, "fetch_snapshot", AsyncMock(return_value=rows))
-    monkeypatch.setattr(market_routes.trending_repo, "fetch_ranked", AsyncMock(return_value=rows[:1]))
+    monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=rows))
+    monkeypatch.setattr(trending_repo, "fetch_ranked", AsyncMock(return_value=rows[:1]))
 
     movers = api.get("/market/movers").json()
     assert set(movers) == {"hot", "cold"}

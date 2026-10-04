@@ -142,7 +142,7 @@ async def fetch_prices(name: str, limit: int = 400) -> list[dict]:
     """Serie histórica de una skin, ascendente por fecha.
 
     Devuelve `[{"date": str, "price": float, "volume": int|None}, ...]` — la
-    misma forma que `_fetch_history_for_item`, para que los consumidores
+    misma forma que `pricing.fetch_history_for_item`, para que los consumidores
     (predicción, histórico) puedan alternar entre ambas fuentes sin traducir.
     """
     def _do() -> list[dict]:

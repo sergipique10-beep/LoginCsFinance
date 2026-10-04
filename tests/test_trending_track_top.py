@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from steam.rankings_repo import trending_repo
 from steam.routes import market as market_routes
+from steam.services import market as market_service
 
 
 def _item(nombre: str) -> dict:
@@ -22,14 +24,14 @@ def _item(nombre: str) -> dict:
 def tick(client, monkeypatch):
     """Prepara el trending-tick con todo mockeado salvo lo que se está probando."""
     monkeypatch.setattr(market_routes, "CAP_TICK_TOKEN", "secret123")
-    monkeypatch.setattr(market_routes.trending_repo, "upsert_rows", AsyncMock())
-    monkeypatch.setattr(market_routes.trending_repo, "purge_stale", AsyncMock(return_value=0))
+    monkeypatch.setattr(trending_repo, "upsert_rows", AsyncMock())
+    monkeypatch.setattr(trending_repo, "purge_stale", AsyncMock(return_value=0))
 
     reg = AsyncMock()
     monkeypatch.setattr("steam.price_history_repo.register_tracked", reg)
 
     def _run(items):
-        monkeypatch.setattr(market_routes, "_compute_trending", AsyncMock(return_value=items))
+        monkeypatch.setattr(market_service, "compute_trending", AsyncMock(return_value=items))
         return client.post("/internal/trending-tick", headers={"X-Cap-Token": "secret123"})
 
     return _run, reg
@@ -38,7 +40,7 @@ def tick(client, monkeypatch):
 def test_registra_el_top_n_por_turnover(tick, monkeypatch):
     """`items` ya viene ordenado por turnover desde _diversificar → basta el slice."""
     run, reg = tick
-    monkeypatch.setattr(market_routes, "TRENDING_TRACK_TOP", 3)
+    monkeypatch.setattr(market_service, "TRENDING_TRACK_TOP", 3)
 
     resp = run([_item(f"Skin{i}") for i in range(10)])
 
@@ -51,7 +53,7 @@ def test_registra_el_top_n_por_turnover(tick, monkeypatch):
 
 def test_no_registra_mas_de_los_que_hay(tick, monkeypatch):
     run, reg = tick
-    monkeypatch.setattr(market_routes, "TRENDING_TRACK_TOP", 80)
+    monkeypatch.setattr(market_service, "TRENDING_TRACK_TOP", 80)
 
     resp = run([_item("Skin0"), _item("Skin1")])
 
@@ -71,10 +73,10 @@ def test_ranking_vacio_no_llama_al_repo(tick):
 def test_un_fallo_al_registrar_no_tumba_la_captura(client, monkeypatch):
     """La captura del ranking es lo que sirve la pantalla: tiene prioridad."""
     monkeypatch.setattr(market_routes, "CAP_TICK_TOKEN", "secret123")
-    monkeypatch.setattr(market_routes, "_compute_trending",
+    monkeypatch.setattr(market_service, "compute_trending",
                         AsyncMock(return_value=[_item("Skin0")]))
-    monkeypatch.setattr(market_routes.trending_repo, "upsert_rows", AsyncMock())
-    monkeypatch.setattr(market_routes.trending_repo, "purge_stale", AsyncMock(return_value=0))
+    monkeypatch.setattr(trending_repo, "upsert_rows", AsyncMock())
+    monkeypatch.setattr(trending_repo, "purge_stale", AsyncMock(return_value=0))
     monkeypatch.setattr("steam.price_history_repo.register_tracked",
                         AsyncMock(side_effect=RuntimeError("supabase caída")))
 

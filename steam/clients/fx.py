@@ -1,5 +1,5 @@
 """Cliente de frankfurter (CLEAN-07): tipos de referencia del BCE, sin clave. La
-validación del rango y la caché con stale viven en `services._fetch_fx_rate`."""
+validación del rango y la caché con stale viven en `services/fx.fetch_fx_rate`."""
 from typing import Any
 
 import httpx

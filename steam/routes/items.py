@@ -3,9 +3,6 @@ import logging
 import random
 import time
 from collections import deque
-from datetime import date, timedelta
-from functools import partial
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -15,34 +12,23 @@ from settings import (
 )
 from stores import (
     INVENTORY_REFRESH_COOLDOWN,
-    _profile_cache, _inventory_cache, _item_history_cache,
+    _inventory_cache,
     _inventory_refresh_cooldown,
 )
 from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
-from ..mappers.items import _map_item
-from ..clients import steamwebapi
-from ..clients.steamwebapi import _history_limiter
-from ..domain.catalog import HISTORY_MARKETS
-from ..errors import QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UpstreamError
-from ..services import (
-    UPSTREAM_QUOTA_DETAIL,
-    UPSTREAM_RATE_LIMIT_DETAIL,
-    _enrich_market_prices,
-    _enrich_images_from_cache,
+from ..errors import (
+    UPSTREAM_QUOTA_DETAIL, UPSTREAM_RATE_LIMIT_DETAIL, HistoryBusy, QuotaExhausted, RateLimited,
+    SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
 )
+from ..services import inventory as inventory_service
+from ..services import pricing
+from ..services import profile as profile_service
 
 
 # SEC-16: espera máxima por un hueco en `_history_limiter` (como el chat en PERF-03).
 # Un detalle de skin no puede quedarse 60 s cargando mientras un cron llena la ventana.
 ITEM_HISTORY_LIMITER_TIMEOUT = 3.0
-
-
-def _upstream_busy(stale: Any):
-    """Ventana de steamwebapi llena: caché caducada si la hay; si no, 503 con Retry-After."""
-    if stale is not None:
-        return stale
-    raise HTTPException(status_code=503, detail=UPSTREAM_RATE_LIMIT_DETAIL, headers={"Retry-After": "60"})
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -52,14 +38,8 @@ router = APIRouter()
 @router.get("/me", summary="Info del usuario autenticado")
 async def get_me(request: Request, user: dict = Depends(require_jwt)):
     steam_id: str = user["sub"]
-
-    now = time.monotonic()
-    profile = _profile_cache.fresh(steam_id, now)
-    if profile is not None:
-        return profile if "steam64_id" in profile else {**profile, "steam64_id": steam_id}
-
     try:
-        data = await steamwebapi.profile(request.app.state.http_client, steam_id)
+        return await profile_service.get_profile(request.app.state.http_client, steam_id)
     except SourceTimeout:
         raise HTTPException(status_code=504, detail="Steam profile request timed out") from None
     except SourceUnavailable as exc:
@@ -68,56 +48,29 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
         logger.error("[me] steamwebapi returned %s | body: %s", exc.status, exc.body_excerpt[:300])
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    if isinstance(data, list):
-        data = data[0] if data else {}
-
-    profile = {
-        "userName":       data.get("personaname", ""),
-        "avatarUrl":      data.get("avatarfull", ""),
-        "avatarThumbUrl": data.get("avatarmedium") or data.get("avatarfull", ""),
-        "profileUrl":     data.get("profileurl", ""),
-        "isOnline":       data.get("personastate", 0) != 0,
-        "steam64_id":     steam_id,
-    }
-    _profile_cache.put(steam_id, profile, now)
-    return profile
-
 
 async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
+    """El inventario recién leído, con los errores de steamwebapi traducidos a HTTP.
+    429 y 402 suben tal cual: los degrada quien llama (PERF-14)."""
     try:
-        data = await steamwebapi.inventory(request.app.state.http_client, steam_id)
+        return await inventory_service.fetch_fresh_inventory(
+            request.app.state.http_client, steam_id, track=True,
+        )
     except SourceTimeout:
         raise HTTPException(status_code=504, detail="Steam inventory request timed out") from None
     except SourceUnavailable as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
     except (QuotaExhausted, RateLimited):
-        raise   # los degrada quien llama (PERF-14)
+        raise
     except UpstreamError as exc:
         if exc.status == 403:
             raise HTTPException(status_code=403, detail="Inventory is private") from exc
         if exc.status in (410, 411):
-            return []
+            return []   # CAL-13: sin log y se guarda como inventario vacío
         logger.error("steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
-
-    if not isinstance(data, list):
-        logger.error("steamwebapi /inventory unexpected format: %.500s", data)
-        raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
-
-    items = [_map_item(item) for item in data]
-    items = await _enrich_market_prices(request.app.state.http_client, items)
-    _enrich_images_from_cache(items)
-
-    # Auto-registro para la captura de precios (best-effort: nunca romper /inventory)
-    try:
-        from steam.price_history_repo import register_tracked
-        names = [i.get("name") for i in items if i.get("name")]
-        if names:
-            await register_tracked(names, "inventory")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[price] auto-registro de inventario falló: %s", exc)
-
-    return items
+    except UnexpectedPayload as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 # ── PERF-14: degradación elegante ante 429 ────────────────────────────────────
@@ -273,59 +226,18 @@ async def get_item_history(
     days: int = 35,
     user: dict = Depends(require_jwt),
 ):
-    market = market.lower() if market else None
-    days = max(1, min(days, 365))  # el frontend pide por timeframe; acotar el rango
-    cache_key = f"{name}:{interval}:{market or 'steam'}:{days}"
-    now = time.monotonic()
-    hit = _item_history_cache.fresh(cache_key, now)
-    if hit is not None:
-        return hit
-
-    # Buff163/CSFloat usan el endpoint por-market (fechas + quantity); Steam usa la
-    # ruta legacy (interval + sold). Distintos hosts, params y forma de respuesta.
-    client = request.app.state.http_client
-    if market in HISTORY_MARKETS:
-        today = date.today()
-        fetch = partial(
-            steamwebapi.market_history,
-            client, market, name, (today - timedelta(days=days)).isoformat(), today.isoformat(),
+    try:
+        return await pricing.get_item_history(
+            request.app.state.http_client, name, interval, market, days,
+            limiter_timeout=ITEM_HISTORY_LIMITER_TIMEOUT,
         )
-        volume_key = "quantity"
-    else:
-        fetch = partial(steamwebapi.legacy_history, client, name, interval)
-        volume_key = "sold"
-
-    try:
-        await asyncio.wait_for(_history_limiter.acquire(), timeout=ITEM_HISTORY_LIMITER_TIMEOUT)
-    except asyncio.TimeoutError:
-        return _upstream_busy(_item_history_cache.stale(cache_key))
-
-    try:
-        data = await fetch()
     except SourceTimeout:
         raise HTTPException(status_code=504, detail="Steam history request timed out") from None
     except SourceUnavailable as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
-    except QuotaExhausted:
-        logger.warning("[item-history] daily limit reached for %s (%s)", name, market or "steam")
-        return []
-    except RateLimited:
-        logger.warning("[item-history] steamwebapi 429 for %s (%s)", name, market or "steam")
-        return _upstream_busy(_item_history_cache.stale(cache_key))
+    except (HistoryBusy, RateLimited):
+        # Ventana de steamwebapi llena y sin caché caducada que servir.
+        raise HTTPException(status_code=503, detail=UPSTREAM_RATE_LIMIT_DETAIL,
+                            headers={"Retry-After": "60"}) from None
     except UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
-
-    raw = data if isinstance(data, list) else []
-    points = sorted(
-        [
-            {
-                "date":   p.get("createdat", "")[:10],
-                "price":  float(p.get("price") or 0),
-                "volume": int(p.get(volume_key) or 0),
-            }
-            for p in raw if p.get("price")
-        ],
-        key=lambda p: p["date"],
-    )
-    _item_history_cache.put(cache_key, points, now)
-    return points
