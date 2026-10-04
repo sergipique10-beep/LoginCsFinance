@@ -67,7 +67,7 @@ _news_cache: dict[int, tuple[list, float]] = {}  # count → (items, ts)
 _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image URL
 # UX-39: rareza del catálogo estático (ByMykel), poblada junto al caché de imágenes.
 _item_rarity_cache: dict[str, tuple[str, str]] = {}  # markethashname → (rareza, color hex sin '#')
-_image_cache_meta: dict[str, float] = {}  # "ts" → monotonic timestamp of last successful population
+_image_cache_meta: dict[str, float] = {}  # "ts" → última carga buena; "failed_ts" → último fallo total (CAL-08)
 _market_lookup_cache: dict[str, tuple[dict, float]] = {}  # market → ({name: price}, ts)
 _market_providers_cache: dict[str, tuple[list, float]] = {}  # "providers" → (list, ts)
 _fx_cache: dict[str, tuple[float, float]] = {}  # "usdeur" → (rate, ts). Sin TTL al servir el fallback: ver services._fetch_fx_rate
