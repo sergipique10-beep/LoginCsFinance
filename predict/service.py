@@ -25,7 +25,7 @@ async def _historico(client: httpx.AsyncClient, name: str) -> list[dict]:
     1. `precios_historicos` (Supabase): la captura diaria de `/internal/price-tick`.
        Es nuestra, no gasta cuota de steamwebapi y crece sin techo.
     2. Si aún no hay suficientes puntos, cae a `_fetch_history_for_item`
-       (CSFloat, ~50d), que respeta el limiter de 18/60s y su caché de 23h.
+       (CSFloat, 35 días), que respeta el limiter de 18/60s y su caché de 23h.
 
     Ambas fuentes devuelven la misma forma `[{"date", "price", "volume"}]`.
     """
