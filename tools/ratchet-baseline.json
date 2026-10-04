@@ -1,6 +1,6 @@
 {
   "bind_all_interfaces": 0,
-  "coverage_floor": 76,
+  "coverage_floor": 77,
   "files_without_test": [
     "middleware.py",
     "portfolio/repo.py",
