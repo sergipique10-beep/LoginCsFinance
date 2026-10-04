@@ -1,5 +1,5 @@
 """Catálogo estático de ByMykel (imágenes y rareza) y la caché de imágenes de
-steamwebapi (CLEAN-11). La descarga va por `steam/clients/static_catalog.py`; aquí viven
+steamwebapi (CLEAN-11). La descarga va por `steam/api/static_catalog_client.py`; aquí viven
 el registro de claves, el lock de PERF-18 y el backoff de CAL-08.
 """
 import asyncio
@@ -9,7 +9,7 @@ import time
 import httpx
 
 from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
-from steam.clients import static_catalog
+from steam.api import static_catalog_client
 from steam.errors.handling import log_degraded
 from steam.domain.names import catalog_keys_for_skin, image_lookup_candidates, without_souvenir
 from steam.errors import InvalidPayload, UpstreamError
@@ -143,7 +143,7 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
 
     for label, url in sources_with_wears:
         try:
-            data = await static_catalog.fetch_source(client, url)
+            data = await static_catalog_client.fetch_source(client, url)
             for item in data:
                 _register_skin(item)
             fetched[label] = len(data)
@@ -152,7 +152,7 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
 
     for label, url in sources_flat:
         try:
-            data = await static_catalog.fetch_source(client, url)
+            data = await static_catalog_client.fetch_source(client, url)
             for item in data:
                 _register_flat(item)
             fetched[label] = len(data)

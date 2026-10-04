@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from steam.services import catalog, pricing
-from steam.clients.steamwebapi import _history_limiter
+from steam.api.steam_client import _history_limiter
 from steam.errors import HistoryBusy
 from stores import _item_history_cache
 from tools import market_tools

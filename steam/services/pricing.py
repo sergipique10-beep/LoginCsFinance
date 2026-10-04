@@ -10,8 +10,8 @@ from functools import partial
 import httpx
 
 from stores import HISTORY_EMPTY_TTL, _item_history_cache, _market_lookup_cache
-from steam.clients import steamwebapi
-from steam.clients.steamwebapi import _history_limiter
+from steam.api import MARKET_CLIENTS, csfloat_client, steam_client
+from steam.api.steam_client import _history_limiter
 from steam.domain import catalog as domain_catalog
 from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import Fetched, HistoryPoint
@@ -46,10 +46,8 @@ async def fetch_history_for_item(
         now = time.monotonic()  # limiter may have blocked; refresh for cache stamps
         today = date.today()
         try:
-            raw = await steamwebapi.market_history(
-                client, "csfloat", name,
-                (today - timedelta(days=35)).isoformat(), today.isoformat(),
-                timeout=30.0,
+            raw = await csfloat_client.history(
+                client, name, (today - timedelta(days=35)).isoformat(), today.isoformat(), timeout=30.0,
             )
         except (SourceTimeout, SourceUnavailable):
             raise   # red: lo registra el except genérico de abajo, como antes
@@ -102,7 +100,7 @@ async def enrich_prices(
 
     histories = await asyncio.gather(*[fetch(it["name"]) for it in items])
     result = []
-    for item, pts in zip(items, histories):
+    for item, pts in zip(items, histories, strict=True):
         if pts:
             # Use the most recent point in the CSFloat history as "current" price so
             # we compare CSFloat vs CSFloat (same market). Using priceLatest (Steam)
@@ -138,7 +136,7 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
         return _lookup_stale(market, "backoff")
     try:
         try:
-            data = await steamwebapi.market_prices(client, market, {"format": "json"}, timeout=30.0)
+            data = await MARKET_CLIENTS[market].prices(client, {"format": "json"}, timeout=30.0)
         except (SourceTimeout, SourceUnavailable):
             raise
         except UpstreamError as exc:
@@ -196,12 +194,12 @@ async def get_item_history(client: httpx.AsyncClient, name: str, interval: str, 
     if market in domain_catalog.HISTORY_MARKETS:
         today = date.today()
         fetch = partial(
-            steamwebapi.market_history,
-            client, market, name, (today - timedelta(days=days)).isoformat(), today.isoformat(),
+            MARKET_CLIENTS[market].history,
+            client, name, (today - timedelta(days=days)).isoformat(), today.isoformat(),
         )
         volume_key = "quantity"
     else:
-        fetch = partial(steamwebapi.legacy_history, client, name, interval)
+        fetch = partial(steam_client.legacy_history, client, name, interval)
         volume_key = "sold"
 
     try:

@@ -8,8 +8,9 @@ from datetime import date, timedelta
 import httpx
 import pytest
 
-from steam.clients.steam_news import fetch_og_image
+from steam.api.news_client import fetch_og_image
 from steam.domain.catalog import WEAPON_CATEGORY, weapon_category
+from steam.errors import SourceUnavailable, UpstreamError
 from steam.mappers.items import (
     _STEAM_CDN, _delta_from_history, _normalize_image, _resolve_phase, _safe_delta,
 )
@@ -111,21 +112,25 @@ def _client(status=200, text="", exc=None):
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-@pytest.mark.parametrize("status, text, exc, expected", [
-    (200, '<meta property="og:image" content="https://img/a.jpg">', None, "https://img/a.jpg"),
-    (200, '<meta content="https://img/b.jpg" property="og:image">', None, "https://img/b.jpg"),
-    (200, "<html>sin meta</html>", None, ""),
-    (404, "", None, ""),
-    (200, "", httpx.ConnectError("caído"), ""),
+@pytest.mark.parametrize("text, expected", [
+    ('<meta property="og:image" content="https://img/a.jpg">', "https://img/a.jpg"),
+    ('<meta content="https://img/b.jpg" property="og:image">', "https://img/b.jpg"),
+    ("<html>sin meta</html>", ""),   # la página no trae og:image: no es un error
 ])
-async def test_fetch_og_image(status, text, exc, expected):
-    async with _client(status, text, exc) as client:
+async def test_fetch_og_image(text, expected):
+    async with _client(200, text) as client:
         assert await fetch_og_image(client, "https://news/x") == expected
 
 
-async def test_fetch_og_image_sin_url_no_pide():
-    async with _client(exc=AssertionError("no debería pedir")) as client:
-        assert await fetch_og_image(client, "") == ""
+@pytest.mark.parametrize("status, exc, error", [
+    (404, None, UpstreamError),
+    (200, httpx.ConnectError("caído"), SourceUnavailable),
+])
+async def test_fetch_og_image_lanza_el_error_tipado(status, exc, error):
+    # CLEAN-14: antes devolvía "" en silencio; ahora decide (y registra) services/news.
+    async with _client(status, "", exc) as client:
+        with pytest.raises(error):
+            await fetch_og_image(client, "https://news/x")
 
 
 # ── CLEAN-13: las fixtures de tests/fixtures/ son payloads válidos para los mappers ──

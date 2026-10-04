@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from steam.clients.http import get_json
+from steam.api.http import get_json
 from steam.errors import InvalidPayload
 
 _TIMEOUT = 15.0

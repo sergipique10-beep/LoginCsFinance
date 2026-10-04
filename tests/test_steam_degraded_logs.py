@@ -178,7 +178,7 @@ def test_noticia_sin_og_image(steam_api, client, lines):
         {"gid": "2", "title": "B", "url": "", "contents": "", "date": 0},
     ]}})
     client.get("/news/cs2")
-    assert lines("news_image") == [("og_image", "empty")]   # la que no tiene url no cuenta
+    assert lines("news_image") == [("http_404", "empty")]   # la que no tiene url no cuenta
 
 
 def test_sin_degradacion_no_hay_linea(steam_api, client, lines):

@@ -5,8 +5,9 @@ import time
 import httpx
 
 from stores import _news_cache
-from steam.clients import steam_news
-from steam.errors.handling import log_degraded
+from steam.api import news_client
+from steam.errors import InvalidPayload, UpstreamError
+from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import NewsItem
 from steam.mappers.news import _map_news_item, is_readable_news
 
@@ -14,6 +15,21 @@ from steam.mappers.news import _map_news_item, is_readable_news
 # y tope duro para que un `count` alto no dispare una petición enorme a Steam.
 NEWS_OVERFETCH = 3
 NEWS_MAX_FETCH = 30
+
+
+async def _og_image(client: httpx.AsyncClient, url: str) -> str:
+    """"" si la noticia no tiene URL (no es degradación), si la página no trae og:image
+    (`no_og_tag`) o si falló (motivo de `reason_of`): la noticia se pinta igual."""
+    if not url:
+        return ""
+    try:
+        image = await news_client.fetch_og_image(client, url)
+    except (UpstreamError, InvalidPayload) as exc:
+        log_degraded("news_image", reason_of(exc), "empty")
+        return ""
+    if not image:
+        log_degraded("news_image", "no_og_tag", "empty")
+    return image
 
 
 async def get_cs2_news(client: httpx.AsyncClient, count: int) -> list[NewsItem]:
@@ -28,7 +44,7 @@ async def get_cs2_news(client: httpx.AsyncClient, count: int) -> list[NewsItem]:
     # que no están en alfabeto latino. El tope evita que un `count` alto
     # dispare una petición enorme a Steam.
     fetch_count = min(count * NEWS_OVERFETCH, NEWS_MAX_FETCH)
-    data = await steam_news.get_news(client, fetch_count)
+    data = await news_client.get_news(client, fetch_count)
 
     newsitems = data.get("appnews", {}).get("newsitems", [])
 
@@ -37,14 +53,7 @@ async def get_cs2_news(client: httpx.AsyncClient, count: int) -> list[NewsItem]:
     # noticia en ruso que un feed vacío.
     readable = [n for n in newsitems if is_readable_news(n)]
     newsitems = (readable or newsitems)[:count]
-    images = await asyncio.gather(*[
-        steam_news.fetch_og_image(client, item.get("url", ""))
-        for item in newsitems
-    ])
-    for item, image in zip(newsitems, images, strict=True):
-        # Una noticia sin URL no tiene página de la que sacar la imagen: no es degradación.
-        if item.get("url") and not image:
-            log_degraded("news_image", "og_image", "empty")
+    images = await asyncio.gather(*[_og_image(client, item.get("url", "")) for item in newsitems])
     items = [_map_news_item(item, i, images[i]) for i, item in enumerate(newsitems)]
     _news_cache.put(count, items, now)
     return items

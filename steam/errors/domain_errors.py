@@ -1,6 +1,6 @@
 """Errores tipados de las fuentes externas de steam/ (CLEAN-06).
 
-El cliente (`steam/clients/steamwebapi.py`) traduce cada respuesta a uno de estos;
+El cliente (`steam/api/steam_client.py`) traduce cada respuesta a uno de estos;
 quien llama decide qué HTTP devolver. Antes vivían repartidos: `QuotaExhausted` en
 price_capture, `SteamRateLimited` en routes/items y `HistoryBusy` en services.
 """

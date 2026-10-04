@@ -4,7 +4,7 @@ import time
 import httpx
 
 from stores import _profile_cache
-from steam.clients import steamwebapi
+from steam.api import steam_client
 from steam.errors.handling import log_degraded
 
 
@@ -14,7 +14,7 @@ async def get_profile(client: httpx.AsyncClient, steam_id: str) -> dict:
     if profile is not None:
         return profile if "steam64_id" in profile else {**profile, "steam64_id": steam_id}
 
-    data = await steamwebapi.profile(client, steam_id)
+    data = await steam_client.profile(client, steam_id)
     if isinstance(data, list):
         data = data[0] if data else {}
     if not data:

@@ -2,12 +2,14 @@
 feature: steam
 files:
   - steam/cap_history_repo.py
-  - steam/clients/__init__.py
-  - steam/clients/fx.py
-  - steam/clients/http.py
-  - steam/clients/static_catalog.py
-  - steam/clients/steam_news.py
-  - steam/clients/steamwebapi.py
+  - steam/api/__init__.py
+  - steam/api/buff_client.py
+  - steam/api/csfloat_client.py
+  - steam/api/fx_client.py
+  - steam/api/http.py
+  - steam/api/news_client.py
+  - steam/api/static_catalog_client.py
+  - steam/api/steam_client.py
   - steam/domain/__init__.py
   - steam/domain/catalog.py
   - steam/domain/models.py
@@ -112,7 +114,7 @@ por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
 | `/market/index` | top sin `markethashname`/`change24h` | `KeyError` → 500 | 500 | CAL-14 | — |
 | Catálogo de imágenes | todas las fuentes caídas | backoff 5 min, `image: ""` | invisible | conservar (CAL-08) | `catalog` · `all_sources_failed` |
 | Noticias | JSON que no es dict | 500 | 500 | CAL-14 | — |
-| Noticias | og:image falla | `imageUrl: ""` | invisible | conservar | `news_image` · `og_image` (solo con URL) |
+| Noticias | og:image falla o la página no lo trae | `imageUrl: ""` | invisible | conservar | `news_image` · `reason_of(exc)` o `no_og_tag` (solo con URL) |
 | Chat: precio / búsqueda | 402 / 429 | "error al ejecutar" | genérico | CAL-14 | — |
 | Chat: inventario | cualquier error | `[]` | parece vacío | CAL-14 | `chat_inventory` · `reason_of(exc)` |
 | Mappers | campos ausentes | `0`, `"Base Grade"`, `True`… | invisible | UX-46 | — |

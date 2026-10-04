@@ -35,7 +35,7 @@ def test_services_no_importan_fastapi():
 def test_rutas_no_importan_los_clientes():
     offenders = [
         p.name for p in (ROOT / "steam" / "routes").glob("*.py")
-        if any(m.startswith("steam.clients") for m in _imports(p))
+        if any(m.startswith(("steam.clients", "steam.api")) for m in _imports(p))
     ]
     assert offenders == []
 

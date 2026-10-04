@@ -17,7 +17,7 @@ from stores import (
     _topmovers_raw_cache,
 )
 from steam.cap_history_repo import fetch_range, insert_snapshot
-from steam.clients import steamwebapi
+from steam.api import steam_client
 from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import Fetched, RankedCard, SkinCard
 from steam.domain.names import is_sticker_slab, skin_base
@@ -168,7 +168,7 @@ async def search_items(client: httpx.AsyncClient, query: str, *, max: int, selec
     """La búsqueda en /items, una sola implementación para /market/items, /market/price
     y las dos tools del chat. Cada llamador conserva su `max`, su `select` y qué hace
     con un cuerpo que no es lista (CAL-14 decidirá si se unifican)."""
-    return await steamwebapi.items(client, search=query, max=max, select=select)
+    return await steam_client.items(client, search=query, max=max, select=select)
 
 
 async def _ranking_items(client: httpx.AsyncClient, tag: str,
@@ -177,7 +177,7 @@ async def _ranking_items(client: httpx.AsyncClient, tag: str,
     (items, None), o (None, motivo) si no responde o no es una lista; entonces se cae
     a topmovers."""
     try:
-        data = await steamwebapi.items(
+        data = await steam_client.items(
             client, sort_by="soldZa", max=_ITEMS_FETCH_MAX, select=_MOVERS_SELECT,
         )
     except (SourceTimeout, SourceUnavailable) as exc:
@@ -198,7 +198,7 @@ async def _topmovers(client: httpx.AsyncClient, tag: str, now: float, *,
     raw_topmovers = _topmovers_raw_cache.stale("latest")
     if not raw_topmovers:
         try:
-            mi_data = await steamwebapi.market_index(client, timeout=15.0)
+            mi_data = await steam_client.market_index(client, timeout=15.0)
             if isinstance(mi_data, dict):
                 tm = mi_data.get("topmovers", {})
                 gainers = tm.get("gainers", [])
@@ -449,7 +449,7 @@ async def get_market_index(client: httpx.AsyncClient, tf: str) -> Fetched[dict]:
         return Fetched(hit)
 
     try:
-        data = await steamwebapi.market_index(client)
+        data = await steam_client.market_index(client)
     except QuotaExhausted as exc:
         logger.warning("[market-index] daily limit reached (402)")
         return _stale_or_raise("market_index", _market_index_cache.stale(cache_key), exc)
@@ -533,7 +533,7 @@ async def get_market_prices(client: httpx.AsyncClient, market: str, name: str | 
         params["currency"] = currency
 
     try:
-        data = await steamwebapi.market_prices(client, market, params, timeout=15.0)
+        data = await steam_client.market_prices(client, market, params, timeout=15.0)
     except QuotaExhausted as exc:
         return _stale_or_raise("market_prices", _market_prices_cache.stale(cache_key), exc)
 
@@ -618,7 +618,7 @@ async def get_cap_history(tf: str) -> list[dict]:
 async def capture_cap_snapshot(client: httpx.AsyncClient) -> dict:
     """/internal/cap-tick: guarda un snapshot horario del índice de precio."""
     try:
-        data = await steamwebapi.market_index(client, timeout=15.0)
+        data = await steam_client.market_index(client, timeout=15.0)
     except (SourceTimeout, SourceUnavailable):
         raise
     except UpstreamError as exc:

@@ -9,7 +9,7 @@
     "tools/predict_tools.py"
   ],
   "mypy": 61,
-  "ruff": 73,
+  "ruff": 72,
   "undocumented_files": [
     "alerts/repo.py",
     "alerts/router.py",

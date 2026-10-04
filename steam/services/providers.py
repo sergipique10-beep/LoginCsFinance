@@ -6,7 +6,7 @@ import time
 import httpx
 
 from stores import _market_providers_cache
-from steam.clients import steamwebapi
+from steam.api import steam_client
 from steam.domain import catalog as domain_catalog
 from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import Fetched, MarketProvider
@@ -34,7 +34,7 @@ async def fetch_market_providers(client: httpx.AsyncClient) -> Fetched[list[Mark
         return _providers_stale("backoff")
     try:
         try:
-            data = await steamwebapi.info_markets(client)
+            data = await steam_client.info_markets(client)
         except (SourceTimeout, SourceUnavailable):
             raise
         except UpstreamError as exc:

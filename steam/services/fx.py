@@ -5,7 +5,7 @@ import time
 import httpx
 
 from stores import _fx_cache
-from steam.clients import fx as fx_client
+from steam.api import fx_client
 from steam.domain.validators import plausible_fx_rate
 from steam.errors.handling import reason_of
 from steam.domain.models import Fetched

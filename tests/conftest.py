@@ -127,7 +127,7 @@ def steam_api(client, monkeypatch):
     """CAL-09: steamwebapi, ByMykel, frankfurter y Steam News simulados por HTTP, con
     todas las cachés en memoria vacías y el `_history_limiter` sin esperas."""
     import stores
-    from steam.clients import steamwebapi
+    from steam.api import steam_client
     from tests.steam_fake import FakeUpstream
 
     def _clear_caches():
@@ -138,6 +138,6 @@ def steam_api(client, monkeypatch):
     fake = FakeUpstream()
     _clear_caches()
     monkeypatch.setattr(app.state, "http_client", fake.client())
-    monkeypatch.setattr(steamwebapi._history_limiter, "acquire", AsyncMock())
+    monkeypatch.setattr(steam_client._history_limiter, "acquire", AsyncMock())
     yield fake
     _clear_caches()
