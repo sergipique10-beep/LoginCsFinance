@@ -23,6 +23,8 @@ STEAM_MARKET_API = "https://www.steamwebapi.com/market"
 # día 10). No es un 429: el usuario no va «demasiado rápido» y reintentar no sirve.
 # `code` es el contrato con el front (error.interceptor.ts); el texto puede cambiar.
 UPSTREAM_QUOTA_DETAIL = {"code": "upstream_quota", "message": "steamwebapi monthly quota exhausted"}
+# SEC-16: y cuando lo lleno es el límite POR MINUTO (20/60 s): transitorio, con Retry-After.
+UPSTREAM_RATE_LIMIT_DETAIL = {"code": "upstream_rate_limit", "message": "steamwebapi per-minute limit reached"}
 
 # Tipo de cambio: frankfurter sirve los tipos de referencia del BCE, sin clave ni
 # registro. El host .app redirige 301 a .dev, asi que se apunta directo a .dev.
