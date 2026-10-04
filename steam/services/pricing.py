@@ -13,7 +13,7 @@ from stores import HISTORY_EMPTY_TTL, _item_history_cache, _market_lookup_cache
 from steam.clients import steamwebapi
 from steam.clients.steamwebapi import _history_limiter
 from steam.domain import catalog as domain_catalog
-from steam.degraded import log_degraded, reason_of
+from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import Fetched, HistoryPoint
 from steam.domain.validators import has_price
 from steam.errors import (

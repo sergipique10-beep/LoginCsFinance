@@ -8,7 +8,7 @@ import httpx
 from stores import _market_providers_cache
 from steam.clients import steamwebapi
 from steam.domain import catalog as domain_catalog
-from steam.degraded import log_degraded, reason_of
+from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import Fetched, MarketProvider
 from steam.errors import SourceTimeout, SourceUnavailable, UpstreamError
 

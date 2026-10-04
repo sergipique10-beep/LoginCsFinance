@@ -8,13 +8,14 @@ files:
   - steam/clients/static_catalog.py
   - steam/clients/steam_news.py
   - steam/clients/steamwebapi.py
-  - steam/degraded.py
   - steam/domain/__init__.py
   - steam/domain/catalog.py
   - steam/domain/models.py
   - steam/domain/names.py
   - steam/domain/validators.py
-  - steam/errors.py
+  - steam/errors/__init__.py
+  - steam/errors/domain_errors.py
+  - steam/errors/handling.py
   - steam/inventory_snapshot_repo.py
   - steam/liquidity.py
   - steam/mappers/__init__.py
@@ -78,7 +79,7 @@ aceptada), *UX-46* (hacerla visible al usuario, necesita al front) o el issue de
 
 **Log** (CLEAN-12): las degradaciones que el cliente no ve dejan una línea
 `[steam-degraded] flow=<flow> reason=<reason> served=<stale|empty|fallback|error> last_hour=<n>`
-(`steam/degraded.py`), una por fila con algo en la última columna;
+(`steam/errors/handling.py`), una por fila con algo en la última columna;
 `tests/test_steam_degraded_logs.py` provoca cada una. Las que ya se ven (cabecera, `code`,
 `stale` en el cuerpo, 5xx) no llevan línea. Fuera a propósito: los mappers (una línea
 por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).

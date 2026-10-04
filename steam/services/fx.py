@@ -7,7 +7,7 @@ import httpx
 from stores import _fx_cache
 from steam.clients import fx as fx_client
 from steam.domain.validators import plausible_fx_rate
-from steam.degraded import reason_of
+from steam.errors.handling import reason_of
 from steam.domain.models import Fetched
 from steam.errors import SourceTimeout, SourceUnavailable, UpstreamError
 

@@ -5,7 +5,7 @@ import httpx
 
 from stores import _profile_cache
 from steam.clients import steamwebapi
-from steam.degraded import log_degraded
+from steam.errors.handling import log_degraded
 
 
 async def get_profile(client: httpx.AsyncClient, steam_id: str) -> dict:

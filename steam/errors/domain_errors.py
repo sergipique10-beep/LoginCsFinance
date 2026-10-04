@@ -90,6 +90,25 @@ class UnexpectedPayload(Exception):
     """
 
 
+class InvalidField(UnexpectedPayload):
+    """Un campo del payload tiene un tipo imposible (CLEAN-14): un dict donde va un
+    número, una lista donde va un string. Lo lanzan los validadores de valor
+    (`domain/validators.py`) desde los adapters. Un campo **ausente** o un string no
+    numérico no es esto: eso es `None` en el modelo interno.
+
+    Hereda de `UnexpectedPayload` para que las rutas lo traduzcan igual (502) y
+    `reason_of` lo distinga (`invalid_field`).
+    """
+
+    def __init__(self, source: str, operation: str, field: str, value: object):
+        super().__init__(f"{source}.{operation}: field {field!r} has invalid type "
+                         f"{type(value).__name__} ({str(value)[:80]})")
+        self.source = source
+        self.operation = operation
+        self.field = field
+        self.value = value
+
+
 # SEC-16: cuerpo del 503 cuando steamwebapi da 402 (cuota MENSUAL agotada, reset el
 # día 10). No es un 429: el usuario no va «demasiado rápido» y reintentar no sirve.
 # `code` es el contrato con el front (error.interceptor.ts); el texto puede cambiar.

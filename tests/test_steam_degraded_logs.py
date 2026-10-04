@@ -10,7 +10,7 @@ import time
 import httpx
 import pytest
 
-from steam import degraded
+from steam.errors import handling as degraded
 from steam.services import catalog, market as market_service, pricing
 from steam.services import providers as providers_service
 from stores import _item_history_cache, _item_price_cache, _market_lookup_cache, _search_cache

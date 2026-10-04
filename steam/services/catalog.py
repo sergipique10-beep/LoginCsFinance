@@ -10,7 +10,7 @@ import httpx
 
 from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
 from steam.clients import static_catalog
-from steam.degraded import log_degraded
+from steam.errors.handling import log_degraded
 from steam.domain.names import catalog_keys_for_skin, image_lookup_candidates, without_souvenir
 from steam.errors import InvalidPayload, UpstreamError
 

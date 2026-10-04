@@ -18,7 +18,7 @@ from stores import (
 )
 from steam.cap_history_repo import fetch_range, insert_snapshot
 from steam.clients import steamwebapi
-from steam.degraded import log_degraded, reason_of
+from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import Fetched, RankedCard, SkinCard
 from steam.domain.names import is_sticker_slab, skin_base
 from steam.domain.validators import MIN_SOLD_MOVERS, MIN_SOLD_TRENDING, ranking_eligible

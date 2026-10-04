@@ -1,4 +1,4 @@
-"""Log de degradaciones de steam/ (CLEAN-12): una línea con formato fijo cada vez que
+"""Manejo de degradaciones de steam/ (CLEAN-12, movido a errors/ en CLEAN-14): una línea con formato fijo cada vez que
 se sirve un dato degradado que el cliente no ve (caducado, vacío o de respaldo), y el
 conteo de la última hora para ese (flow, reason). Mismo patrón que `[inventory-429]`.
 
@@ -9,9 +9,9 @@ import time
 from collections import deque
 from typing import Literal
 
-from steam.errors import (
-    HistoryBusy, InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable,
-    UnexpectedPayload, UpstreamError,
+from steam.errors.domain_errors import (
+    HistoryBusy, InvalidField, InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout,
+    SourceUnavailable, UnexpectedPayload, UpstreamError,
 )
 
 logger = logging.getLogger("uvicorn.error")
@@ -35,6 +35,8 @@ def reason_of(exc: BaseException) -> str:
         return f"http_{exc.status}"
     if isinstance(exc, InvalidPayload):
         return "invalid_json"
+    if isinstance(exc, InvalidField):
+        return "invalid_field"
     if isinstance(exc, UnexpectedPayload):
         return "unexpected_format"
     return type(exc).__name__

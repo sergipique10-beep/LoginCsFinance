@@ -6,7 +6,7 @@ import httpx
 
 from stores import _news_cache
 from steam.clients import steam_news
-from steam.degraded import log_degraded
+from steam.errors.handling import log_degraded
 from steam.domain.models import NewsItem
 from steam.mappers.news import _map_news_item, is_readable_news
 
