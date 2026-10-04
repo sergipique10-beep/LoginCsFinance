@@ -1,8 +1,9 @@
 name: deploy-smoke
 # Verificacion del artefacto desplegado (EDS-3 #16). Se lanza cuando `ci` termina en verde
-# en master, espera a que Render despliegue y comprueba lo que AGENTS.md § Despliegue pide
-# hacer a mano tras cada deploy: la raiz responde y /auth/dev-token da 404 (SEC-02: el
-# 2026-09-26 estuvo abierto en produccion por faltar ENV=production).
+# tras un push a master, espera a que Render despliegue ESE commit (la raiz devuelve
+# `commit` = RENDER_GIT_COMMIT; antes el bucle salia con la version vieja, revision
+# 2026-10-04 I-4) y comprueba lo que AGENTS.md § Despliegue pide a mano: /auth/dev-token da 404
+# (SEC-02: el 2026-09-26 estuvo abierto en produccion por faltar ENV=production).
 on:
   workflow_run:
     workflows: [ci]
@@ -15,22 +16,27 @@ permissions:
 
 jobs:
   smoke:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # Solo pushes a master (un pull_request desde una rama llamada `master` en un fork tambien
+    # pasaria el filtro `branches`; M-10) o lanzamiento manual.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Esperar al deploy de Render y comprobar
+      - name: Esperar a que Render despliegue este commit y comprobar
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          WANT: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -u
           [ -n "$BASE_URL" ] || { echo "::error::falta el secret BACKEND_BASE_URL"; exit 1; }
-          # Render tarda ~2 min en desplegar; el free tier puede estar dormido (30-50 s mas).
-          for i in $(seq 1 20); do
-            if curl -fsS --max-time 30 "$BASE_URL/" >/dev/null 2>&1; then break; fi
-            echo "esperando a Render ($i/20)..."; sleep 30
+          echo "esperando a que / devuelva commit=$WANT"
+          got=""
+          for i in $(seq 1 24); do
+            got=$(curl -fsS --max-time 30 "$BASE_URL/" 2>/dev/null | sed -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p')
+            [ "$got" = "$WANT" ] && break
+            echo "  ($i/24) desplegado: ${got:-sin respuesta}"; sleep 30
           done
-          curl -fsS --max-time 30 "$BASE_URL/" >/dev/null || { echo "::error::/ no responde tras 10 min"; exit 1; }
+          [ "$got" = "$WANT" ] || { echo "::error::tras 12 min Render sirve '${got:-nada}', no $WANT. ¿Auto-Deploy desactivado o deploy fallido?"; exit 1; }
           CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST "$BASE_URL/auth/dev-token")
           [ "$CODE" = "404" ] || { echo "::error::/auth/dev-token devuelve $CODE: falta ENV=production en Render (SEC-02)"; exit 1; }
-          echo "smoke OK: / 200, /auth/dev-token 404"
+          echo "smoke OK: commit $WANT desplegado, /auth/dev-token 404"

@@ -29,6 +29,21 @@ jobs:
       - name: Definition of Done
         # Sin .env a proposito: la suite no depende de secretos (comprobado el 2026-10-04).
         run: python tools/dod.py
+      - name: La baseline del ratchet no retrocede (nada sube, el suelo no baja)
+        # Compara tools/ratchet-baseline.json con el del commit anterior (HEAD^1 = master previo
+        # en un merge --no-ff). Si el commit toca tools/ratchet.py cambio la DEFINICION de la
+        # medida: se informa pero no bloquea (revision 2026-10-04, I-3c).
+        run: |
+          set -eu
+          if ! git show HEAD^1:tools/ratchet-baseline.json > /tmp/prev-baseline.json 2>/dev/null; then
+            echo "sin baseline en el commit anterior: nada que comparar"; exit 0
+          fi
+          if git diff --name-only HEAD^1 HEAD | grep -qx 'tools/ratchet.py'; then
+            echo "::warning::tools/ratchet.py cambio en este commit: la comparacion es informativa"
+            python tools/ratchet.py --compare-baseline /tmp/prev-baseline.json || true
+          else
+            python tools/ratchet.py --compare-baseline /tmp/prev-baseline.json
+          fi
       - name: gitleaks (binario fijado por version y checksum, todo el historial)
         if: always()
         run: |
@@ -55,13 +70,16 @@ jobs:
             gitleaks.json
 
   audit:
-    # SCA (EDS-3 §3.17). Informativo la primera semana (EDS-4 §4.7, secuenciacion sin
-    # riesgo); pasa a bloquear quitando continue-on-error cuando lleve una semana sin rojos.
+    # SCA (EDS-3 §3.17). Informativo hasta cerrar SEC-14 (EDS-4 §4.7, secuenciacion sin
+    # riesgo): el continue-on-error va en el PASO de pip-audit, no en el job, para que el
+    # check-run quede en success (Render «After CI Checks Pass» lo mira) y un fallo de
+    # instalacion siga siendo rojo (revision 2026-10-04, I-5).
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install pip-audit
-      - run: pip-audit -r requirements.txt --strict --desc
+      - run: pip install pip-audit==2.10.1
+      - name: pip-audit (informativo hasta SEC-14)
+        continue-on-error: true
+        run: pip-audit -r requirements.txt --strict --desc
