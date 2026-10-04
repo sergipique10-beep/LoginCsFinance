@@ -1,0 +1,7 @@
+# Herramientas de desarrollo y verificacion (AOS-02). No van a produccion (Render instala
+# solo requirements.txt). Fijadas por version: el ratchet compara conteos entre ejecuciones
+# y un linter que cambia de reglas solo moveria el numero.
+ruff==0.16.10
+mypy==2.4.0
+pytest-cov==7.1.0
+pip-audit==2.10.1

@@ -1,0 +1,12 @@
+# Reglas minimas al principio: el ratchet (tools/ratchet.py) congela el conteo actual y
+# solo deja bajar, asi que no hace falta excluir nada para arrancar en verde.
+target-version = "py312"
+line-length = 120
+extend-exclude = ["venv", "docs", ".superpowers", "verify_weapon_category.py"]
+
+[lint]
+select = ["E", "F", "B", "S"]   # pycodestyle, pyflakes, bugbear, bandit (seguridad)
+ignore = ["E501"]                # longitud de linea: no es un gate
+
+[lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106", "S108"]   # assert y 'secretos' de prueba en tests
