@@ -1,0 +1,127 @@
+"""CAL-09 (Fase 0): flujos de los mappers puros de steam/mappers.py.
+
+Fijan el comportamiento ACTUAL ante payload normal, incompleto e implausible, para que el
+refactor (CLEAN-08) pueda partir el módulo sin cambiar nada. `_best_price_from_markets` y
+`_category_rank` no se cubren a propósito: son código muerto y CLEAN-08 decide su destino.
+"""
+from datetime import date, timedelta
+
+import httpx
+import pytest
+
+from steam.mappers import (
+    _STEAM_CDN, _WEAPON_CATEGORY, _delta_from_history, _fetch_og_image,
+    _map_market_index_point, _map_news_item, _normalize_image, _resolve_phase,
+    _safe_delta, _weapon_category, is_readable_news,
+)
+
+
+def _d(days_ago: int) -> str:
+    return (date.today() - timedelta(days=days_ago)).isoformat()
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("", ""),
+    ("https://cdn/x.png", "https://cdn/x.png"),
+    ("/economy/image/abc", f"{_STEAM_CDN}/economy/image/abc"),
+    ("abc123", f"{_STEAM_CDN}/economy/image/abc123"),
+])
+def test_normalize_image(raw, expected):
+    assert _normalize_image(raw) == expected
+
+
+@pytest.mark.parametrize("pts, days, latest, expected", [
+    ([], 7, 10.0, None),                                          # sin histórico
+    ([{"date": _d(10), "price": 8.0}], 7, 0, None),               # sin precio actual
+    ([{"date": _d(1), "price": 8.0}], 7, 10.0, None),             # nada tan antiguo
+    ([{"date": _d(10), "price": 0}], 7, 10.0, None),              # referencia a cero
+    ([{"date": _d(10), "price": 8.0}, {"date": _d(8), "price": 5.0}], 7, 10.0, 100.0),  # el más reciente ≤ corte
+])
+def test_delta_from_history(pts, days, latest, expected):
+    assert _delta_from_history(pts, days, latest) == expected
+
+
+@pytest.mark.parametrize("new, old, expected", [(None, 1, None), (1, 0, None), (12, 10, 20.0)])
+def test_safe_delta(new, old, expected):
+    assert _safe_delta(new, old) == expected
+
+
+@pytest.mark.parametrize("item, expected", [
+    ({}, None),
+    ({"paintindex": 418}, None),
+    ({"paintindex": 418, "variants": [{"paintindex": 418, "phase": "Phase 1"}]}, "Phase 1"),
+    ({"paintindex": 418, "variants": [{"paintindex": 419, "phase": "Phase 2"}]}, None),
+])
+def test_resolve_phase(item, expected):
+    assert _resolve_phase(item) == expected
+
+
+def test_weapon_category_exact_and_fallbacks():
+    key, cat = next(iter(_WEAPON_CATEGORY.items()))
+    assert _weapon_category(key.upper()) == cat           # normaliza mayúsculas
+    assert _weapon_category(None) is None
+    assert _weapon_category("Sport Gloves") == "Gloves"
+    assert _weapon_category("shadow daggers") == "Knife"
+    assert _weapon_category("sticker capsule") == "Sticker"
+    assert _weapon_category("special agent") == "Agent"
+    assert _weapon_category("music kit") == "Music Kit"   # último recurso: title()
+
+
+def test_market_index_point_normal_e_incompleto():
+    assert _map_market_index_point({"ts": "2026-10-01", "value": "3.5", "change": 1, "volume": "7"}) == {
+        "date": "2026-10-01", "price": 3.5, "change": 1.0, "volume": 7,
+    }
+    assert _map_market_index_point({}) == {"date": "", "price": 0.0, "change": 0.0, "volume": 0}
+
+
+@pytest.mark.parametrize("title, expected", [
+    ("", True),
+    ("123 !!!", True),
+    ("Major Copenhagen: results", True),
+    ("Новости турнира", False),
+    ("CS2 大会 结果", False),
+])
+def test_is_readable_news(title, expected):
+    assert is_readable_news({"title": title}) is expected
+
+
+@pytest.mark.parametrize("feedname, color", [
+    ("Valve Blog", "4a9eff"), ("hltv.org", "8847ff"), ("PC Gamer", "f0c040"),
+])
+def test_map_news_item_colores(feedname, color):
+    assert _map_news_item({"feedname": feedname, "date": 0}, 0)["categoryColor"] == color
+
+
+def test_map_news_item_incompleto():
+    out = _map_news_item({}, 3)
+    assert out["id"] == "3"
+    assert out["date"] == ""                  # sin fecha → "" (no excepción)
+    assert out["source"] == "NEWS"            # sin autor → feedlabel
+    assert out["category"] == "NEWS"
+    assert out["featured"] is False
+    assert _map_news_item({"author": "  Ana  ", "date": 0}, 0)["source"] == "Ana"
+
+
+def _client(status=200, text="", exc=None):
+    def handler(request):
+        if exc:
+            raise exc
+        return httpx.Response(status, text=text)
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.parametrize("status, text, exc, expected", [
+    (200, '<meta property="og:image" content="https://img/a.jpg">', None, "https://img/a.jpg"),
+    (200, '<meta content="https://img/b.jpg" property="og:image">', None, "https://img/b.jpg"),
+    (200, "<html>sin meta</html>", None, ""),
+    (404, "", None, ""),
+    (200, "", httpx.ConnectError("caído"), ""),
+])
+async def test_fetch_og_image(status, text, exc, expected):
+    async with _client(status, text, exc) as client:
+        assert await _fetch_og_image(client, "https://news/x") == expected
+
+
+async def test_fetch_og_image_sin_url_no_pide():
+    async with _client(exc=AssertionError("no debería pedir")) as client:
+        assert await _fetch_og_image(client, "") == ""

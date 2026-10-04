@@ -15,7 +15,7 @@ def _row_to_item(row: dict) -> dict:
     item completo a /market/price" (skin-detail-sheet.component.ts). Si algún
     día se añade la columna `liquidity_breakdown` y se devuelve aquí, esa
     heurística deja de dispararse EN SILENCIO y el bloque de liquidez se queda
-    vacío para siempre. El self-check de abajo lo protege.
+    vacío para siempre. Lo protege tests/test_steam_contract_rows.py.
     """
     return {
         "id": row["name"],
@@ -105,68 +105,3 @@ def _to_row(item: dict, rank: int, bucket: str | None = None) -> dict:
         row["bucket"] = bucket
     return row
 
-
-if __name__ == "__main__":
-    sample_item = {
-        "name": "AK-47 | Redline (Field-Tested)",
-        "slug": "ak-47-redline",
-        "weaponType": "AK-47",
-        "itemName": "Redline",
-        "itemType": "Rifle",
-        "image": "https://example.com/ak.png",
-        "rarity": "Classified",
-        "rarityColor": "d32ce6",
-        "borderColor": "d32ce6",
-        "quality": "Normal",
-        "isStatTrak": False,
-        "isSouvenir": False,
-        "isStar": False,
-        "exterior": "Field-Tested",
-        "floatMin": 0.15,
-        "floatMax": 0.38,
-        "paintIndex": 282,
-        "phase": None,
-        "priceLatest": 12.5,
-        "csfloatPrice": 12.3,
-        "buffPrice": 11.9,
-        "priceDelta24h": 1.2,
-        "priceDelta7d": -3.4,
-        "priceDelta30d": 5.6,
-        "priceReal": 12.1,
-        "sold24h": 340,
-        "sold7d": 2100,
-        "sold30d": 9000,
-        "offerVolume": 812,
-        "hoursToSold": 1.7,
-        "steamUrl": "https://steamcommunity.com/market/listings/730/AK-47",
-    }
-
-    row_hot = _to_row(sample_item, 2, "hot")
-    assert row_hot["bucket"] == "hot"
-    assert row_hot["rank"] == 2
-    assert row_hot["weapon_type"] == "AK-47"
-
-    row_plain = _to_row(sample_item, 0)
-    assert "bucket" not in row_plain
-
-    # turnover = precio × volumen 24h, el criterio de orden de /market/trending.
-    assert row_plain["turnover"] == 12.5 * 340
-
-    round_tripped = _row_to_item(_to_row(sample_item, 0))
-    assert round_tripped["name"] == sample_item["name"]
-    assert round_tripped["weaponType"] == sample_item["weaponType"]
-    assert round_tripped["priceDelta7d"] == sample_item["priceDelta7d"]
-    assert round_tripped["sold24h"] == sample_item["sold24h"]
-    assert round_tripped["offerVolume"] == sample_item["offerVolume"]
-
-    # Volumen ausente → 0, no None: la tarjeta concatena el valor sin guarda
-    # ('Vol: ' + item.sold24h) y un None pintaría "Vol: None/24h".
-    assert _row_to_item({"name": "x"})["sold24h"] == 0
-
-    # NO TOCAR sin leer el docstring de _row_to_item: el detail sheet detecta
-    # los snapshots pobres con `liquidityBreakdown === undefined`. Si esta clave
-    # empieza a viajar, el sheet deja de pedir /market/price sin dar ningún
-    # error y el bloque de liquidez se queda vacío para siempre.
-    assert "liquidityBreakdown" not in round_tripped
-
-    print("OK: market_rows self-check passed")
