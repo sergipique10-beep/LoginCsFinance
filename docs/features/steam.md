@@ -2,6 +2,9 @@
 feature: steam
 files:
   - steam/cap_history_repo.py
+  - steam/clients/__init__.py
+  - steam/clients/steamwebapi.py
+  - steam/errors.py
   - steam/inventory_snapshot_repo.py
   - steam/liquidity.py
   - steam/mappers.py

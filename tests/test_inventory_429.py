@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from steam.price_capture import QuotaExhausted
+from steam.errors import QuotaExhausted
 from steam.routes import items as items_routes
-from steam.routes.items import SteamRateLimited
+from steam.errors import RateLimited
 from stores import _inventory_cache
 from tests.conftest import SNAPSHOT_DB, STEAM_ID
 
@@ -34,7 +34,7 @@ def _clean_state():
 
 def _rate_limited(monkeypatch, retry_after=3.0):
     monkeypatch.setattr(items_routes, "_fetch_fresh_inventory",
-                        AsyncMock(side_effect=SteamRateLimited(retry_after)))
+                        AsyncMock(side_effect=RateLimited(retry_after)))
     schedule = MagicMock()
     monkeypatch.setattr(items_routes, "_schedule_retry", schedule)
     return schedule
@@ -150,7 +150,7 @@ def _request_returning(response):
 
 def test_fetch_maps_429_with_retry_after():
     req = _request_returning(httpx.Response(429, headers={"Retry-After": "7"}))
-    with pytest.raises(SteamRateLimited) as exc:
+    with pytest.raises(RateLimited) as exc:
         asyncio.run(items_routes._fetch_fresh_inventory(req, STEAM_ID))
     assert exc.value.retry_after == 7.0
 
@@ -158,7 +158,7 @@ def test_fetch_maps_429_with_retry_after():
 def test_fetch_maps_429_without_or_with_garbage_retry_after():
     for headers in ({}, {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}):
         req = _request_returning(httpx.Response(429, headers=headers))
-        with pytest.raises(SteamRateLimited) as exc:
+        with pytest.raises(RateLimited) as exc:
             asyncio.run(items_routes._fetch_fresh_inventory(req, STEAM_ID))
         assert exc.value.retry_after is None
 
@@ -198,7 +198,7 @@ def _run_retry(monkeypatch, side_effects, retries=4):
 
 
 def test_retry_recovers_after_a_second_429_and_refreshes_cache_and_snapshot(monkeypatch):
-    fetch, sleeps = _run_retry(monkeypatch, [SteamRateLimited(1.0), FRESH])
+    fetch, sleeps = _run_retry(monkeypatch, [RateLimited(1.0), FRESH])
 
     assert fetch.await_count == 2
     assert sleeps[0] >= 2.0                                 # Retry-After inicial respetado
@@ -207,7 +207,7 @@ def test_retry_recovers_after_a_second_429_and_refreshes_cache_and_snapshot(monk
 
 
 def test_retry_gives_up_after_the_configured_limit(monkeypatch):
-    fetch, sleeps = _run_retry(monkeypatch, SteamRateLimited(None), retries=3)
+    fetch, sleeps = _run_retry(monkeypatch, RateLimited(None), retries=3)
 
     assert fetch.await_count == 3 and len(sleeps) == 3
     assert STEAM_ID not in _inventory_cache

@@ -4,13 +4,12 @@ import random
 import time
 from collections import deque
 from datetime import date, timedelta
+from functools import partial
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from settings import (
-    STEAM_GAME,
     INVENTORY_429_MAX_RETRIES, INVENTORY_429_BACKOFF_BASE, INVENTORY_429_BACKOFF_CAP,
 )
 from stores import (
@@ -22,14 +21,12 @@ from stores import (
 from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
 from ..mappers import _map_item
-from ..price_capture import QuotaExhausted
+from ..clients import steamwebapi
+from ..clients.steamwebapi import _history_limiter
+from ..errors import QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UpstreamError
 from ..services import (
-    steam_auth_headers,
-    STEAM_WEB_API,
-    STEAM_MARKET_API,
     UPSTREAM_QUOTA_DETAIL,
     UPSTREAM_RATE_LIMIT_DETAIL,
-    _history_limiter,
     _enrich_market_prices,
     _enrich_images_from_cache,
 )
@@ -54,26 +51,6 @@ logger = logging.getLogger("uvicorn.error")
 router = APIRouter()
 
 
-class SteamRateLimited(Exception):
-    """429 de steamwebapi: límite por minuto, transitorio, se reintenta (PERF-14).
-
-    No confundir con el 402 (`QuotaExhausted`, cuota mensual agotada): ese no se
-    reintenta porque cada intento daría otro 402 hasta el reset del día 10.
-    """
-
-    def __init__(self, retry_after: float | None):
-        super().__init__("steamwebapi 429")
-        self.retry_after = retry_after
-
-
-def _parse_retry_after(value: str | None) -> float | None:
-    # ponytail: solo la forma en segundos; la forma fecha-HTTP se trata como ausente.
-    try:
-        return max(0.0, float(value)) if value else None
-    except ValueError:
-        return None
-
-
 @router.get("/me", summary="Info del usuario autenticado")
 async def get_me(request: Request, user: dict = Depends(require_jwt)):
     steam_id: str = user["sub"]
@@ -85,21 +62,15 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
         return profile if "steam64_id" in profile else {**profile, "steam64_id": steam_id}
 
     try:
-        resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/profile",
-            headers=steam_auth_headers(),
-            params={"id": steam_id},
-        )
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Steam profile request timed out")
-    except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+        data = await steamwebapi.profile(request.app.state.http_client, steam_id)
+    except SourceTimeout:
+        raise HTTPException(status_code=504, detail="Steam profile request timed out") from None
+    except SourceUnavailable as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
+    except UpstreamError as exc:
+        logger.error("[me] steamwebapi returned %s | body: %s", exc.status, exc.body_excerpt[:300])
+        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    if resp.status_code != 200:
-        logger.error("[me] steamwebapi returned %s | body: %s", resp.status_code, resp.text[:300])
-        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
-
-    data = resp.json()
     if isinstance(data, list):
         data = data[0] if data else {}
 
@@ -117,42 +88,23 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
 
 async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
     try:
-        resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/inventory",
-            headers=steam_auth_headers(),
-            params={
-                "steam_id": steam_id,
-                "game": STEAM_GAME,
-                "language": "english",
-                "limit": 5000,
-                # steamwebapi answers from its own inventory snapshot unless told not to.
-                # That snapshot can be days stale, so items acquired since then were
-                # invisible to us — including through POST /inventory/refresh, which only
-                # bypasses _inventory_cache. Our 23h cache keeps this at ~1 call/day/user,
-                # so forcing a live read costs no extra quota.
-                "no_cache": 1,
-            },
-        )
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Steam inventory request timed out")
-    except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+        data = await steamwebapi.inventory(request.app.state.http_client, steam_id)
+    except SourceTimeout:
+        raise HTTPException(status_code=504, detail="Steam inventory request timed out") from None
+    except SourceUnavailable as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
+    except (QuotaExhausted, RateLimited):
+        raise   # los degrada quien llama (PERF-14)
+    except UpstreamError as exc:
+        if exc.status == 403:
+            raise HTTPException(status_code=403, detail="Inventory is private") from exc
+        if exc.status in (410, 411):
+            return []
+        logger.error("steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
+        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    if resp.status_code == 403:
-        raise HTTPException(status_code=403, detail="Inventory is private")
-    if resp.status_code in (410, 411):
-        return []
-    if resp.status_code == 402:
-        raise QuotaExhausted("steamwebapi /inventory 402")
-    if resp.status_code == 429:
-        raise SteamRateLimited(_parse_retry_after(resp.headers.get("Retry-After")))
-    if resp.status_code != 200:
-        logger.error("steamwebapi /inventory → %s: %.500s", resp.status_code, resp.text)
-        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
-
-    data = resp.json()
     if not isinstance(data, list):
-        logger.error("steamwebapi /inventory unexpected format: %.500s", resp.text)
+        logger.error("steamwebapi /inventory unexpected format: %.500s", data)
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
     items = [_map_item(item) for item in data]
@@ -230,7 +182,7 @@ async def _retry_inventory(request: Request, steam_id: str, retry_after: float |
             await asyncio.sleep(_backoff(attempt, retry_after))
             try:
                 items = await _fetch_fresh_inventory(request, steam_id)
-            except SteamRateLimited as exc:
+            except RateLimited as exc:
                 retry_after = exc.retry_after
                 _log_429(steam_id, f"retry-{attempt + 1}", retry_after, "none")
                 continue
@@ -259,7 +211,7 @@ def _schedule_retry(request: Request, steam_id: str, retry_after: float | None) 
 async def _degraded_inventory(request: Request, steam_id: str, exc: Exception, origin: str):
     """429 → snapshot + reintento en segundo plano. 402 → snapshot, SIN reintento."""
     snap = await _snapshot_response(steam_id)
-    if isinstance(exc, SteamRateLimited):
+    if isinstance(exc, RateLimited):
         _log_429(steam_id, origin, exc.retry_after, "snapshot" if snap else "none")
         _schedule_retry(request, steam_id, exc.retry_after)
         if snap is None:
@@ -287,7 +239,7 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
 
     try:
         items = await _fetch_fresh_inventory(request, steam_id)
-    except (SteamRateLimited, QuotaExhausted) as exc:
+    except (RateLimited, QuotaExhausted) as exc:
         return await _degraded_inventory(request, steam_id, exc, "get")
     await _store(steam_id, items, now)
     return items
@@ -308,7 +260,7 @@ async def refresh_inventory(request: Request, user: dict = Depends(require_jwt))
 
     try:
         items = await _fetch_fresh_inventory(request, steam_id)
-    except (SteamRateLimited, QuotaExhausted) as exc:
+    except (RateLimited, QuotaExhausted) as exc:
         return await _degraded_inventory(request, steam_id, exc, "refresh")
     await _store(steam_id, items, now)
     _inventory_refresh_cooldown[steam_id] = now
@@ -334,18 +286,16 @@ async def get_item_history(
 
     # Buff163/CSFloat usan el endpoint por-market (fechas + quantity); Steam usa la
     # ruta legacy (interval + sold). Distintos hosts, params y forma de respuesta.
+    client = request.app.state.http_client
     if market in _HISTORY_MARKETS:
         today = date.today()
-        url = f"{STEAM_MARKET_API}/{market}/history"
-        params = {
-            "market_hash_name": name,
-            "start_date": (today - timedelta(days=days)).isoformat(),
-            "end_date": today.isoformat(),
-        }
+        fetch = partial(
+            steamwebapi.market_history,
+            client, market, name, (today - timedelta(days=days)).isoformat(), today.isoformat(),
+        )
         volume_key = "quantity"
     else:
-        url = f"{STEAM_WEB_API}/history"
-        params = {"market_hash_name": name, "interval": interval, "format": "json"}
+        fetch = partial(steamwebapi.legacy_history, client, name, interval)
         volume_key = "sold"
 
     try:
@@ -354,22 +304,21 @@ async def get_item_history(
         return _upstream_busy(cached)
 
     try:
-        resp = await request.app.state.http_client.get(url, params=params, headers=steam_auth_headers())
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Steam history request timed out")
-    except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
-
-    if resp.status_code == 402:
+        data = await fetch()
+    except SourceTimeout:
+        raise HTTPException(status_code=504, detail="Steam history request timed out") from None
+    except SourceUnavailable as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
+    except QuotaExhausted:
         logger.warning("[item-history] daily limit reached for %s (%s)", name, market or "steam")
         return []
-    if resp.status_code == 429:
+    except RateLimited:
         logger.warning("[item-history] steamwebapi 429 for %s (%s)", name, market or "steam")
         return _upstream_busy(cached)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+    except UpstreamError as exc:
+        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    raw = resp.json() if isinstance(resp.json(), list) else []
+    raw = data if isinstance(data, list) else []
     points = sorted(
         [
             {

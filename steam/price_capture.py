@@ -15,13 +15,14 @@ from pathlib import Path
 import httpx
 
 from settings import PRICE_LOOKUP_CAP, PRICE_DAILY_BUDGET
-from steam.services import STEAM_WEB_API, _history_limiter, steam_auth_headers
+from steam.clients import steamwebapi
+from steam.clients.steamwebapi import _history_limiter
+from steam.errors import QuotaExhausted
 from steam import price_history_repo as repo
 
 logger = logging.getLogger("uvicorn.error")
 
 _SEED_PATH = Path(__file__).parent / "data" / "tracked_seed.json"
-_LOOKUP_TIMEOUT = 20.0
 
 
 def _canonical_price(item: dict) -> float | None:
@@ -50,31 +51,10 @@ async def seed_tracked() -> int:
     return len(names)
 
 
-class QuotaExhausted(Exception):
-    """steamwebapi devolvió 402: cuota mensual agotada (PERF-09).
-
-    Medido 2026-09-26: con la cuota agotada, /item responde 402 en TODAS las
-    llamadas hasta el reset (día 10 de cada mes). Seguir iterando el lote es
-    gastar minutos de Render en nada, y peor: el resultado parecía normal
-    (`errors: N`, workflow en verde) y la captura estuvo 4 días muerta sin aviso.
-    """
-
-
 async def _lookup_item(client: httpx.AsyncClient, name: str) -> dict:
     """GET /item?market_hash_name=<name> vía el limiter compartido. Devuelve el item."""
     await _history_limiter.acquire()
-    resp = await client.get(
-        f"{STEAM_WEB_API}/item",
-        headers=steam_auth_headers(),
-        params={"game": "cs2",
-                "market_hash_name": name, "format": "json"},
-        timeout=_LOOKUP_TIMEOUT,
-        follow_redirects=True,
-    )
-    if resp.status_code == 402:
-        raise QuotaExhausted(resp.text[:200])
-    resp.raise_for_status()
-    data = resp.json()
+    data = await steamwebapi.item(client, name)
     return data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
 
 

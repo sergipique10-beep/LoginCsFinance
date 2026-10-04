@@ -5,30 +5,18 @@ from datetime import date, timedelta
 
 import httpx
 
-from settings import STEAM_API_KEY
 from stores import (
     ITEM_HISTORY_CACHE_TTL, IMAGE_CACHE_TTL, MARKET_LOOKUP_CACHE_TTL,
     MARKET_PROVIDERS_CACHE_TTL, FX_CACHE_TTL,
     _item_history_cache, _item_image_cache, _item_rarity_cache, _image_cache_meta,
     _market_lookup_cache, _market_providers_cache, _fx_cache, _lookup_failed_at,
 )
+from steam.clients import steamwebapi
+from steam.clients.steamwebapi import _history_limiter
+from steam.errors import HistoryBusy, SourceTimeout, SourceUnavailable, UpstreamError
 from steam.mappers import _delta_from_history, _map_topmovers_item
 
 logger = logging.getLogger("uvicorn.error")
-
-STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
-STEAM_MARKET_API = "https://www.steamwebapi.com/market"
-
-
-def steam_auth_headers() -> dict[str, str]:
-    """Cabecera de autenticación de steamwebapi (SEC-13).
-
-    La clave va en `X-Api-Key`, nunca en la query (`?key=` es el modo legacy): una
-    URL con el secreto acaba en cualquier log que registre URLs, como el INFO de
-    httpx o el `str()` de sus excepciones. Solo en llamadas a steamwebapi: el
-    cliente compartido también habla con GitHub, frankfurter, Leetify…
-    """
-    return {"X-Api-Key": STEAM_API_KEY}
 
 # SEC-16: cuerpo del 503 cuando steamwebapi da 402 (cuota MENSUAL agotada, reset el
 # día 10). No es un 429: el usuario no va «demasiado rápido» y reintentar no sirve.
@@ -59,51 +47,6 @@ _MOVERS_LIMIT = 10
 _HISTORY_EMPTY_TTL = 300  # 5 min backoff for failed/empty results to avoid retry storms
 
 
-class _SlidingWindowLimiter:
-    """Caps calls to at most `limit` per `window` seconds, process-wide.
-
-    steamwebapi Starter allows 20 req/60s *per endpoint*. _enrich_prices fires
-    one csfloat/history call per item (up to 80 for trending) — without this,
-    everything past the 20th got HTTP 429 → empty history → priceDelta7d=None →
-    "N/A" badges. Callers that exceed the window wait their turn instead of failing.
-    ponytail: single global window; if inventory+trending+movers contend heavily,
-    split per-endpoint limiters — but they all hit csfloat/history so one is correct.
-    """
-
-    def __init__(self, limit: int, window: float):
-        self._limit = limit
-        self._window = window
-        self._calls: list[float] = []
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> None:
-        while True:
-            async with self._lock:
-                now = time.monotonic()
-                self._calls = [t for t in self._calls if now - t < self._window]
-                if len(self._calls) < self._limit:
-                    self._calls.append(now)
-                    return
-                wait = self._window - (now - self._calls[0])
-            await asyncio.sleep(max(wait, 0.05))
-
-
-# 18/60s leaves headroom under the real 20/60s cap for concurrent requests to the
-# same endpoint (e.g. /market/prices lookups) sharing the quota.
-_history_limiter = _SlidingWindowLimiter(limit=18, window=60.0)
-
-
-class HistoryBusy(Exception):
-    """El limiter del histórico está lleno y el llamador no puede esperar (PERF-03).
-
-    Los crons esperan lo que haga falta (mejor tarde que perder el dato); el chat
-    no: una espera de hasta 60 s dentro de una respuesta interactiva es un chat
-    muerto. Cancelar `acquire()` es seguro: registra la llamada y devuelve sin
-    ningún `await` entre medias, así que una cancelación durante la espera no deja
-    un hueco fantasma en la ventana.
-    """
-
-
 async def _fetch_history_for_item(
     client: httpx.AsyncClient, name: str, *, limiter_timeout: float | None = None,
 ) -> list:
@@ -125,21 +68,18 @@ async def _fetch_history_for_item(
                 raise HistoryBusy(name) from None
         now = time.monotonic()  # limiter may have blocked; refresh for cache stamps
         today = date.today()
-        resp = await client.get(
-            f"{STEAM_MARKET_API}/csfloat/history",
-            headers=steam_auth_headers(),
-            params={
-                "market_hash_name": name,
-                "start_date": (today - timedelta(days=35)).isoformat(),
-                "end_date": today.isoformat(),
-            },
-            timeout=30.0,
-        )
-        if resp.status_code != 200:
-            logger.warning("[item-history] %s → HTTP %s: %s", name, resp.status_code, resp.text[:200])
+        try:
+            raw = await steamwebapi.market_history(
+                client, "csfloat", name,
+                (today - timedelta(days=35)).isoformat(), today.isoformat(),
+                timeout=30.0,
+            )
+        except (SourceTimeout, SourceUnavailable):
+            raise   # red: lo registra el except genérico de abajo, como antes
+        except UpstreamError as exc:
+            logger.warning("[item-history] %s → HTTP %s: %s", name, exc.status, exc.body_excerpt[:200])
             _item_history_cache[cache_key] = ([], now)
             return []
-        raw = resp.json()
         if not isinstance(raw, list):
             logger.warning("[item-history] %s → unexpected format: %s", name, str(raw)[:200])
             _item_history_cache[cache_key] = ([], now)
@@ -408,17 +348,14 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
     if _in_fail_backoff(fail_key, now):
         return (cached[0] if cached else {})
     try:
-        resp = await client.get(
-            f"{STEAM_MARKET_API}/{market}/prices",
-            headers=steam_auth_headers(),
-            params={"format": "json"},
-            timeout=30.0,
-        )
-        if resp.status_code != 200:
-            logger.warning("[market-lookup] %s returned %s", market, resp.status_code)
+        try:
+            data = await steamwebapi.market_prices(client, market, {"format": "json"}, timeout=30.0)
+        except (SourceTimeout, SourceUnavailable):
+            raise
+        except UpstreamError as exc:
+            logger.warning("[market-lookup] %s returned %s", market, exc.status)
             _lookup_failed_at[fail_key] = now
             return (cached[0] if cached else {})
-        data = resp.json()
         if not isinstance(data, list):
             _lookup_failed_at[fail_key] = now
             return (cached[0] if cached else {})
@@ -512,16 +449,14 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
     if _in_fail_backoff("providers", now):
         return stale
     try:
-        resp = await client.get(
-            f"{STEAM_WEB_API}/info/markets",
-            headers=steam_auth_headers(),
-            timeout=15.0,
-        )
-        if resp.status_code != 200:
-            logger.warning("[market-providers] info/markets returned %s", resp.status_code)
+        try:
+            data = await steamwebapi.info_markets(client)
+        except (SourceTimeout, SourceUnavailable):
+            raise
+        except UpstreamError as exc:
+            logger.warning("[market-providers] info/markets returned %s", exc.status)
             _lookup_failed_at["providers"] = now
             return stale
-        data = resp.json()
         if not isinstance(data, list):
             _lookup_failed_at["providers"] = now
             return stale

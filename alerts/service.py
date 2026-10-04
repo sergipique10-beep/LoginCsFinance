@@ -33,7 +33,7 @@ import httpx
 from settings import ALERTS_LOOKUP_CAP, ALERTS_MAX_PER_USER
 from steam import price_capture
 from steam import price_history_repo
-from steam.price_capture import QuotaExhausted
+from steam.errors import QuotaExhausted
 from steam.rankings_repo import movers_repo, trending_repo
 from notifications import repo as notif_repo
 from notifications.service import send_to_tokens
