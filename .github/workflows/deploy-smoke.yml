@@ -1,0 +1,36 @@
+name: deploy-smoke
+# Verificacion del artefacto desplegado (EDS-3 #16). Se lanza cuando `ci` termina en verde
+# en master, espera a que Render despliegue y comprueba lo que AGENTS.md § Despliegue pide
+# hacer a mano tras cada deploy: la raiz responde y /auth/dev-token da 404 (SEC-02: el
+# 2026-09-26 estuvo abierto en produccion por faltar ENV=production).
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Esperar al deploy de Render y comprobar
+        env:
+          BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+        run: |
+          set -u
+          [ -n "$BASE_URL" ] || { echo "::error::falta el secret BACKEND_BASE_URL"; exit 1; }
+          # Render tarda ~2 min en desplegar; el free tier puede estar dormido (30-50 s mas).
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 30 "$BASE_URL/" >/dev/null 2>&1; then break; fi
+            echo "esperando a Render ($i/20)..."; sleep 30
+          done
+          curl -fsS --max-time 30 "$BASE_URL/" >/dev/null || { echo "::error::/ no responde tras 10 min"; exit 1; }
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST "$BASE_URL/auth/dev-token")
+          [ "$CODE" = "404" ] || { echo "::error::/auth/dev-token devuelve $CODE: falta ENV=production en Render (SEC-02)"; exit 1; }
+          echo "smoke OK: / 200, /auth/dev-token 404"

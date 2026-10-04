@@ -1,0 +1,65 @@
+name: ci
+# Mismos gates que `python tools/dod.py` en local (EDS-3 §3.18: un gate que solo existe en
+# local no protege nada) mas gitleaks sobre TODO el historial. Render espera a este workflow
+# antes de desplegar master (ajuste «Auto-Deploy: After CI Checks Pass», TD-02).
+#
+# gitleaks va como binario fijado por version y checksum, no como gitleaks-action: en `push`
+# el action escanea solo `--first-parent --no-merges` y con el flujo `merge --no-ff` + push
+# de la base escanea 0 commits y queda en verde (EL-10 en cs-finance-meta).
+on:
+  push: { branches: [master] }
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GITLEAKS_VERSION: 8.21.2
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Definition of Done
+        # Sin .env a proposito: la suite no depende de secretos (comprobado el 2026-10-04).
+        run: python tools/dod.py
+      - name: gitleaks (binario fijado por version y checksum, todo el historial)
+        if: always()
+        run: |
+          set -eu
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -sSL -o gitleaks.tgz "$base/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSL -o checksums.txt "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" checksums.txt | sed 's#  .*#  gitleaks.tgz#' | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          ./gitleaks git --redact --verbose --log-opts="--all" --report-path gitleaks.json . 2>&1 | tee gitleaks.log
+          # N-7: un escaneo de 0 commits no es un escaneo.
+          scanned=$(grep -oE '[0-9]+ commits scanned' gitleaks.log | grep -oE '^[0-9]+' | head -1)
+          echo "commits escaneados: ${scanned:-?}"
+          [ "${scanned:-0}" -gt 0 ] || { echo "::error::gitleaks escaneo 0 commits: el gate no protege nada"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dod-logs
+          path: |
+            logs/dod
+            gitleaks.log
+            gitleaks.json
+
+  audit:
+    # SCA (EDS-3 §3.17). Informativo la primera semana (EDS-4 §4.7, secuenciacion sin
+    # riesgo); pasa a bloquear quitando continue-on-error cuando lleve una semana sin rojos.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pip-audit
+      - run: pip-audit -r requirements.txt --strict --desc
