@@ -6,7 +6,7 @@ resultado medido en producción: 0 items por encima de $10 en trending, y el 61%
 por debajo de $0.50.
 """
 
-from steam.routes.market import _PRECIO_MIN_RANKING, _turnover
+from steam.services.market import _PRECIO_MIN_RANKING, _turnover
 
 
 def _item(precio: float, vendidas: int) -> dict:

@@ -29,7 +29,15 @@ files:
   - steam/routes/items.py
   - steam/routes/market.py
   - steam/routes/news.py
-  - steam/services.py
+  - steam/services/__init__.py
+  - steam/services/catalog.py
+  - steam/services/fx.py
+  - steam/services/inventory.py
+  - steam/services/market.py
+  - steam/services/news.py
+  - steam/services/pricing.py
+  - steam/services/profile.py
+  - steam/services/providers.py
 ---
 
 # Módulo `steam`

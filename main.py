@@ -18,7 +18,7 @@ from settings import (
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
 from steam.routes import router as steam_router
-from steam.services import _fetch_static_images
+from steam.services.catalog import fetch_static_images
 from notifications.router import router as notifications_router
 from alerts.router import router as alerts_router
 from portfolio.router import router as portfolio_router
@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
             "las alertas de precio (POST /internal/alerts-tick) no se evaluarán"
         )
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
-    await _fetch_static_images(app.state.http_client)
+    await fetch_static_images(app.state.http_client)
 
     try:
         from steam.price_capture import seed_tracked

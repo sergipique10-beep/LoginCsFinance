@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from steam import services
+from steam.services import catalog, pricing
 from steam.clients.steamwebapi import _history_limiter
 from steam.errors import HistoryBusy
 from stores import _item_history_cache
@@ -32,7 +32,7 @@ async def test_chat_path_gives_up_fast_when_window_is_full():
     t0 = time.monotonic()
 
     with pytest.raises(HistoryBusy):
-        await services._fetch_history_for_item(MagicMock(), "X", limiter_timeout=0.2)
+        await pricing.fetch_history_for_item(MagicMock(), "X", limiter_timeout=0.2)
 
     assert time.monotonic() - t0 < 1.5
     assert "X:csfloat:35d" not in _item_history_cache        # no se cachea un vacío falso
@@ -46,7 +46,7 @@ async def test_cron_path_keeps_waiting_without_timeout():
     client.get = AsyncMock(return_value=MagicMock(status_code=200, json=lambda: []))
     t0 = time.monotonic()
 
-    pts = await services._fetch_history_for_item(client, "Y")
+    pts = await pricing.fetch_history_for_item(client, "Y")
 
     assert pts == []
     assert time.monotonic() - t0 >= 0.2                       # esperó, no falló
@@ -55,7 +55,7 @@ async def test_cron_path_keeps_waiting_without_timeout():
 
 @pytest.mark.asyncio
 async def test_historial_tool_explains_saturation_instead_of_waiting(monkeypatch):
-    monkeypatch.setattr(services, "_fetch_history_for_item", AsyncMock(side_effect=HistoryBusy("X")))
+    monkeypatch.setattr(pricing, "fetch_history_for_item", AsyncMock(side_effect=HistoryBusy("X")))
 
     out = await market_tools._historial_precio(market_hash_name="X", client=MagicMock())
 
@@ -70,10 +70,10 @@ async def test_precio_tool_answers_without_deltas_when_busy_and_does_not_cache(m
     client = MagicMock()
     client.get = AsyncMock(return_value=MagicMock(status_code=200, json=lambda: [raw]))
     monkeypatch.setattr("steam.mappers.items._map_item", lambda r: {"name": "AK", "priceLatest": 10.0})
-    monkeypatch.setattr(services, "_enrich_prices", AsyncMock(side_effect=HistoryBusy("AK")))
-    monkeypatch.setattr(services, "_enrich_market_prices", AsyncMock(side_effect=lambda c, items: items))
-    monkeypatch.setattr(services, "_fetch_static_images", AsyncMock())
-    monkeypatch.setattr(services, "_enrich_images_from_cache", lambda items: None)
+    monkeypatch.setattr(pricing, "enrich_prices", AsyncMock(side_effect=HistoryBusy("AK")))
+    monkeypatch.setattr(pricing, "enrich_market_prices", AsyncMock(side_effect=lambda c, items: items))
+    monkeypatch.setattr(catalog, "fetch_static_images", AsyncMock())
+    monkeypatch.setattr(catalog, "enrich_images_from_cache", lambda items: None)
 
     item = await market_tools._consultar_precio_skin(market_hash_name="AK", client=client)
 

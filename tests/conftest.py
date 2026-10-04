@@ -98,7 +98,7 @@ def _clean_auth_stores():
 @pytest.fixture
 def client(monkeypatch):
     # Skip the real ByMykel static-image fetch that main.py's lifespan performs on startup.
-    monkeypatch.setattr(main, "_fetch_static_images", AsyncMock())
+    monkeypatch.setattr(main, "fetch_static_images", AsyncMock())
 
     app.dependency_overrides[require_jwt] = lambda: {"sub": STEAM_ID, "type": "access"}
     _inventory_cache.clear()

@@ -11,6 +11,7 @@ import pytest
 
 import main
 from steam.routes import items as items_routes
+from steam.services import pricing
 from stores import _item_history_cache
 
 NAME = "AK-47 | Nightwish (Well-Worn)"
@@ -40,7 +41,7 @@ def upstream(client, monkeypatch):
     monkeypatch.setattr(main.app.state, "http_client", http)
     monkeypatch.setattr(items_routes, "ITEM_HISTORY_LIMITER_TIMEOUT", 0.05)
     limiter = _Limiter()
-    monkeypatch.setattr(items_routes, "_history_limiter", limiter)
+    monkeypatch.setattr(pricing, "_history_limiter", limiter)
     _item_history_cache.clear()
     yield http, resp, limiter
     _item_history_cache.clear()
@@ -71,7 +72,7 @@ def test_upstream_429_serves_stale_cache(client, upstream):
 
 def test_full_window_does_not_wait_nor_call_upstream(client, upstream, monkeypatch):
     http, _, _ = upstream
-    monkeypatch.setattr(items_routes, "_history_limiter", _Limiter(busy=True))
+    monkeypatch.setattr(pricing, "_history_limiter", _Limiter(busy=True))
     r = client.get(URL)
     assert r.status_code == 503
     assert r.json()["detail"]["code"] == "upstream_rate_limit"

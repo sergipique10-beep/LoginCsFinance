@@ -226,7 +226,7 @@ def test_delete_me_requires_a_session(monkeypatch):
     from fastapi.testclient import TestClient
     import main as main_module
 
-    monkeypatch.setattr(main_module, "_fetch_static_images", AsyncMock())
+    monkeypatch.setattr(main_module, "fetch_static_images", AsyncMock())
     tokens = AsyncMock()
     monkeypatch.setattr(auth_router.notifications_repo, "delete_device_tokens_for", tokens)
     with TestClient(main_module.app) as anon:

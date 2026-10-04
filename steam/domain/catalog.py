@@ -72,7 +72,7 @@ def weapon_category(itemtype: str | None) -> str | None:
 # ── Mercados ──────────────────────────────────────────────────────────────────
 
 # Mercados cuyo precio se añade a cada tarjeta (`csfloatPrice`, `buffPrice`): un lookup
-# de la lista entera por mercado (services._enrich_market_prices).
+# de la lista entera por mercado (services/pricing.enrich_market_prices).
 TRACKED_MARKETS: tuple[str, ...] = ("csfloat", "buff")
 
 # Mercados que acepta GET /market/prices (passthrough de steamwebapi /market/{m}/prices).

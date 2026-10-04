@@ -11,8 +11,10 @@ import pytest
 
 from steam.routes import market
 from steam.mappers.movers import _build_movers_from_topmovers
-from steam.services import _register_flat, _register_skin, _rarity_from_cache
-from stores import _image_cache_meta, _item_image_cache, _item_rarity_cache
+from steam.services.catalog import _register_flat, _register_skin, rarity_from_cache as _rarity_from_cache
+from stores import (
+    _image_cache_meta, _item_image_cache, _item_rarity_cache, _market_index_cache, _topmovers_raw_cache,
+)
 
 TOPMOVERS = {
     "gainers": [
@@ -70,13 +72,13 @@ def catalogo():
 
 
 def _index():
-    market._market_index_cache.clear()
+    _market_index_cache.clear()
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(http_client=_Client())))
     try:
         return asyncio.run(market.get_market_index(request, tf="24h", user={}))
     finally:
-        market._market_index_cache.clear()
-        market._topmovers_raw_cache.clear()
+        _market_index_cache.clear()
+        _topmovers_raw_cache.clear()
 
 
 def test_hottest_item_es_el_mayor_gainer_con_su_porcentaje(catalogo):

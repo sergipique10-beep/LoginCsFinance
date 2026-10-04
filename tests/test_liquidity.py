@@ -6,7 +6,7 @@ tendría otros. Ver docs/superpowers/specs/2026-07-14-liquidity-score-design.md.
 from steam.liquidity import compute_liquidity
 from steam.mappers.items import _map_item
 from steam.mappers.movers import _map_topmovers_item
-from steam.routes.market import _MOVERS_SELECT
+from steam.services.market import _MOVERS_SELECT
 
 
 # Ítem de alta rotación: se vende mucho, hay una montaña de compradores esperando,

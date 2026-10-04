@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from main import app
-from steam.routes import items as items_routes
+from steam.services import pricing
 
 
 class _FakeResponse:
@@ -14,7 +14,7 @@ class _FakeResponse:
 
 def _patch_http_client(monkeypatch):
     """Replace the shared httpx client with a mock that records the /inventory call."""
-    monkeypatch.setattr(items_routes, "_enrich_market_prices", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pricing, "enrich_market_prices", AsyncMock(return_value=[]))
     get_mock = AsyncMock(return_value=_FakeResponse())
     app.state.http_client = SimpleNamespace(get=get_mock, aclose=AsyncMock())
     return get_mock

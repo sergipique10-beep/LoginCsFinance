@@ -71,13 +71,8 @@ async def _ver_inventario(
     ``steam_id`` se inyecta desde el JWT en el router — no viene de Gemini.
     """
     from stores import _inventory_cache
-    from steam.clients import steamwebapi
-    from steam.errors import InvalidPayload, UpstreamError
-    from steam.services import (
-        _enrich_market_prices,
-        _enrich_images_from_cache,
-    )
-    from steam.mappers.items import _map_item
+    from steam.errors import InvalidPayload, UnexpectedPayload, UpstreamError
+    from steam.services import inventory as inventory_service
 
     import time
 
@@ -86,23 +81,20 @@ async def _ver_inventario(
     if hit is not None:
         items = hit
     else:
+        # La misma descarga que GET /inventory, sin registrar en tracked_skins y sin
+        # snapshot: así era la del chat antes de unificarlas (CLEAN-11).
         try:
-            data = await steamwebapi.inventory(client, steam_id)
+            items = await inventory_service.fetch_fresh_inventory(client, steam_id, track=False)
         except InvalidPayload:
             raise   # un 200 ilegible no se tragaba antes del cliente
+        except UnexpectedPayload:
+            return []
         except Exception as exc:
             if isinstance(exc, UpstreamError) and exc.status is not None:
                 logger.warning("[tools] ver_inventario steamwebapi → %s", exc.status)
             else:
                 logger.warning("[tools] ver_inventario falló: %s", exc)
             return []
-
-        if not isinstance(data, list):
-            return []
-
-        items = [_map_item(item) for item in data]
-        items = await _enrich_market_prices(client, items)
-        _enrich_images_from_cache(items)
         _inventory_cache.put(steam_id, items, now)
 
     return _resumen_inventario(items, buscar)
