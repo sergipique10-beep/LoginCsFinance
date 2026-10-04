@@ -11,9 +11,9 @@ from stores import (
     _item_history_cache, _item_image_cache, _item_rarity_cache, _image_cache_meta,
     _market_lookup_cache, _market_providers_cache, _fx_cache, _lookup_failed_at,
 )
-from steam.clients import steamwebapi
+from steam.clients import fx, static_catalog, steamwebapi
 from steam.clients.steamwebapi import _history_limiter
-from steam.errors import HistoryBusy, SourceTimeout, SourceUnavailable, UpstreamError
+from steam.errors import HistoryBusy, InvalidPayload, SourceTimeout, SourceUnavailable, UpstreamError
 from steam.mappers import _delta_from_history, _map_topmovers_item
 
 logger = logging.getLogger("uvicorn.error")
@@ -25,9 +25,6 @@ UPSTREAM_QUOTA_DETAIL = {"code": "upstream_quota", "message": "steamwebapi month
 # SEC-16: y cuando lo lleno es el límite POR MINUTO (20/60 s): transitorio, con Retry-After.
 UPSTREAM_RATE_LIMIT_DETAIL = {"code": "upstream_rate_limit", "message": "steamwebapi per-minute limit reached"}
 
-# Tipo de cambio: frankfurter sirve los tipos de referencia del BCE, sin clave ni
-# registro. El host .app redirige 301 a .dev, asi que se apunta directo a .dev.
-_FX_API = "https://api.frankfurter.dev/v1/latest"
 
 _STATIC_SKINS_URL     = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins.json"
 _STATIC_STICKERS_URL  = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/stickers.json"
@@ -258,6 +255,16 @@ async def _fetch_static_images(client: httpx.AsyncClient) -> None:
         await _load_static_images(client, now)
 
 
+def _log_catalog_failure(label: str, exc: Exception) -> None:
+    """Una fuente del catálogo falló: se salta y se registra."""
+    if isinstance(exc, InvalidPayload):
+        logger.warning("[image-cache] %s unexpected format: %s", label, exc.body_excerpt)
+    elif isinstance(exc, UpstreamError) and exc.status is not None:
+        logger.warning("[image-cache] %s returned %s", label, exc.status)
+    else:
+        logger.warning("[image-cache] could not fetch %s: %s", label, exc)
+
+
 async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
     sources_with_wears = [
         ("skins",  _STATIC_SKINS_URL),
@@ -276,35 +283,21 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
 
     for label, url in sources_with_wears:
         try:
-            resp = await client.get(url, timeout=15.0)
-            if resp.status_code != 200:
-                logger.warning("[image-cache] %s returned %s", label, resp.status_code)
-                continue
-            data = resp.json()
-            if not isinstance(data, list):
-                logger.warning("[image-cache] %s unexpected format: %s", label, type(data).__name__)
-                continue
+            data = await static_catalog.fetch_source(client, url)
             for item in data:
                 _register_skin(item)
             fetched[label] = len(data)
         except Exception as exc:
-            logger.warning("[image-cache] could not fetch %s: %s", label, exc)
+            _log_catalog_failure(label, exc)
 
     for label, url in sources_flat:
         try:
-            resp = await client.get(url, timeout=15.0)
-            if resp.status_code != 200:
-                logger.warning("[image-cache] %s returned %s", label, resp.status_code)
-                continue
-            data = resp.json()
-            if not isinstance(data, list):
-                logger.warning("[image-cache] %s unexpected format: %s", label, type(data).__name__)
-                continue
+            data = await static_catalog.fetch_source(client, url)
             for item in data:
                 _register_flat(item)
             fetched[label] = len(data)
         except Exception as exc:
-            logger.warning("[image-cache] could not fetch %s: %s", label, exc)
+            _log_catalog_failure(label, exc)
 
     # CAL-08: `ts` significa "última carga buena" (stores.py). Si no cargó ninguna
     # fuente (GitHub caído en el arranque de Render), no se estampa: se reintenta
@@ -417,15 +410,14 @@ async def _fetch_fx_rate(client: httpx.AsyncClient) -> tuple[float | None, bool]
     if cached and now - cached[1] < FX_CACHE_TTL:
         return cached[0], True
     try:
-        resp = await client.get(
-            _FX_API,
-            params={"base": "USD", "symbols": "EUR"},
-            timeout=10.0,
-        )
-        if resp.status_code != 200:
-            logger.warning("[fx] frankfurter returned %s", resp.status_code)
+        try:
+            data = await fx.latest_usd_eur(client)
+        except (SourceTimeout, SourceUnavailable):
+            raise   # red: lo registra el except genérico de abajo, como antes
+        except UpstreamError as exc:
+            logger.warning("[fx] frankfurter returned %s", exc.status)
             return (cached[0], False) if cached else (None, False)
-        rate = (resp.json().get("rates") or {}).get("EUR")
+        rate = (data.get("rates") or {}).get("EUR")
         # Un tipo USD/EUR fuera de este rango es un error de la fuente, no un
         # movimiento de mercado: mejor servir el ultimo bueno que corromper precios.
         if not isinstance(rate, (int, float)) or not 0.5 < rate < 2.0:

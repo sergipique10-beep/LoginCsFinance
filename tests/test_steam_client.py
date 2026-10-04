@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from steam.clients import steamwebapi
+from steam.clients.http import parse_retry_after
 from steam.errors import (
     InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UpstreamError,
 )
@@ -121,3 +122,10 @@ async def test_item_sigue_redirecciones():
         assert await steamwebapi.item(c, "AK") == {"ok": 1}
     assert len(seen) == 2
 
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("7", 7.0), ("0.5", 0.5), ("-3", 0.0), (None, None), ("", None), ("mañana", None),
+])
+def test_parse_retry_after(value, expected):
+    assert parse_retry_after(value) == expected

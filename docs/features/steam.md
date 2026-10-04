@@ -3,6 +3,10 @@ feature: steam
 files:
   - steam/cap_history_repo.py
   - steam/clients/__init__.py
+  - steam/clients/fx.py
+  - steam/clients/http.py
+  - steam/clients/static_catalog.py
+  - steam/clients/steam_news.py
   - steam/clients/steamwebapi.py
   - steam/errors.py
   - steam/inventory_snapshot_repo.py

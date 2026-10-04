@@ -9,8 +9,9 @@ from datetime import date, timedelta
 import httpx
 import pytest
 
+from steam.clients.steam_news import fetch_og_image
 from steam.mappers import (
-    _STEAM_CDN, _WEAPON_CATEGORY, _delta_from_history, _fetch_og_image,
+    _STEAM_CDN, _WEAPON_CATEGORY, _delta_from_history,
     _map_market_index_point, _map_news_item, _normalize_image, _resolve_phase,
     _safe_delta, _weapon_category, is_readable_news,
 )
@@ -119,9 +120,9 @@ def _client(status=200, text="", exc=None):
 ])
 async def test_fetch_og_image(status, text, exc, expected):
     async with _client(status, text, exc) as client:
-        assert await _fetch_og_image(client, "https://news/x") == expected
+        assert await fetch_og_image(client, "https://news/x") == expected
 
 
 async def test_fetch_og_image_sin_url_no_pide():
     async with _client(exc=AssertionError("no debería pedir")) as client:
-        assert await _fetch_og_image(client, "") == ""
+        assert await fetch_og_image(client, "") == ""

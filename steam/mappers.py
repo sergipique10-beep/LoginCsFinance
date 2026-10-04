@@ -3,8 +3,6 @@ import html
 import re
 from datetime import date, datetime, timedelta, timezone
 
-import httpx
-
 from steam.liquidity import compute_liquidity
 
 _STEAM_CDN = "https://community.akamai.steamstatic.com"
@@ -338,28 +336,6 @@ def _map_market_index_point(point: dict) -> dict:
 
 
 # ── News mappers ──────────────────────────────────────────────────────────────
-
-async def _fetch_og_image(client: httpx.AsyncClient, url: str) -> str:
-    if not url:
-        return ""
-    try:
-        resp = await client.get(
-            url, timeout=4.0, follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
-        if resp.status_code != 200:
-            return ""
-        match = re.search(
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](https?://[^"\']+)["\']',
-            resp.text, re.IGNORECASE,
-        ) or re.search(
-            r'<meta[^>]+content=["\'](https?://[^"\']+)["\'][^>]+property=["\']og:image["\']',
-            resp.text, re.IGNORECASE,
-        )
-        return match.group(1) if match else ""
-    except Exception:
-        return ""
-
 
 def _clean_news_content(raw: str, max_chars: int = 220) -> str:
     text = re.sub(r"<[^>]+>", " ", raw)           # HTML tags

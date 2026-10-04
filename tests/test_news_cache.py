@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import main
 import steam.routes.news as news_module
+from steam.clients import steam_news
 from stores import _news_cache
 
 
@@ -28,7 +29,7 @@ def test_second_call_within_ttl_does_not_hit_steam(client, monkeypatch):
     _news_cache.clear()
     calls: list = []
     monkeypatch.setattr(main.app.state, "http_client", _fake_steam_client(calls))
-    monkeypatch.setattr(news_module, "_fetch_og_image", AsyncMock(return_value="https://img/1.jpg"))
+    monkeypatch.setattr(steam_news, "fetch_og_image", AsyncMock(return_value="https://img/1.jpg"))
 
     first = client.get("/news/cs2")
     second = client.get("/news/cs2")
@@ -42,7 +43,7 @@ def test_cache_expires_after_ttl(client, monkeypatch):
     _news_cache.clear()
     calls: list = []
     monkeypatch.setattr(main.app.state, "http_client", _fake_steam_client(calls))
-    monkeypatch.setattr(news_module, "_fetch_og_image", AsyncMock(return_value=""))
+    monkeypatch.setattr(steam_news, "fetch_og_image", AsyncMock(return_value=""))
 
     assert client.get("/news/cs2").status_code == 200
     items, ts = _news_cache[5]
@@ -56,7 +57,7 @@ def test_cache_is_keyed_by_count(client, monkeypatch):
     _news_cache.clear()
     calls: list = []
     monkeypatch.setattr(main.app.state, "http_client", _fake_steam_client(calls))
-    monkeypatch.setattr(news_module, "_fetch_og_image", AsyncMock(return_value=""))
+    monkeypatch.setattr(steam_news, "fetch_og_image", AsyncMock(return_value=""))
 
     client.get("/news/cs2?count=5")
     client.get("/news/cs2?count=3")
