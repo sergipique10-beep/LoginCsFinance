@@ -6,7 +6,8 @@ resultado medido en producción: 0 items por encima de $10 en trending, y el 61%
 por debajo de $0.50.
 """
 
-from steam.services.market import _PRECIO_MIN_RANKING, _turnover
+from steam.domain.validators import MIN_RANKING_PRICE
+from steam.services.market import _turnover
 
 
 def _item(precio: float, vendidas: int) -> dict:
@@ -37,4 +38,4 @@ class TestTurnover:
 class TestSueloDePrecio:
     def test_el_suelo_ronda_los_10_euros(self):
         # ~1.08 USD/EUR. Si alguien lo cambia, que sea deliberado.
-        assert 10.0 <= _PRECIO_MIN_RANKING <= 12.0
+        assert 10.0 <= MIN_RANKING_PRICE <= 12.0

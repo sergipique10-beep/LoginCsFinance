@@ -84,6 +84,8 @@ LoginCsFinance/
                     #            /auth/dev-token, /auth/refresh, /auth/logout
                     # Note: /auth/dev-token gated by settings.DEV_TOKEN_ENABLED (DEBUG and ENV != production)
   steam/
+    degraded.py     # Log de degradaciones (CLEAN-12): log_degraded(flow, reason, served) y
+                    #   reason_of(exc). Ver «Log de degradaciones (steam-degraded)»
     errors.py       # Errores tipados de las fuentes (CLEAN-06): UpstreamError (status,
                     #   body_excerpt, retry_after) y sus hijas QuotaExhausted (402),
                     #   RateLimited (429), SourceTimeout (→504), SourceUnavailable (→502);
@@ -110,7 +112,11 @@ LoginCsFinance/
       models.py       # TypedDict del contrato JSON (CLEAN-08): RankedCard (_row_to_item) ⊂
                     #   SkinCard (_map_item) ⊂ MoverItem (+_change24h interno), RankingRow,
                     #   MarketIndexPoint, NewsItem, MarketProvider, HistoryPoint.
-                    #   tests/test_steam_models.py ata sus claves a los tests de contrato
+                    #   tests/test_steam_models.py ata sus claves a los tests de contrato.
+                    #   Fetched[T] (CLEAN-12): data + status (ok|partial|stale|error) + reason
+      validators.py   # Reglas de plausibilidad (CLEAN-12), las que ya había: plausible_ratio
+                    #   (10×), plausible_fx_rate (0,5–2,0), ranking_eligible (MIN_RANKING_PRICE,
+                    #   MIN_SOLD_*), canonical_price, has_price
     mappers/        # Mappers puros, uno por dominio (sin HTTP, sin caché, sin fallback):
       items.py        #   _map_item, _inline_delta, _safe_delta, _delta_from_history,
                     #   _resolve_phase, _normalize_image
@@ -533,6 +539,23 @@ Before any production deployment:
 - `.env`: `BASE_URL` and `FRONTEND_URL` → `https://` URLs
 - uvicorn: add `--ssl-certfile` / `--ssl-keyfile` (or terminate TLS at a reverse proxy)
 - Replace `stores.py` in-memory dicts with Redis before running multiple workers
+
+## Log de degradaciones (`steam-degraded`, CLEAN-12)
+
+Cada degradación de `steam/` que el cliente **no ve** (un 200 normal con dato caducado,
+vacío o de respaldo) deja una línea a WARNING:
+
+```
+[steam-degraded] flow=movers reason=timeout served=fallback last_hour=3
+```
+
+`served` es `stale`, `empty`, `fallback` o `error`; `last_hour` es el conteo de ese
+`(flow, reason)` en la última hora **en ese proceso** (mismo patrón que `[inventory-429]`).
+En los logs de Render: `grep steam-degraded`, o `grep "flow=movers"` para un flujo. La
+lista de flows está en la columna «Log» del mapa de degradaciones de
+`docs/features/steam.md`. Los services con camino de degradación devuelven
+`Fetched[T]` (`steam/domain/models.py`) y las rutas responden con `.data`, idéntico a
+antes: exponer `status` al front es UX-46, que puede priorizar con estos conteos.
 
 ## Degradación ante 429 de steamwebapi (PERF-14)
 

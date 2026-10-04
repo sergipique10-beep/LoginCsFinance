@@ -18,8 +18,10 @@ from stores import (
 )
 from steam.cap_history_repo import fetch_range, insert_snapshot
 from steam.clients import steamwebapi
-from steam.domain.models import RankedCard, SkinCard
+from steam.degraded import log_degraded, reason_of
+from steam.domain.models import Fetched, RankedCard, SkinCard
 from steam.domain.names import is_sticker_slab, skin_base
+from steam.domain.validators import MIN_SOLD_MOVERS, MIN_SOLD_TRENDING, ranking_eligible
 from steam.errors import (
     UNEXPECTED_FORMAT, QuotaExhausted, SourceTimeout, SourceUnavailable, UnexpectedPayload,
     UpstreamError,
@@ -80,14 +82,6 @@ _ENRICH_BATCH = 18
 # ranking por fluctuaciones normales sin perder su enriquecimiento.
 _TRENDING_STALE_DAYS = 7
 
-# Suelo de precio para entrar en los rankings (USD; ~10 EUR a 1.08 USD/EUR).
-# Por debajo, el movimiento porcentual es ruido de granularidad: los precios de
-# Steam se mueven de centavo en centavo, así que en un item de $0.10 un solo tick
-# ya es un +10% que ni el spread ni las comisiones (~15%) dejan capturar. Medido
-# en producción: el 61% del trending eran items de ~$0.11 con volatilidad
-# aparente 3.6x la de los de $2-10, y el agente los presentaba como "en auge".
-_PRECIO_MIN_RANKING = 10.80
-
 # Cuántos items pedir a /items. El endpoint ordena por unidades vendidas, y la
 # cola barata es larguísima: la mediana de los 150 primeros es $0.20, así que con
 # max=150 solo 2 items superaban los $10.80 y los rankings salían vacíos. Medido:
@@ -113,6 +107,7 @@ _MAX_POR_SKIN = 2
 
 
 _Card = TypeVar("_Card", bound=Mapping[str, Any])
+_T = TypeVar("_T")
 
 def _diversificar(items: list[_Card], limite: int) -> list[_Card]:
     """Reparte el ranking entre categorías en vez de agotarlas por prioridad.
@@ -176,22 +171,24 @@ async def search_items(client: httpx.AsyncClient, query: str, *, max: int, selec
     return await steamwebapi.items(client, search=query, max=max, select=select)
 
 
-async def _ranking_items(client: httpx.AsyncClient, tag: str, fallback_label: str) -> list | None:
-    """Fuente principal de movers y trending: /items por unidades vendidas. None si no
-    responde o no es una lista; entonces se cae a topmovers."""
+async def _ranking_items(client: httpx.AsyncClient, tag: str,
+                         fallback_label: str) -> tuple[list | None, str | None]:
+    """Fuente principal de movers y trending: /items por unidades vendidas. Devuelve
+    (items, None), o (None, motivo) si no responde o no es una lista; entonces se cae
+    a topmovers."""
     try:
         data = await steamwebapi.items(
             client, sort_by="soldZa", max=_ITEMS_FETCH_MAX, select=_MOVERS_SELECT,
         )
-    except (SourceTimeout, SourceUnavailable):
-        return None
+    except (SourceTimeout, SourceUnavailable) as exc:
+        return None, reason_of(exc)
     except UpstreamError as exc:
         logger.warning("[%s] /items returned %s — falling back to %s", tag, exc.status, fallback_label)
-        return None
+        return None, reason_of(exc)
     if isinstance(data, list):
-        return data
+        return data, None
     logger.warning("[%s] /items returned unexpected type: %s", tag, type(data).__name__)
-    return None
+    return None, "unexpected_format"
 
 
 async def _topmovers(client: httpx.AsyncClient, tag: str, now: float, *,
@@ -218,23 +215,22 @@ async def _topmovers(client: httpx.AsyncClient, tag: str, now: float, *,
     return raw_topmovers
 
 
-async def compute_movers(client: httpx.AsyncClient) -> dict:
+async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
     """Calcula el ranking hot/cold actual (sin cache, sin persistencia).
 
     Llamado por POST /internal/movers-tick. GET /market/movers ahora lee
-    el snapshot ya persistido en Supabase.
+    el snapshot ya persistido en Supabase. `partial` = respaldo de topmovers;
+    `error` = ninguna fuente (listas vacías).
     """
     now = time.monotonic()
 
     # ── Primary source: /items (paid plan) ───────────────────────────────────
-    data = await _ranking_items(client, "market-movers", "market-index topmovers")
+    data, reason = await _ranking_items(client, "market-movers", "market-index topmovers")
     if data is not None:
         catalog.cache_images(data)
         mapped = []
         for raw in data:
-            latest = float(raw.get("pricelatestsell") or 0)
-            volume = int(raw.get("sold24h") or 0)
-            if (latest >= _PRECIO_MIN_RANKING and volume >= 5
+            if (ranking_eligible(raw, MIN_SOLD_MOVERS)
                     and not is_sticker_slab(raw.get("marketname") or "")):
                 mapped.append(_map_item(raw))
         # Ordenar por turnover (precio × unidades), no por precio suelto: mide
@@ -271,7 +267,7 @@ async def compute_movers(client: httpx.AsyncClient) -> dict:
         catalog.enrich_images_from_cache(result["cold"])
         await pricing.enrich_market_prices(client, result["hot"])
         await pricing.enrich_market_prices(client, result["cold"])
-        return result
+        return Fetched(result)
 
     # ── Fallback: market-index topmovers (free plan) ─────────────────────────
     raw_topmovers = await _topmovers(client, "market-movers", now, log_sample=True)
@@ -285,28 +281,29 @@ async def compute_movers(client: httpx.AsyncClient) -> dict:
             await pricing.enrich_market_prices(client, fallback["hot"])
             await pricing.enrich_market_prices(client, fallback["cold"])
             logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(fallback["hot"]), len(fallback["cold"]))
-            return fallback
+            log_degraded("movers", reason or "unknown", "fallback")
+            return Fetched(fallback, "partial", reason)
 
     logger.warning("[market-movers] no data available from any source")
-    return {"hot": [], "cold": []}
+    log_degraded("movers", reason or "unknown", "error")
+    return Fetched({"hot": [], "cold": []}, "error", reason)
 
 
-async def compute_trending(client: httpx.AsyncClient) -> list[SkinCard]:
+async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]:
     """Calcula el ranking trending actual (sin cache, sin persistencia).
 
     Llamado por POST /internal/trending-tick; GET /market/trending lee el snapshot.
+    Mismos estados que `compute_movers`.
     """
     now = time.monotonic()
 
     # ── Primary source: /items (paid plan) ───────────────────────────────────
-    data = await _ranking_items(client, "market-trending", "topmovers")
+    data, reason = await _ranking_items(client, "market-trending", "topmovers")
     if data is not None:
         catalog.cache_images(data)
         result = []
         for raw in data:
-            latest = float(raw.get("pricelatestsell") or 0)
-            volume = int(raw.get("sold24h") or 0)
-            if latest >= _PRECIO_MIN_RANKING and volume >= 1:
+            if ranking_eligible(raw, MIN_SOLD_TRENDING):
                 result.append(_map_item(raw))
         # Por relevancia (turnover = precio × unidades) y luego se reparte entre
         # categorías. Antes se ordenaba por categoría primero (`_category_rank`, ya
@@ -327,7 +324,7 @@ async def compute_trending(client: httpx.AsyncClient) -> list[SkinCard]:
         # (ByMykel) es la única fuente. Igual que en /market/items (search).
         await catalog.fetch_static_images(client)
         catalog.enrich_images_from_cache(result)
-        return result
+        return Fetched(result)
 
     # ── Fallback: topmovers from cache (free plan) ────────────────────────────
     raw_topmovers = await _topmovers(client, "market-trending", now, log_sample=False)
@@ -341,10 +338,12 @@ async def compute_trending(client: httpx.AsyncClient) -> list[SkinCard]:
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_FALLBACK_LIMIT]
             result = await pricing.enrich_market_prices(client, result)
             logger.info("[market-trending] serving from topmovers (%d items)", len(result))
-            return result
+            log_degraded("trending", reason or "unknown", "fallback")
+            return Fetched(result, "partial", reason)
 
     logger.warning("[market-trending] no data available from any source")
-    return []
+    log_degraded("trending", reason or "unknown", "error")
+    return Fetched([], "error", reason)
 
 
 # ── Lecturas de /market ───────────────────────────────────────────────────────
@@ -364,26 +363,27 @@ async def get_trending() -> list[RankedCard]:
     return [_row_to_item(row) for row in rows]
 
 
-def _stale_or_raise(stale: Any, exc: QuotaExhausted) -> Any:
+def _stale_or_raise(flow: str, stale: _T | None, exc: QuotaExhausted) -> Fetched[_T]:
     """SEC-16 — 402 de steamwebapi: mejor un dato caducado que un error, porque la
     cuota no vuelve hasta el día 10. Sin caché, el 402 sube y la ruta da 503."""
     if stale is not None:
-        return stale
+        log_degraded(flow, "quota", "stale")
+        return Fetched(stale, "stale", "quota")
     raise exc
 
 
-async def search_market(client: httpx.AsyncClient, query: str) -> list[SkinCard]:
+async def search_market(client: httpx.AsyncClient, query: str) -> Fetched[list[SkinCard]]:
     """GET /market/items: búsqueda por nombre con el shape completo y caché de 5 min."""
     cache_key = query.lower()
     now = time.monotonic()
     hit = _search_cache.fresh(cache_key, now)
     if hit is not None:
-        return hit
+        return Fetched(hit)
 
     try:
         data = await search_items(client, query, max=_SEARCH_LIMIT, select=_MOVERS_SELECT)
     except QuotaExhausted as exc:
-        return _stale_or_raise(_search_cache.stale(cache_key), exc)
+        return _stale_or_raise("search", _search_cache.stale(cache_key), exc)
     if not isinstance(data, list):
         raise UnexpectedPayload(UNEXPECTED_FORMAT)
 
@@ -400,22 +400,22 @@ async def search_market(client: httpx.AsyncClient, query: str) -> list[SkinCard]
 
     _search_cache.put(cache_key, result, now)
     logger.info("[market-items] q=%r → %d results", query, len(result))
-    return result
+    return Fetched(result)
 
 
-async def get_item_full(client: httpx.AsyncClient, query: str) -> SkinCard | None:
+async def get_item_full(client: httpx.AsyncClient, query: str) -> Fetched[SkinCard | None]:
     """GET /market/price: un item con el shape completo de _map_item (liquidez y
     volumen incluidos), o None si la búsqueda no trae el nombre exacto."""
     cache_key = query.lower()
     now = time.monotonic()
     hit = _item_price_cache.fresh(cache_key, now)
     if hit is not None:
-        return hit
+        return Fetched(hit)
 
     try:
         data = await search_items(client, query, max=_SEARCH_LIMIT, select=_MOVERS_SELECT)
     except QuotaExhausted as exc:
-        return _stale_or_raise(_item_price_cache.stale(cache_key), exc)
+        return _stale_or_raise("item_price", _item_price_cache.stale(cache_key), exc)
     if not isinstance(data, list):
         raise UnexpectedPayload(UNEXPECTED_FORMAT)
 
@@ -427,7 +427,7 @@ async def get_item_full(client: httpx.AsyncClient, query: str) -> SkinCard | Non
         None,
     )
     if raw is None:
-        return None
+        return Fetched(None)
 
     catalog.cache_images([raw])
     item = _map_item(raw)
@@ -438,21 +438,21 @@ async def get_item_full(client: httpx.AsyncClient, query: str) -> SkinCard | Non
 
     _item_price_cache.put(cache_key, item, now)
     logger.info("[market-price] name=%r → hit", query)
-    return item
+    return Fetched(item)
 
 
-async def get_market_index(client: httpx.AsyncClient, tf: str) -> dict:
+async def get_market_index(client: httpx.AsyncClient, tf: str) -> Fetched[dict]:
     cache_key = tf
     now = time.monotonic()
     hit = _market_index_cache.fresh(cache_key, now)
     if hit is not None:
-        return hit
+        return Fetched(hit)
 
     try:
         data = await steamwebapi.market_index(client)
     except QuotaExhausted as exc:
         logger.warning("[market-index] daily limit reached (402)")
-        return _stale_or_raise(_market_index_cache.stale(cache_key), exc)
+        return _stale_or_raise("market_index", _market_index_cache.stale(cache_key), exc)
     except (SourceTimeout, SourceUnavailable):
         raise
     except UpstreamError as exc:
@@ -514,17 +514,17 @@ async def get_market_index(client: httpx.AsyncClient, tf: str) -> dict:
         "history": [_map_market_index_point(p) for p in raw_points],
     }
     _market_index_cache.put(cache_key, result, now)
-    return result
+    return Fetched(result)
 
 
 async def get_market_prices(client: httpx.AsyncClient, market: str, name: str | None,
-                            currency: str | None) -> Any:
+                            currency: str | None) -> Fetched[Any]:
     """GET /market/prices: passthrough de /market/{market}/prices, caché de 5 min."""
     cache_key = f"{market}:{(name or '').lower()}:{(currency or 'usd').lower()}"
     now = time.monotonic()
     hit = _market_prices_cache.fresh(cache_key, now)
     if hit is not None:
-        return hit
+        return Fetched(hit)
 
     params: dict = {}
     if name:
@@ -535,11 +535,11 @@ async def get_market_prices(client: httpx.AsyncClient, market: str, name: str | 
     try:
         data = await steamwebapi.market_prices(client, market, params, timeout=15.0)
     except QuotaExhausted as exc:
-        return _stale_or_raise(_market_prices_cache.stale(cache_key), exc)
+        return _stale_or_raise("market_prices", _market_prices_cache.stale(cache_key), exc)
 
     _market_prices_cache.put(cache_key, data, now)
     logger.info("[market-prices] market=%r name=%r → %s items", market, name, len(data) if isinstance(data, list) else "object")
-    return data
+    return Fetched(data)
 
 
 # ── Histórico del índice (cap-history) ────────────────────────────────────────
@@ -655,7 +655,7 @@ async def capture_cap_snapshot(client: httpx.AsyncClient) -> dict:
 
 async def capture_trending(client: httpx.AsyncClient) -> dict:
     """/internal/trending-tick: captura el ranking trending en `market_trending`."""
-    items = await compute_trending(client)
+    items = (await compute_trending(client)).data
     seen_at = datetime.now(timezone.utc).isoformat()
     # Upsert, no replace-all: el DELETE borraría el enriquecimiento que el
     # enrich-tick va acumulando en price_delta_* / enriched_at. Estas filas no
@@ -739,7 +739,7 @@ async def enrich_trending(client: httpx.AsyncClient) -> dict:
 
 async def capture_movers(client: httpx.AsyncClient) -> dict:
     """/internal/movers-tick: captura el ranking hot/cold en `market_movers`."""
-    result = await compute_movers(client)
+    result = (await compute_movers(client)).data
     # list[Any]: los repos de Supabase tipan dict y RankingRow es un TypedDict.
     rows: list[Any] = [_to_row(item, rank, "hot")  for rank, item in enumerate(result["hot"])] \
          + [_to_row(item, rank, "cold") for rank, item in enumerate(result["cold"])]

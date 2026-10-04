@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 from steam.domain.catalog import weapon_category
 from steam.domain.models import SkinCard
+from steam.domain.validators import plausible_ratio
 from steam.liquidity import compute_liquidity
 
 _STEAM_CDN = "https://community.akamai.steamstatic.com"
@@ -62,11 +63,6 @@ def _resolve_phase(item: dict) -> str | None:
     return match.get("phase") if match else None
 
 
-# Un precio histórico fuera de este rango respecto al actual es basura de la API
-# (visto: pricereal30d=0.22 para una skin de 17.57 → +7886%), no un movimiento real.
-_MAX_PLAUSIBLE_RATIO = 10.0
-
-
 def _inline_delta(current: float | None, raw_old) -> float | None:
     """Compute % delta between the current price and a historical one.
 
@@ -80,7 +76,7 @@ def _inline_delta(current: float | None, raw_old) -> float | None:
     old = float(raw_old or 0) or None
     if not new or not old:
         return None
-    if not (1 / _MAX_PLAUSIBLE_RATIO <= old / new <= _MAX_PLAUSIBLE_RATIO):
+    if not plausible_ratio(new, old):
         return None
     return _safe_delta(new, old)
 

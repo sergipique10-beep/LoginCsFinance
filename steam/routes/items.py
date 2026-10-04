@@ -17,6 +17,7 @@ from stores import (
 )
 from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
+from ..degraded import log_degraded, reason_of
 from ..errors import (
     UPSTREAM_QUOTA_DETAIL, UPSTREAM_RATE_LIMIT_DETAIL, HistoryBusy, QuotaExhausted, RateLimited,
     SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
@@ -66,7 +67,9 @@ async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
         if exc.status == 403:
             raise HTTPException(status_code=403, detail="Inventory is private") from exc
         if exc.status in (410, 411):
-            return []   # CAL-13: sin log y se guarda como inventario vacío
+            # CAL-13: se sirve y se guarda como inventario vacío (CLEAN-12: con su línea).
+            log_degraded("inventory", reason_of(exc), "empty")
+            return []
         logger.error("steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
     except UnexpectedPayload as exc:
@@ -227,7 +230,7 @@ async def get_item_history(
     user: dict = Depends(require_jwt),
 ):
     try:
-        return await pricing.get_item_history(
+        fetched = await pricing.get_item_history(
             request.app.state.http_client, name, interval, market, days,
             limiter_timeout=ITEM_HISTORY_LIMITER_TIMEOUT,
         )
@@ -241,3 +244,4 @@ async def get_item_history(
                             headers={"Retry-After": "60"}) from None
     except UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
+    return fetched.data

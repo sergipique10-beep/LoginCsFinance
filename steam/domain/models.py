@@ -4,7 +4,11 @@
 dicts: anotar no cambia el JSON. Las claves son exactamente las que fijan los tests de
 contrato de CAL-09 (`tests/test_steam_models.py` lo comprueba).
 """
-from typing import Any, NotRequired, TypedDict
+from dataclasses import dataclass
+from typing import Any, Generic, Literal, NotRequired, TypeVar, TypedDict
+
+T = TypeVar("T")
+FetchStatus = Literal["ok", "partial", "stale", "error"]
 
 
 class RankedCard(TypedDict):
@@ -139,3 +143,17 @@ class HistoryPoint(TypedDict):
     date: str
     price: float
     volume: int
+
+
+@dataclass(frozen=True)
+class Fetched(Generic[T]):
+    """Resultado de un service con camino de degradación (CLEAN-12).
+
+    `status`: `ok` (dato bueno), `stale` (caché caducada), `partial` (respaldo
+    incompleto: topmovers, proveedores estáticos) o `error` (vacío o nada que servir).
+    `reason` dice por qué. Las rutas devuelven `data` tal cual: exponer el estado al
+    front es UX-46.
+    """
+    data: T
+    status: FetchStatus = "ok"
+    reason: str | None = None

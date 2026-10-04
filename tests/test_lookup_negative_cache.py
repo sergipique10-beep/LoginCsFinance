@@ -99,8 +99,8 @@ async def test_price_lookup_success_clears_failure_mark():
 
 async def test_providers_failure_is_cached_then_retried():
     client = _FakeClient(status=500)
-    assert await providers_service.fetch_market_providers(client) == catalog.fallback_providers()
-    assert await providers_service.fetch_market_providers(client) == catalog.fallback_providers()
+    assert (await providers_service.fetch_market_providers(client)).data == catalog.fallback_providers()
+    assert (await providers_service.fetch_market_providers(client)).data == catalog.fallback_providers()
     assert client.calls == 1
 
     _expire_backoff("providers")
@@ -110,11 +110,11 @@ async def test_providers_failure_is_cached_then_retried():
 
 async def test_providers_serve_last_good_during_backoff():
     good = _FakeClient(status=200, payload=[{"id": "csfloat", "name": "CSFloat X", "logo": "https://l/x.png"}])
-    providers = await providers_service.fetch_market_providers(good)
+    providers = (await providers_service.fetch_market_providers(good)).data
     assert providers[1]["name"] == "CSFloat X"
     _market_providers_cache["providers"] = (providers, time.monotonic() - MARKET_PROVIDERS_CACHE_TTL - 1)
 
     down = _FakeClient(exc=httpx.ConnectError("down"))
-    assert await providers_service.fetch_market_providers(down) == providers
-    assert await providers_service.fetch_market_providers(down) == providers
+    assert (await providers_service.fetch_market_providers(down)).data == providers
+    assert (await providers_service.fetch_market_providers(down)).data == providers
     assert down.calls == 1

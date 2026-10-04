@@ -33,6 +33,7 @@ import httpx
 from settings import ALERTS_LOOKUP_CAP, ALERTS_MAX_PER_USER
 from steam import price_capture
 from steam import price_history_repo
+from steam.domain.validators import canonical_price
 from steam.errors import QuotaExhausted
 from steam.rankings_repo import movers_repo, trending_repo
 from notifications import repo as notif_repo
@@ -147,7 +148,7 @@ async def create_alert(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[alerts] lookup falló para %r: %s", market_hash_name, exc)
                 item = {}
-            price = price_capture._canonical_price(item)
+            price = canonical_price(item)
         if price is None:
             raise UnknownItem(f"No se encontró la skin {market_hash_name!r}")
         await price_history_repo.register_tracked([market_hash_name], "alert")
@@ -196,7 +197,7 @@ async def evaluate_alerts(http_client: httpx.AsyncClient) -> dict:
             errors += 1
             logger.warning("[alerts] lookup falló para %r: %s", name, exc)
             continue
-        price = price_capture._canonical_price(item)
+        price = canonical_price(item)
         if price is not None:
             prices[name] = price
 

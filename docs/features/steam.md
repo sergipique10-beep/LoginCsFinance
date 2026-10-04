@@ -8,10 +8,12 @@ files:
   - steam/clients/static_catalog.py
   - steam/clients/steam_news.py
   - steam/clients/steamwebapi.py
+  - steam/degraded.py
   - steam/domain/__init__.py
   - steam/domain/catalog.py
   - steam/domain/models.py
   - steam/domain/names.py
+  - steam/domain/validators.py
   - steam/errors.py
   - steam/inventory_snapshot_repo.py
   - steam/liquidity.py
@@ -74,37 +76,45 @@ Qué hace cada flujo cuando una fuente falla. **Decisión**: *conservar* (degrad
 aceptada), *UX-46* (hacerla visible al usuario, necesita al front) o el issue del bug.
 "Invisible" = el cliente recibe un 200 normal sin ninguna señal.
 
-| Flujo | Disparador | Qué devuelve | ¿Lo ve el cliente? | Decisión |
-|---|---|---|---|---|
-| Inventario | 429 / 402 con snapshot | snapshot | `X-Inventory-Stale` | conservar (PERF-14) |
-| Inventario | 402 sin snapshot | 503 | `code: upstream_quota` | conservar (SEC-16) |
-| Inventario | 429 sin snapshot | 429, `detail` de texto | sin `code` | CAL-14 |
-| Inventario | 410 / 411 | `[]` guardado en caché y snapshot | invisible | CAL-13 |
-| Inventario | JSON inválido | 500 | 500 | CAL-14 |
-| Perfil `/me` | 402 / 429 | 502 | sin `code` | CAL-14 |
-| Perfil `/me` | campos ausentes | perfil en blanco cacheado 23 h | invisible | CAL-14 |
-| Histórico (enriquecimiento) | fallo de csfloat/history | `[]` 5 min; deltas de `_inline_delta` | invisible | conservar |
-| `/item/history` | ventana llena / 429 | stale, o 503 + `Retry-After` | `code: upstream_rate_limit` | conservar (SEC-16) |
-| `/item/history` | 402 | `200 []` sin cachear | invisible | CAL-14 |
-| `/item/history` | cuerpo no lista | `[]` cacheado 23 h | invisible | CAL-14 |
-| Lookup CSFloat/Buff | fallo | stale o `{}`, backoff 5 min | precios a `null` | conservar (PERF-17) |
-| Proveedores | fallo | stale o `_FALLBACK_PROVIDERS` | invisible | conservar (PERF-17) |
-| FX | fallo / tasa fuera de 0,5–2,0 | última tasa o ninguna | `stale` en el cuerpo | conservar (UX-08) |
-| Movers / trending | `/items` caído | fallback a topmovers, deltas `0.0` | invisible | UX-46 |
-| Movers / trending | topmovers cacheado viejo | se usa sin mirar su edad | invisible | CAL-12 |
-| `movers-tick` | ninguna fuente | conserva el snapshot anterior | `kept_previous` | conservar (CAL-10) |
-| Trending | sticker slabs | no se filtran (sí en movers y búsqueda) | — | CAL-14 |
-| Búsqueda / precio | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) |
-| Búsqueda / precio | 429 | 502 | sin `code` | CAL-14 |
-| Búsqueda | caché compartida con el chat | hasta 10 items sin liquidez | invisible | CAL-11 |
-| `/market/index` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) |
-| `/market/index` | top sin `markethashname`/`change24h` | `KeyError` → 500 | 500 | CAL-14 |
-| Catálogo de imágenes | todas las fuentes caídas | backoff 5 min, `image: ""` | invisible | conservar (CAL-08) |
-| Noticias | JSON que no es dict | 500 | 500 | CAL-14 |
-| Noticias | og:image falla | `imageUrl: ""` | invisible | conservar |
-| Chat: precio / búsqueda | 402 / 429 | "error al ejecutar" | genérico | CAL-14 |
-| Chat: inventario | cualquier error | `[]` | parece vacío | CAL-14 |
-| Mappers | campos ausentes | `0`, `"Base Grade"`, `True`… | invisible | UX-46 |
+**Log** (CLEAN-12): las degradaciones que el cliente no ve dejan una línea
+`[steam-degraded] flow=<flow> reason=<reason> served=<stale|empty|fallback|error> last_hour=<n>`
+(`steam/degraded.py`), una por fila con algo en la última columna;
+`tests/test_steam_degraded_logs.py` provoca cada una. Las que ya se ven (cabecera, `code`,
+`stale` en el cuerpo, 5xx) no llevan línea. Fuera a propósito: los mappers (una línea
+por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
+
+| Flujo | Disparador | Qué devuelve | ¿Lo ve el cliente? | Decisión | Log (`flow` · `reason`) |
+|---|---|---|---|---|---|
+| Inventario | 429 / 402 con snapshot | snapshot | `X-Inventory-Stale` | conservar (PERF-14) | — |
+| Inventario | 402 sin snapshot | 503 | `code: upstream_quota` | conservar (SEC-16) | — |
+| Inventario | 429 sin snapshot | 429, `detail` de texto | sin `code` | CAL-14 | — |
+| Inventario | 410 / 411 | `[]` guardado en caché y snapshot | invisible | CAL-13 | `inventory` · `http_410`/`http_411` |
+| Inventario | JSON inválido | 500 | 500 | CAL-14 | — |
+| Perfil `/me` | 402 / 429 | 502 | sin `code` | CAL-14 | — |
+| Perfil `/me` | campos ausentes | perfil en blanco cacheado 23 h | invisible | CAL-14 | `profile` · `empty_body` (cuerpo vacío) |
+| Histórico (enriquecimiento) | fallo de csfloat/history | `[]` 5 min; deltas de `_inline_delta` | invisible | conservar | `history` · `reason_of(exc)` |
+| `/item/history` | ventana llena / 429 | stale, o 503 + `Retry-After` | `code: upstream_rate_limit` | conservar (SEC-16) | `item_history` · `rate_limit` (solo stale) |
+| `/item/history` | 402 | `200 []` sin cachear | invisible | CAL-14 | `item_history` · `quota` |
+| `/item/history` | cuerpo no lista | `[]` cacheado 23 h | invisible | CAL-14 | `item_history` · `unexpected_format` |
+| Lookup CSFloat/Buff | fallo | stale o `{}`, backoff 5 min | precios a `null` | conservar (PERF-17) | `market_lookup` · motivo o `backoff` |
+| Proveedores | fallo | stale o `_FALLBACK_PROVIDERS` | invisible | conservar (PERF-17) | `providers` · motivo o `backoff` |
+| FX | fallo / tasa fuera de 0,5–2,0 | última tasa o ninguna | `stale` en el cuerpo | conservar (UX-08) | — |
+| Movers / trending | `/items` caído | fallback a topmovers, deltas `0.0` | invisible | UX-46 | `movers`/`trending` · motivo de `/items`; `served=fallback`, o `error` sin fuentes |
+| Movers / trending | topmovers cacheado viejo | se usa sin mirar su edad | invisible | CAL-12 | — |
+| `movers-tick` | ninguna fuente | conserva el snapshot anterior | `kept_previous` | conservar (CAL-10) | — |
+| Trending | sticker slabs | no se filtran (sí en movers y búsqueda) | — | CAL-14 | — |
+| Búsqueda / precio | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `search`/`item_price` · `quota` (solo stale) |
+| Búsqueda / precio | 429 | 502 | sin `code` | CAL-14 | — |
+| Búsqueda | caché compartida con el chat | hasta 10 items sin liquidez | invisible | CAL-11 | — |
+| `/market/index` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_index` · `quota` (solo stale) |
+| `/market/prices` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_prices` · `quota` (solo stale) |
+| `/market/index` | top sin `markethashname`/`change24h` | `KeyError` → 500 | 500 | CAL-14 | — |
+| Catálogo de imágenes | todas las fuentes caídas | backoff 5 min, `image: ""` | invisible | conservar (CAL-08) | `catalog` · `all_sources_failed` |
+| Noticias | JSON que no es dict | 500 | 500 | CAL-14 | — |
+| Noticias | og:image falla | `imageUrl: ""` | invisible | conservar | `news_image` · `og_image` (solo con URL) |
+| Chat: precio / búsqueda | 402 / 429 | "error al ejecutar" | genérico | CAL-14 | — |
+| Chat: inventario | cualquier error | `[]` | parece vacío | CAL-14 | `chat_inventory` · `reason_of(exc)` |
+| Mappers | campos ausentes | `0`, `"Base Grade"`, `True`… | invisible | UX-46 | — |
 
 El detalle por función (con número de línea aproximado) está en el primer comentario de
 CAL-09 en Plane.

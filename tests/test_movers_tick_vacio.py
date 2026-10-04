@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from steam.domain.models import Fetched
 from steam.rankings_repo import movers_repo
 from steam.routes import market as market_routes
 from steam.services import market as market_service
@@ -17,7 +18,7 @@ def tick(client, monkeypatch):
     monkeypatch.setattr(movers_repo, "replace_snapshot", replace)
 
     def _run(result):
-        monkeypatch.setattr(market_service, "compute_movers", AsyncMock(return_value=result))
+        monkeypatch.setattr(market_service, "compute_movers", AsyncMock(return_value=Fetched(result)))
         return client.post("/internal/movers-tick", headers={"X-Cap-Token": "secret123"})
 
     return _run, replace

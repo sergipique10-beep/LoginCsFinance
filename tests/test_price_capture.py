@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from steam import price_capture
+from steam.domain.validators import canonical_price
 from steam.clients import steamwebapi
 
 
@@ -21,19 +22,19 @@ def _sin_supabase(monkeypatch):
 
 
 def test_canonical_price_prefers_latestsell():
-    assert price_capture._canonical_price(
+    assert canonical_price(
         {"pricelatestsell": 43.15, "pricelatest": 41.35, "pricemedian": 42.71}
     ) == 43.15
 
 
 def test_canonical_price_falls_back_when_zero():
-    assert price_capture._canonical_price(
+    assert canonical_price(
         {"pricelatestsell": 0, "pricelatest": 0, "pricemedian": 42.71}
     ) == 42.71
 
 
 def test_canonical_price_none_when_all_missing():
-    assert price_capture._canonical_price({}) is None
+    assert canonical_price({}) is None
 
 
 @pytest.mark.asyncio

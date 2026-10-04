@@ -10,6 +10,7 @@ import httpx
 
 from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
 from steam.clients import static_catalog
+from steam.degraded import log_degraded
 from steam.domain.names import catalog_keys_for_skin, image_lookup_candidates, without_souvenir
 from steam.errors import InvalidPayload, UpstreamError
 
@@ -137,10 +138,8 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
         ("patches",   _STATIC_PATCHES_URL),
     ]
 
-
     total_before = len(_item_image_cache)
     fetched: dict[str, int] = {}
-
 
     for label, url in sources_with_wears:
         try:
@@ -151,7 +150,6 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
         except Exception as exc:
             _log_catalog_failure(label, exc)
 
-
     for label, url in sources_flat:
         try:
             data = await static_catalog.fetch_source(client, url)
@@ -161,13 +159,13 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
         except Exception as exc:
             _log_catalog_failure(label, exc)
 
-
     # CAL-08: "catalog" significa "última carga buena" (stores.py). Si no cargó ninguna
     # fuente (GitHub caído en el arranque de Render), no se estampa: se reintenta
     # pasado IMAGE_FAIL_TTL en vez de pasar 23 h con `image: ""`.
     if not fetched:
         _image_cache_meta.mark_failed("catalog", now)
         logger.warning("[image-cache] all sources failed; retry in %ds", IMAGE_FAIL_TTL)
+        log_degraded("catalog", "all_sources_failed", "empty")
         return
     _image_cache_meta.put("catalog", len(_item_image_cache), now)
     logger.info(
