@@ -18,10 +18,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LOGS = ROOT / "logs" / "dod"
 PY = sys.executable
-FLOOR = json.loads((ROOT / "tools" / "ratchet-baseline.json").read_text())["coverage_floor"]
+try:
+    FLOOR = json.loads((ROOT / "tools" / "ratchet-baseline.json").read_text(encoding="utf-8"))["coverage_floor"]
+except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
+    print(f"DOD: prerrequisito ausente: tools/ratchet-baseline.json con coverage_floor ({e}). Restauralo desde git.")
+    sys.exit(1)
 
 GATES = [  # (nombre, comando, rapido)
-    ("compile", [PY, "-m", "compileall", "-q", "-x", r"venv|docs|\.superpowers", "."], True),
+    # -x anclada a separadores: `venv|docs` a secas excluiria tambien rag/docs_loader.py (M-7).
+    ("compile", [PY, "-m", "compileall", "-q", "-x", r"[\\/](venv|docs|\.superpowers)([\\/]|$)", "."], True),
     ("ratchet", [PY, "tools/ratchet.py"], True),
     ("pytest+coverage", [PY, "-m", "pytest", "tests/", "-q", "-p", "no:cacheprovider",
                          "--cov=.", "--cov-report=term-missing:skip-covered",
