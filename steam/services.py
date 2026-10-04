@@ -169,6 +169,11 @@ async def _fetch_history_for_item(
 async def _enrich_prices(
     client: httpx.AsyncClient, items: list, concurrency: int = 5, *, limiter_timeout: float | None = None,
 ) -> list:
+    """Deltas 24h/7d/30d desde el histórico de CSFloat. **No muta** la entrada:
+    devuelve una lista nueva con dicts nuevos para los items con histórico, y el
+    mismo dict, intacto, para los que no tienen (/internal/enrich-tick lo usa para
+    distinguir "sin datos" de "con deltas").
+    """
     sem = asyncio.Semaphore(concurrency)
 
     async def fetch(name: str):
@@ -205,9 +210,11 @@ def _cache_images(raw_items: list) -> None:
                 _item_image_cache[key] = img
 
 
-def _enrich_images_from_cache(items: list) -> None:
+def _enrich_images_from_cache(items: list) -> list:
+    """Rellena `image` desde el catálogo estático. **Muta** los items en sitio y
+    devuelve la misma lista (CLEAN-05: mismo contrato que _enrich_market_prices)."""
     if not _item_image_cache:
-        return
+        return items
     for item in items:
         if not item.get("image"):
             name = item.get("name", "")
@@ -227,6 +234,7 @@ def _enrich_images_from_cache(items: list) -> None:
                 if "charm" not in item_type:
                     img = _item_image_cache.get(name[len("Souvenir "):], "")
             item["image"] = img
+    return items
 
 
 def _rarity_of(item: dict) -> tuple[str, str] | None:
@@ -431,6 +439,8 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
 
 
 async def _enrich_market_prices(client: httpx.AsyncClient, items: list) -> list:
+    """Añade `<market>Price` por cada mercado de _TRACKED_MARKETS. **Muta** los
+    items en sitio y devuelve la misma lista."""
     lookups = await asyncio.gather(*(_fetch_market_price_lookup(client, m) for m in _TRACKED_MARKETS))
     for item in items:
         name = item.get("name", "")
