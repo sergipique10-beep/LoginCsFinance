@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from steam import services
+from steam.domain import catalog
 from stores import (
     LOOKUP_FAIL_TTL, MARKET_LOOKUP_CACHE_TTL, MARKET_PROVIDERS_CACHE_TTL,
     _market_lookup_cache, _market_providers_cache,
@@ -97,8 +98,8 @@ async def test_price_lookup_success_clears_failure_mark():
 
 async def test_providers_failure_is_cached_then_retried():
     client = _FakeClient(status=500)
-    assert await services._fetch_market_providers(client) == services._FALLBACK_PROVIDERS
-    assert await services._fetch_market_providers(client) == services._FALLBACK_PROVIDERS
+    assert await services._fetch_market_providers(client) == catalog.fallback_providers()
+    assert await services._fetch_market_providers(client) == catalog.fallback_providers()
     assert client.calls == 1
 
     _expire_backoff("providers")

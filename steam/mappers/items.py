@@ -2,6 +2,7 @@
 deltas de precio. Puro: sin HTTP, sin caché, sin fallback silencioso."""
 from datetime import date, timedelta
 
+from steam.domain.catalog import weapon_category
 from steam.domain.models import SkinCard
 from steam.liquidity import compute_liquidity
 
@@ -61,64 +62,6 @@ def _resolve_phase(item: dict) -> str | None:
     return match.get("phase") if match else None
 
 
-# itemtype crudo (steamwebapi) → categoría de alto nivel para el filtro del frontend.
-# La API devuelve itemtype como el arma específica en minúsculas ("ak-47"); el frontend
-# agrupa por esta categoría. Cubre el set estable de armas/items de CS2.
-_WEAPON_CATEGORY: dict[str, str] = {
-    # Rifles
-    "ak-47": "Rifle", "m4a4": "Rifle", "m4a1-s": "Rifle", "galil ar": "Rifle",
-    "famas": "Rifle", "aug": "Rifle", "sg 553": "Rifle",
-    # Sniper Rifles
-    "awp": "Sniper Rifle", "ssg 08": "Sniper Rifle", "scar-20": "Sniper Rifle", "g3sg1": "Sniper Rifle",
-    # Pistols
-    "glock-18": "Pistol", "usp-s": "Pistol", "p2000": "Pistol", "p250": "Pistol",
-    "five-seven": "Pistol", "tec-9": "Pistol", "cz75-auto": "Pistol", "dual berettas": "Pistol",
-    "desert eagle": "Pistol", "r8 revolver": "Pistol",
-    # SMGs
-    "mac-10": "SMG", "mp9": "SMG", "mp7": "SMG", "mp5-sd": "SMG", "ump-45": "SMG",
-    "p90": "SMG", "pp-bizon": "SMG",
-    # Heavy
-    "nova": "Heavy", "xm1014": "Heavy", "sawed-off": "Heavy", "mag-7": "Heavy",
-    "m249": "Heavy", "negev": "Heavy",
-    # Knives
-    "knife": "Knife", "bayonet": "Knife", "karambit": "Knife", "m9 bayonet": "Knife",
-    "butterfly knife": "Knife", "flip knife": "Knife", "gut knife": "Knife",
-    "huntsman knife": "Knife", "falchion knife": "Knife", "bowie knife": "Knife",
-    "shadow daggers": "Knife", "navaja knife": "Knife", "stiletto knife": "Knife",
-    "talon knife": "Knife", "ursus knife": "Knife", "classic knife": "Knife",
-    "paracord knife": "Knife", "survival knife": "Knife", "nomad knife": "Knife",
-    "skeleton knife": "Knife", "kukri knife": "Knife",
-}
-
-
-def _weapon_category(itemtype: str | None) -> str | None:
-    """Deriva la categoría de alto nivel ('Rifle', 'Knife'...) desde el itemtype crudo.
-
-    La API de steamwebapi devuelve itemtype como el arma específica en minúsculas
-    ('ak-47'). El frontend agrupa por categoría. Para itemtypes no presentes en la
-    tabla (gloves variantes, agents, stickers, cases...), devuelve el itemtype
-    capitalizado como fallback razonable en vez de None, para que el item siga siendo
-    filtrable en su propia categoría en vez de desaparecer del filtro.
-    """
-    if not itemtype:
-        return None
-    key = itemtype.strip().lower()
-    if key in _WEAPON_CATEGORY:
-        return _WEAPON_CATEGORY[key]
-    # Fallbacks por substring para familias no enumerables exhaustivamente.
-    if "glove" in key:
-        return "Gloves"
-    if "knife" in key or "bayonet" in key or "daggers" in key or "karambit" in key:
-        return "Knife"
-    if "sticker" in key:
-        return "Sticker"
-    if "agent" in key or "operator" in key:
-        return "Agent"
-    # Último recurso: itemtype capitalizado (ej. "music kit" → "Music Kit"),
-    # para que el item permanezca filtrable y no se pierda.
-    return key.title()
-
-
 # Un precio histórico fuera de este rango respecto al actual es basura de la API
 # (visto: pricereal30d=0.22 para una skin de 17.57 → +7886%), no un movimiento real.
 _MAX_PLAUSIBLE_RATIO = 10.0
@@ -168,7 +111,7 @@ def _map_item(item: dict) -> SkinCard:
         # (Testada em Campo)" en portugués en vez de "Solitude (Field-Tested)").
         "name":           d.get("markethashname") or d.get("marketname", ""),
         "slug":           d.get("slug", ""),
-        "weaponType":     d.get("weapontype") or _weapon_category(d.get("itemtype")),
+        "weaponType":     d.get("weapontype") or weapon_category(d.get("itemtype")),
         "itemName":       d.get("itemname"),
         "itemType":       d.get("itemtype"),
         "image":          _normalize_image(d.get("image", "")),

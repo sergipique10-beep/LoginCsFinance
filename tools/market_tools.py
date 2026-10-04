@@ -170,6 +170,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
         _fetch_static_images,
         _enrich_images_from_cache,
     )
+    from steam.domain.names import is_sticker_slab
     from steam.mappers.items import _map_item
 
     import time
@@ -197,7 +198,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     result = [
         _map_item(raw) for raw in data
         if float(raw.get("pricelatestsell") or 0) > 0
-        and "sticker slab" not in (raw.get("marketname") or raw.get("market_hash_name") or "").lower()
+        and not is_sticker_slab(raw.get("marketname") or raw.get("market_hash_name") or "")
     ][:10]
 
     await _fetch_static_images(client)
