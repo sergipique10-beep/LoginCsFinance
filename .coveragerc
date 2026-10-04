@@ -1,0 +1,11 @@
+# Cobertura (pytest-cov). Exclusiones estructurales, cada una con su motivo (EDS-3 §3.14):
+# - tools/ratchet.py y tools/dod.py: tooling del DoD. Sus tests (tests/test_ratchet.py) los
+#   ejecutan como subproceso, asi que coverage no los ve aunque esten probados.
+# - verify_weapon_category.py: script manual de una investigacion, no codigo de la app.
+[run]
+omit =
+    tools/ratchet.py
+    tools/dod.py
+    verify_weapon_category.py
+    venv/*
+    tests/*

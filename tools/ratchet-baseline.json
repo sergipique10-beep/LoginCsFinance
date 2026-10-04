@@ -1,6 +1,6 @@
 {
   "bind_all_interfaces": 0,
-  "coverage_floor": 0,
+  "coverage_floor": 68,
   "files_without_test": [
     "alerts/repo.py",
     "alerts/service.py",

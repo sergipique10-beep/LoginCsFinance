@@ -20,11 +20,33 @@ curl http://localhost:8000/
 ```
 
 ```bash
-# Tests (usar el Python del venv: el del sistema no tiene firebase_admin)
-venv\Scripts\python -m pytest tests/ -v      # 226 tests, todos en verde
+# Definition of Done (AOS-02): compile → ratchet → pytest con suelo de cobertura.
+# Es EL comando de verificación; CI ejecuta el mismo. Logs en logs/dod/.
+venv\Scripts\python tools/dod.py             # → "DOD: ALL 3 GATES GREEN"
+venv\Scripts\python tools/dod.py --fast      # solo compile + ratchet (segundos)
+
+# Solo la suite (usar el Python del venv: el del sistema no tiene firebase_admin)
+venv\Scripts\python -m pytest tests/ -q
 ```
 
-There is no lint command configured.
+## Verificación: DoD y ratchet (AOS-02, 2026-10-04)
+
+- `tools/dod.py` encadena los gates de más barato a más caro y para en el primer rojo.
+  Un prerrequisito ausente (ruff, pytest-cov) es **rojo**, nunca verde por omisión.
+  Deps de desarrollo: `pip install -r requirements-dev.txt` (no van a Render).
+- `tools/ratchet.py` mide la deuda y la compara con `tools/ratchet-baseline.json`
+  (ruff, mypy, ficheros sin test, ficheros sin feature doc, binds a `0.0.0.0`). **Falla en las
+  dos direcciones**: si una métrica sube, y si baja sin actualizar la baseline. Cuando pagas
+  deuda: `python tools/ratchet.py --bless` **en el mismo commit** (regla A-8 de
+  `docs/GUARDRAILS.md` del repo meta). `--bless` se niega si algo empeoró.
+- `coverage_floor` es el único campo manual de la baseline: se escribe con el `TOTAL` que
+  imprime pytest-cov, redondeado hacia abajo, y solo sube. Exclusiones en `.coveragerc`, cada
+  una con su motivo.
+- Lint: `ruff` (reglas en `ruff.toml`) y `mypy`, ambos **como ratchet**, no como gate duro:
+  la baseline arrancó en 102 y 65 el 2026-10-04 y solo puede bajar. Nuevo código entra limpio;
+  una supresión puntual lleva su motivo en el mismo comentario (`# noqa: XXX — por qué`).
+- CI: `.github/workflows/ci.yml` (dod + gitleaks sobre todo el historial + `pip-audit`
+  informativo) y `deploy-smoke.yml` (tras el deploy: `/` 200 y `/auth/dev-token` 404).
 
 ## Architecture
 
@@ -432,6 +454,9 @@ The lifespan also creates a shared `httpx.AsyncClient` stored in `app.state.http
 
 Before any production deployment:
 
+- CI (`ci.yml`) en verde en el commit que se pushea; Render debe tener **Auto-Deploy: «After CI
+  Checks Pass»** para que un push en rojo no llegue a producción (TD-02). Tras el deploy,
+  `deploy-smoke.yml` comprueba `/` y `/auth/dev-token`.
 - ~~`auth/service.py` `_set_refresh_cookie` and `auth/router.py` `logout`: `secure=False` → `secure=True`~~ — resuelto (SEC-01): ahora sale de `COOKIE_SECURE`, que por defecto es `true`. No dejar `COOKIE_SECURE=false` en el entorno de producción.
 - `.env` de producción: `ENV=production` (SEC-02) — desactiva `/auth/dev-token` de forma permanente
 - `.env`: `BASE_URL` and `FRONTEND_URL` → `https://` URLs
