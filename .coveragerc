@@ -2,6 +2,8 @@
 # - tools/ratchet.py y tools/dod.py: tooling del DoD. Sus tests (tests/test_ratchet.py) los
 #   ejecutan como subproceso, asi que coverage no los ve aunque esten probados.
 # - verify_weapon_category.py: script manual de una investigacion, no codigo de la app.
+# - tests/*: los tests no son codigo a cubrir; contarlos inflaba el total (84 % vs 68 % real).
+# - venv/*: dependencias de terceros.
 [run]
 omit =
     tools/ratchet.py

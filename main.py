@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 import uvicorn
 
@@ -135,9 +136,11 @@ app.include_router(stats_router)
 
 
 # HEAD además de GET: los pingers gratuitos (UptimeRobot) solo hacen HEAD (PERF-07).
+# `commit`: el SHA desplegado (Render lo inyecta en RENDER_GIT_COMMIT). Lo lee
+# deploy-smoke.yml para esperar al deploy NUEVO y no dar por bueno el anterior (AOS-02).
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
-    return {"status": "ok"}
+    return {"status": "ok", "commit": os.environ.get("RENDER_GIT_COMMIT")}
 
 
 if __name__ == "__main__":
