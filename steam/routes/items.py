@@ -5,6 +5,7 @@ import time
 from collections import deque
 from datetime import date, timedelta
 from functools import partial
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -13,7 +14,6 @@ from settings import (
     INVENTORY_429_MAX_RETRIES, INVENTORY_429_BACKOFF_BASE, INVENTORY_429_BACKOFF_CAP,
 )
 from stores import (
-    PROFILE_CACHE_TTL, INVENTORY_CACHE_TTL, ITEM_HISTORY_CACHE_TTL,
     INVENTORY_REFRESH_COOLDOWN,
     _profile_cache, _inventory_cache, _item_history_cache,
     _inventory_refresh_cooldown,
@@ -40,10 +40,10 @@ _HISTORY_MARKETS = {"buff", "csfloat"}
 ITEM_HISTORY_LIMITER_TIMEOUT = 3.0
 
 
-def _upstream_busy(cached: tuple | None):
+def _upstream_busy(stale: Any):
     """Ventana de steamwebapi llena: caché caducada si la hay; si no, 503 con Retry-After."""
-    if cached:
-        return cached[0]
+    if stale is not None:
+        return stale
     raise HTTPException(status_code=503, detail=UPSTREAM_RATE_LIMIT_DETAIL, headers={"Retry-After": "60"})
 
 logger = logging.getLogger("uvicorn.error")
@@ -56,9 +56,8 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
     steam_id: str = user["sub"]
 
     now = time.monotonic()
-    cached = _profile_cache.get(steam_id)
-    if cached and now - cached[1] < PROFILE_CACHE_TTL:
-        profile = cached[0]
+    profile = _profile_cache.fresh(steam_id, now)
+    if profile is not None:
         return profile if "steam64_id" in profile else {**profile, "steam64_id": steam_id}
 
     try:
@@ -82,7 +81,7 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
         "isOnline":       data.get("personastate", 0) != 0,
         "steam64_id":     steam_id,
     }
-    _profile_cache[steam_id] = (profile, now)
+    _profile_cache.put(steam_id, profile, now)
     return profile
 
 
@@ -143,7 +142,7 @@ def _log_429(steam_id: str, origin: str, retry_after: float | None, served: str)
 
 
 async def _store(steam_id: str, items: list, now: float) -> None:
-    _inventory_cache[steam_id] = (items, now)
+    _inventory_cache.put(steam_id, items, now)
     try:
         await inventory_snapshot_repo.save(steam_id, items)
     except Exception as exc:  # noqa: BLE001 — best-effort: nunca romper /inventory
@@ -229,9 +228,9 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
     steam_id: str = user["sub"]
 
     now = time.monotonic()
-    cached = _inventory_cache.get(steam_id)
-    if cached and now - cached[1] < INVENTORY_CACHE_TTL:
-        return cached[0]
+    hit = _inventory_cache.fresh(steam_id, now)
+    if hit is not None:
+        return hit
 
     # Con un reintento en curso no se vuelve a llamar: cada GET extra sería otro 429.
     if steam_id in _retry_tasks and (snap := await _snapshot_response(steam_id)):
@@ -280,9 +279,9 @@ async def get_item_history(
     days = max(1, min(days, 365))  # el frontend pide por timeframe; acotar el rango
     cache_key = f"{name}:{interval}:{market or 'steam'}:{days}"
     now = time.monotonic()
-    cached = _item_history_cache.get(cache_key)
-    if cached and now - cached[1] < ITEM_HISTORY_CACHE_TTL:
-        return cached[0]
+    hit = _item_history_cache.fresh(cache_key, now)
+    if hit is not None:
+        return hit
 
     # Buff163/CSFloat usan el endpoint por-market (fechas + quantity); Steam usa la
     # ruta legacy (interval + sold). Distintos hosts, params y forma de respuesta.
@@ -301,7 +300,7 @@ async def get_item_history(
     try:
         await asyncio.wait_for(_history_limiter.acquire(), timeout=ITEM_HISTORY_LIMITER_TIMEOUT)
     except asyncio.TimeoutError:
-        return _upstream_busy(cached)
+        return _upstream_busy(_item_history_cache.stale(cache_key))
 
     try:
         data = await fetch()
@@ -314,7 +313,7 @@ async def get_item_history(
         return []
     except RateLimited:
         logger.warning("[item-history] steamwebapi 429 for %s (%s)", name, market or "steam")
-        return _upstream_busy(cached)
+        return _upstream_busy(_item_history_cache.stale(cache_key))
     except UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
@@ -330,5 +329,5 @@ async def get_item_history(
         ],
         key=lambda p: p["date"],
     )
-    _item_history_cache[cache_key] = (points, now)
+    _item_history_cache.put(cache_key, points, now)
     return points

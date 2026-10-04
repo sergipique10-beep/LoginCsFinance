@@ -10,7 +10,7 @@ import pytest
 from steam import price_capture, services
 from steam.clients import steamwebapi
 from steam.errors import UpstreamError
-from stores import _item_history_cache, _lookup_failed_at, _market_lookup_cache, _market_providers_cache
+from stores import _item_history_cache, _market_lookup_cache, _market_providers_cache
 
 FAKE_KEY = "test-sentinel-not-a-real-key-0001"
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 @pytest.fixture(autouse=True)
 def _setup(monkeypatch):
     monkeypatch.setattr(steamwebapi, "STEAM_API_KEY", FAKE_KEY)
-    stores = (_item_history_cache, _lookup_failed_at, _market_lookup_cache, _market_providers_cache)
+    stores = (_item_history_cache, _market_lookup_cache, _market_providers_cache)
     for s in stores:
         s.clear()
     steamwebapi._history_limiter._calls = []

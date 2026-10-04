@@ -9,8 +9,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from settings import CAP_TICK_TOKEN, PRICE_TICK_TOKEN, TRENDING_TRACK_TOP
 from stores import (
-    MARKET_INDEX_CACHE_TTL,
-    SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL, ITEM_PRICE_CACHE_TTL,
     _market_index_cache, _topmovers_raw_cache,
     _search_cache, _market_prices_cache, _item_price_cache,
 )
@@ -180,11 +178,11 @@ def _turnover(item: Mapping[str, Any]) -> float:
     """
     return (item.get("priceLatest") or 0) * (item.get("sold24h") or 0)
 
-def _quota_exhausted(cached: tuple | None):
+def _quota_exhausted(stale: Any):
     """SEC-16 — 402 de steamwebapi: mejor un dato caducado que un error, porque la
     cuota no vuelve hasta el día 10. Sin caché, 503 con `upstream_quota`."""
-    if cached:
-        return cached[0]
+    if stale is not None:
+        return stale
     raise HTTPException(status_code=503, detail=UPSTREAM_QUOTA_DETAIL)
 
 
@@ -263,7 +261,7 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
         logger.warning("[market-movers] /items returned unexpected type: %s", type(data).__name__)
 
     # ── Fallback: market-index topmovers (free plan) ─────────────────────────
-    raw_topmovers = _topmovers_raw_cache.get("latest")
+    raw_topmovers = _topmovers_raw_cache.stale("latest")
     if not raw_topmovers:
         # topmovers cache is cold — fetch market-index now to populate it
         try:
@@ -275,15 +273,15 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
                 if gainers:
                     logger.info("[market-movers] topmovers gainer keys: %s", list(gainers[0].keys()))
                     logger.info("[market-movers] topmovers gainer sample: %s", gainers[0])
-                _topmovers_raw_cache["latest"] = (gainers, losers, now)
-                raw_topmovers = _topmovers_raw_cache["latest"]
+                _topmovers_raw_cache.put("latest", (gainers, losers), now)
+                raw_topmovers = (gainers, losers)
         except Exception as exc:
             # Un status distinto de 200 se salta en silencio, como antes del cliente.
             if not (isinstance(exc, UpstreamError) and exc.status is not None):
                 logger.warning("[market-movers] could not fetch market-index for topmovers: %s", exc)
 
     if raw_topmovers:
-        gainers, losers, _ = raw_topmovers
+        gainers, losers = raw_topmovers
         fallback = _build_movers_from_topmovers(gainers, losers)
         if fallback:
             await _fetch_static_images(client)
@@ -318,9 +316,9 @@ async def get_market_items(
 
     cache_key = query.lower()
     now = time.monotonic()
-    cached = _search_cache.get(cache_key)
-    if cached and now - cached[1] < SEARCH_CACHE_TTL:
-        return cached[0]
+    hit = _search_cache.fresh(cache_key, now)
+    if hit is not None:
+        return hit
 
     try:
         data = await steamwebapi.items(
@@ -329,7 +327,7 @@ async def get_market_items(
     except (SourceTimeout, SourceUnavailable) as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
     except QuotaExhausted:
-        return _quota_exhausted(cached)
+        return _quota_exhausted(_search_cache.stale(cache_key))
     except UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
@@ -347,7 +345,7 @@ async def get_market_items(
     result = await _enrich_market_prices(request.app.state.http_client, result)
     _enrich_images_from_cache(result)
 
-    _search_cache[cache_key] = (result, now)
+    _search_cache.put(cache_key, result, now)
     logger.info("[market-items] q=%r → %d results", query, len(result))
     return result
 
@@ -371,9 +369,9 @@ async def get_market_price(
 
     cache_key = query.lower()
     now = time.monotonic()
-    cached = _item_price_cache.get(cache_key)
-    if cached and now - cached[1] < ITEM_PRICE_CACHE_TTL:
-        return cached[0]
+    hit = _item_price_cache.fresh(cache_key, now)
+    if hit is not None:
+        return hit
 
     try:
         data = await steamwebapi.items(
@@ -382,7 +380,7 @@ async def get_market_price(
     except (SourceTimeout, SourceUnavailable) as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
     except QuotaExhausted:
-        return _quota_exhausted(cached)
+        return _quota_exhausted(_item_price_cache.stale(cache_key))
     except UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
@@ -406,7 +404,7 @@ async def get_market_price(
     await _fetch_static_images(request.app.state.http_client)
     _enrich_images_from_cache([item])
 
-    _item_price_cache[cache_key] = (item, now)
+    _item_price_cache.put(cache_key, item, now)
     logger.info("[market-price] name=%r → hit", query)
     return item
 
@@ -465,7 +463,7 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[SkinCard]:
         logger.warning("[market-trending] /items returned unexpected type: %s", type(data).__name__)
 
     # ── Fallback: topmovers from cache (free plan) ────────────────────────────
-    raw_topmovers = _topmovers_raw_cache.get("latest")
+    raw_topmovers = _topmovers_raw_cache.stale("latest")
     if not raw_topmovers:
         try:
             mi_data = await steamwebapi.market_index(client, timeout=15.0)
@@ -473,15 +471,15 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[SkinCard]:
                 tm = mi_data.get("topmovers", {})
                 gainers = tm.get("gainers", [])
                 losers  = tm.get("losers", [])
-                _topmovers_raw_cache["latest"] = (gainers, losers, now)
-                raw_topmovers = _topmovers_raw_cache["latest"]
+                _topmovers_raw_cache.put("latest", (gainers, losers), now)
+                raw_topmovers = (gainers, losers)
         except Exception as exc:
             # Un status distinto de 200 se salta en silencio, como antes del cliente.
             if not (isinstance(exc, UpstreamError) and exc.status is not None):
                 logger.warning("[market-trending] could not fetch market-index for topmovers: %s", exc)
 
     if raw_topmovers:
-        gainers, losers, _ = raw_topmovers
+        gainers, losers = raw_topmovers
         combined = gainers + losers
         if combined:
             await _fetch_static_images(client)
@@ -513,9 +511,9 @@ async def get_market_index(
 ):
     cache_key = tf
     now = time.monotonic()
-    cached = _market_index_cache.get(cache_key)
-    if cached and now - cached[1] < MARKET_INDEX_CACHE_TTL:
-        return cached[0]
+    hit = _market_index_cache.fresh(cache_key, now)
+    if hit is not None:
+        return hit
 
     try:
         data = await steamwebapi.market_index(request.app.state.http_client)
@@ -525,7 +523,7 @@ async def get_market_index(
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
     except QuotaExhausted:
         logger.warning("[market-index] daily limit reached (402)")
-        return _quota_exhausted(cached)
+        return _quota_exhausted(_market_index_cache.stale(cache_key))
     except UpstreamError as exc:
         logger.error("[market-index] steamwebapi returned %s | body: %s", exc.status, exc.body_excerpt[:500])
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
@@ -556,7 +554,7 @@ async def get_market_index(
         if gainers:
             logger.info("[market-index] topmovers gainer keys: %s", list(gainers[0].keys()))
             logger.info("[market-index] topmovers gainer sample: %s", gainers[0])
-        _topmovers_raw_cache["latest"] = (gainers, losers, now)
+        _topmovers_raw_cache.put("latest", (gainers, losers), now)
         turnover24h = float(data.get("turnover24h") or 0)
         sold24h = int(data.get("sold24h") or 0)
     else:
@@ -585,7 +583,7 @@ async def get_market_index(
         },
         "history": [_map_market_index_point(p) for p in raw_points],
     }
-    _market_index_cache[cache_key] = (result, now)
+    _market_index_cache.put(cache_key, result, now)
     return result
 
 
@@ -868,9 +866,9 @@ async def get_market_prices(
 
     cache_key = f"{market}:{(name or '').lower()}:{(currency or 'usd').lower()}"
     now = time.monotonic()
-    cached = _market_prices_cache.get(cache_key)
-    if cached and now - cached[1] < MARKET_PRICES_CACHE_TTL:
-        return cached[0]
+    hit = _market_prices_cache.fresh(cache_key, now)
+    if hit is not None:
+        return hit
 
     params: dict = {}
     if name:
@@ -885,12 +883,12 @@ async def get_market_prices(
     except SourceUnavailable as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
     except QuotaExhausted:
-        return _quota_exhausted(cached)
+        return _quota_exhausted(_market_prices_cache.stale(cache_key))
     except UpstreamError as exc:
         if exc.status == 404:
             raise HTTPException(status_code=404, detail=f"Market '{market}' not found or no prices available") from exc
         raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    _market_prices_cache[cache_key] = (data, now)
+    _market_prices_cache.put(cache_key, data, now)
     logger.info("[market-prices] market=%r name=%r → %s items", market, name, len(data) if isinstance(data, list) else "object")
     return data

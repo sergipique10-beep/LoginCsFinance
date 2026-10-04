@@ -70,7 +70,7 @@ async def _ver_inventario(
 
     ``steam_id`` se inyecta desde el JWT en el router — no viene de Gemini.
     """
-    from stores import _inventory_cache, INVENTORY_CACHE_TTL
+    from stores import _inventory_cache
     from steam.clients import steamwebapi
     from steam.errors import InvalidPayload, UpstreamError
     from steam.services import (
@@ -82,9 +82,9 @@ async def _ver_inventario(
     import time
 
     now = time.monotonic()
-    cached = _inventory_cache.get(steam_id)
-    if cached and now - cached[1] < INVENTORY_CACHE_TTL:
-        items = cached[0]
+    hit = _inventory_cache.fresh(steam_id, now)
+    if hit is not None:
+        items = hit
     else:
         try:
             data = await steamwebapi.inventory(client, steam_id)
@@ -103,7 +103,7 @@ async def _ver_inventario(
         items = [_map_item(item) for item in data]
         items = await _enrich_market_prices(client, items)
         _enrich_images_from_cache(items)
-        _inventory_cache[steam_id] = (items, now)
+        _inventory_cache.put(steam_id, items, now)
 
     return _resumen_inventario(items, buscar)
 

@@ -7,6 +7,7 @@ TODO: replace _nonces, _auth_codes, _rate_store,
       _profile_cache, _inventory_cache, _market_index_cache and
       _item_history_cache with Redis.
 """
+import time
 from collections import defaultdict
 from datetime import timedelta
 from typing import Any
@@ -52,28 +53,105 @@ FX_CACHE_TTL = 86400         # 24 h — el BCE publica un tipo al día (UX-08)
 
 INVENTORY_REFRESH_COOLDOWN = 3600  # 1h — manual "force refresh" button, protects shared steamwebapi quota
 
+# Backoff tras un fallo o un vacío: 5 min en vez del TTL largo, para no reintentar en
+# cada petición contra una fuente caída (CAL-08, PERF-17) ni guardar 23 h un vacío.
+HISTORY_EMPTY_TTL = 300   # histórico de csfloat vacío o fallido (antes _HISTORY_EMPTY_TTL)
+IMAGE_FAIL_TTL = 300      # todas las fuentes del catálogo fallaron (CAL-08)
+LOOKUP_FAIL_TTL = 300     # lookup de precios por mercado o lista de proveedores (PERF-17)
+
+
+# ── TtlCache ───────────────────────────────────────────────────────────────────
+
+class TtlCache(dict):
+    """Caché `clave → (valor, ts)` con la regla del TTL en un solo sitio (CLEAN-09).
+
+    Sigue siendo un dict, así que lo que lea o escriba `(valor, ts)` a mano funciona.
+    `ts` es `time.monotonic()`. Migrar a Redis (CAL-04) es cambiar esta clase.
+
+    - `fresh`: el valor si está dentro del TTL; si no, None. `empty_ttl` acorta el
+      TTL de los valores vacíos (un histórico `[]` no vale 23 h).
+    - `stale`: el último valor, tenga la edad que tenga (stale-on-error).
+    - `mark_failed` / `in_backoff`: caché negativo aparte del valor, para no pisar el
+      último dato bueno (PERF-17). Un `put` lo borra.
+    - `max_entries`: al pasarse, `put` expulsa las entradas más antiguas. Sin limpieza
+      periódica: no hay scheduler (los ticks son crons externos).
+    """
+
+    def __init__(self, ttl: float, *, fail_ttl: float = 0, max_entries: int | None = None):
+        super().__init__()
+        self.ttl = ttl
+        self.fail_ttl = fail_ttl
+        self.max_entries = max_entries
+        self.failed_at: dict[Any, float] = {}
+        self.hits = self.misses = self.stale_served = 0
+
+    def fresh(self, key: Any, now: float | None = None, *, empty_ttl: float | None = None) -> Any:
+        entry = self.get(key)
+        if entry is not None:
+            value, ts = entry
+            ttl = empty_ttl if empty_ttl is not None and not value else self.ttl
+            if (time.monotonic() if now is None else now) - ts < ttl:
+                self.hits += 1
+                return value
+        self.misses += 1
+        return None
+
+    def stale(self, key: Any) -> Any:
+        entry = self.get(key)
+        if entry is None:
+            return None
+        self.stale_served += 1
+        return entry[0]
+
+    def put(self, key: Any, value: Any, now: float | None = None) -> None:
+        self[key] = (value, time.monotonic() if now is None else now)
+        self.failed_at.pop(key, None)
+        if self.max_entries is not None:
+            while len(self) > self.max_entries:
+                del self[min(self, key=lambda k: self[k][1])]
+
+    def mark_failed(self, key: Any, now: float | None = None) -> None:
+        self.failed_at[key] = time.monotonic() if now is None else now
+
+    def in_backoff(self, key: Any, now: float | None = None) -> bool:
+        failed = self.failed_at.get(key)
+        return failed is not None and (time.monotonic() if now is None else now) - failed < self.fail_ttl
+
+    def clear(self) -> None:
+        super().clear()
+        self.failed_at.clear()
+        self.hits = self.misses = self.stale_served = 0
+
+    def stats(self) -> dict[str, int]:
+        return {"entries": len(self), "hits": self.hits, "misses": self.misses,
+                "stale_served": self.stale_served}
+
+
 # ── Cache stores ───────────────────────────────────────────────────────────────
 
-_profile_cache: dict[str, tuple[dict, float]] = {}
-_inventory_cache: dict[str, tuple[list, float]] = {}
-_market_index_cache: dict[str, tuple[dict, float]] = {}
-_item_history_cache: dict[str, tuple[list, float]] = {}
-_topmovers_raw_cache: dict[str, tuple[list, list, float]] = {}  # "latest" → (gainers, losers, ts)
-_search_cache: dict[str, tuple[list, float]] = {}
-_item_price_cache: dict[str, tuple[Any, float]] = {}  # markethashname.lower() → (ISkinCard, ts)
-_market_prices_cache: dict[str, tuple[Any, float]] = {}
+_profile_cache = TtlCache(PROFILE_CACHE_TTL)        # steam_id → perfil
+_inventory_cache = TtlCache(INVENTORY_CACHE_TTL)    # steam_id → items
+_market_index_cache = TtlCache(MARKET_INDEX_CACHE_TTL)  # tf → índice
+# Compartida por /item/history y _fetch_history_for_item, con claves de forma distinta.
+_item_history_cache = TtlCache(ITEM_HISTORY_CACHE_TTL)
+# "latest" → (gainers, losers). Solo se lee como stale: darle TTL es CAL-12.
+_topmovers_raw_cache = TtlCache(MARKET_INDEX_CACHE_TTL)
+# Las tres con clave del usuario llevan tope de entradas (Render free: 512 MB).
+_search_cache = TtlCache(SEARCH_CACHE_TTL, max_entries=200)        # query → ~30 items (~60 KB)
+_item_price_cache = TtlCache(ITEM_PRICE_CACHE_TTL, max_entries=500)  # markethashname.lower() → item
+# Sin `name`, el valor es la lista entera de precios de un mercado (MB): tope bajo.
+_market_prices_cache = TtlCache(MARKET_PRICES_CACHE_TTL, max_entries=100)
 _leetify_cache: dict[tuple[str, str], tuple[Any, float]] = {}  # (steam_id, ruta) → (json, ts)
-_news_cache: dict[int, tuple[list, float]] = {}  # count → (items, ts)
+_news_cache = TtlCache(NEWS_CACHE_TTL)  # count → items
 _item_image_cache: dict[str, str] = {}  # markethashname/marketname → image URL
 # UX-39: rareza del catálogo estático (ByMykel), poblada junto al caché de imágenes.
 _item_rarity_cache: dict[str, tuple[str, str]] = {}  # markethashname → (rareza, color hex sin '#')
-_image_cache_meta: dict[str, float] = {}  # "ts" → última carga buena; "failed_ts" → último fallo total (CAL-08)
-_market_lookup_cache: dict[str, tuple[dict, float]] = {}  # market → ({name: price}, ts)
-_market_providers_cache: dict[str, tuple[list, float]] = {}  # "providers" → (list, ts)
-# PERF-17: caché negativo de los dos de arriba. "lookup:<market>" / "providers" → ts
-# del último fallo. Aparte para no pisar el último dato bueno (stale-on-error).
-_lookup_failed_at: dict[str, float] = {}
-_fx_cache: dict[str, tuple[float, float]] = {}  # "usdeur" → (rate, ts). Sin TTL al servir el fallback: ver services._fetch_fx_rate
+# "catalog" → nº de entradas de la última carga buena; fallo total → mark_failed (CAL-08).
+_image_cache_meta = TtlCache(IMAGE_CACHE_TTL, fail_ttl=IMAGE_FAIL_TTL)
+_market_lookup_cache = TtlCache(MARKET_LOOKUP_CACHE_TTL, fail_ttl=LOOKUP_FAIL_TTL)  # market → {name: price}
+_market_providers_cache = TtlCache(MARKET_PROVIDERS_CACHE_TTL, fail_ttl=LOOKUP_FAIL_TTL)  # "providers" → list
+# "usdeur" → tasa. Sin TTL al servir el fallback: ver services._fetch_fx_rate
+_fx_cache = TtlCache(FX_CACHE_TTL)
 
 _inventory_refresh_cooldown: dict[str, float] = {}  # steam_id → monotonic timestamp of last forced refresh
 

@@ -6,10 +6,9 @@ from datetime import date, timedelta
 import httpx
 
 from stores import (
-    ITEM_HISTORY_CACHE_TTL, IMAGE_CACHE_TTL, MARKET_LOOKUP_CACHE_TTL,
-    MARKET_PROVIDERS_CACHE_TTL, FX_CACHE_TTL,
+    HISTORY_EMPTY_TTL, IMAGE_FAIL_TTL,
     _item_history_cache, _item_image_cache, _item_rarity_cache, _image_cache_meta,
-    _market_lookup_cache, _market_providers_cache, _fx_cache, _lookup_failed_at,
+    _market_lookup_cache, _market_providers_cache, _fx_cache,
 )
 from steam.clients import fx, static_catalog, steamwebapi
 from steam.clients.steamwebapi import _history_limiter
@@ -39,19 +38,16 @@ _WEAR_NAMES = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Batt
 
 # ── Price history ─────────────────────────────────────────────────────────────
 
-_HISTORY_EMPTY_TTL = 300  # 5 min backoff for failed/empty results to avoid retry storms
-
-
 async def _fetch_history_for_item(
     client: httpx.AsyncClient, name: str, *, limiter_timeout: float | None = None,
 ) -> list:
     cache_key = f"{name}:csfloat:35d"
     now = time.monotonic()
-    cached = _item_history_cache.get(cache_key)
-    if cached:
-        ttl = _HISTORY_EMPTY_TTL if not cached[0] else ITEM_HISTORY_CACHE_TTL
-        if now - cached[1] < ttl:
-            return cached[0]
+    # Un vacío (fallo o sin datos) vale 5 min, no 23 h: evita tormentas de reintentos
+    # sin dejar fuera durante un día una skin que vuelve a tener histórico.
+    hit = _item_history_cache.fresh(cache_key, now, empty_ttl=HISTORY_EMPTY_TTL)
+    if hit is not None:
+        return hit
     try:
         if limiter_timeout is None:
             await _history_limiter.acquire()
@@ -73,11 +69,11 @@ async def _fetch_history_for_item(
             raise   # red: lo registra el except genérico de abajo, como antes
         except UpstreamError as exc:
             logger.warning("[item-history] %s → HTTP %s: %s", name, exc.status, exc.body_excerpt[:200])
-            _item_history_cache[cache_key] = ([], now)
+            _item_history_cache.put(cache_key, [], now)
             return []
         if not isinstance(raw, list):
             logger.warning("[item-history] %s → unexpected format: %s", name, str(raw)[:200])
-            _item_history_cache[cache_key] = ([], now)
+            _item_history_cache.put(cache_key, [], now)
             return []
         pts = sorted(
             [
@@ -91,13 +87,13 @@ async def _fetch_history_for_item(
             key=lambda p: p["date"],
         )
         logger.info("[item-history] %s → %d points (csfloat)", name, len(pts))
-        _item_history_cache[cache_key] = (pts, now)
+        _item_history_cache.put(cache_key, pts, now)
         return pts
     except HistoryBusy:
         raise
     except Exception as exc:
         logger.warning("[item-history] %s → exception: %s", name, exc)
-        _item_history_cache[cache_key] = ([], now)
+        _item_history_cache.put(cache_key, [], now)
         return []
 
 
@@ -220,24 +216,15 @@ def _rarity_from_cache(name: str) -> tuple[str, str] | None:
     return found
 
 
-_IMAGE_EMPTY_TTL = 300  # 5 min de backoff si fallan todas las fuentes, como _HISTORY_EMPTY_TTL
-
-
 # PERF-18: una sola recarga a la vez. Sin él, N peticiones con la caché caducada
 # descargaban N veces los siete JSON (estampida tras despertar Render).
 _image_cache_lock = asyncio.Lock()
 
 
 def _image_cache_fresh(now: float) -> bool:
-    # time.monotonic() arranca en el uptime del sistema, no en 0. Usar 0.0 como
-    # "nunca cargado" hacía que `now - 0.0 < TTL` fuese True en cualquier equipo
-    # con <23h de uptime → retornaba sin poblar el cache. Centinela None explícito.
-    last_ts = _image_cache_meta.get("ts")
-    if last_ts is not None and now - last_ts < IMAGE_CACHE_TTL:
-        return True
     # CAL-08: tras un fallo total, backoff corto en vez de reintentar en cada petición.
-    failed_ts = _image_cache_meta.get("failed_ts")
-    return failed_ts is not None and now - failed_ts < _IMAGE_EMPTY_TTL
+    return (_image_cache_meta.fresh("catalog", now) is not None
+            or _image_cache_meta.in_backoff("catalog", now))
 
 
 async def _fetch_static_images(client: httpx.AsyncClient) -> None:
@@ -297,15 +284,14 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
         except Exception as exc:
             _log_catalog_failure(label, exc)
 
-    # CAL-08: `ts` significa "última carga buena" (stores.py). Si no cargó ninguna
+    # CAL-08: "catalog" significa "última carga buena" (stores.py). Si no cargó ninguna
     # fuente (GitHub caído en el arranque de Render), no se estampa: se reintenta
-    # pasado _IMAGE_EMPTY_TTL en vez de pasar 23 h con `image: ""`.
+    # pasado IMAGE_FAIL_TTL en vez de pasar 23 h con `image: ""`.
     if not fetched:
-        _image_cache_meta["failed_ts"] = now
-        logger.warning("[image-cache] all sources failed; retry in %ds", _IMAGE_EMPTY_TTL)
+        _image_cache_meta.mark_failed("catalog", now)
+        logger.warning("[image-cache] all sources failed; retry in %ds", IMAGE_FAIL_TTL)
         return
-    _image_cache_meta["ts"] = now
-    _image_cache_meta.pop("failed_ts", None)
+    _image_cache_meta.put("catalog", len(_item_image_cache), now)
     logger.info(
         "[image-cache] loaded %d total entries (%+d new) — sources: %s",
         len(_item_image_cache),
@@ -319,25 +305,24 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
 _TRACKED_MARKETS = ("csfloat", "buff")
 
 
-# PERF-17: tras un fallo, no se reintenta durante 5 min (como _HISTORY_EMPTY_TTL).
-# Sin esto, cada inventario/movers/búsqueda con la fuente caída repetía dos lookups
-# condenados a fallar, gastando cuota y hasta 30 s de timeout.
-_LOOKUP_FAIL_TTL = 300
+# PERF-17: tras un fallo, no se reintenta durante LOOKUP_FAIL_TTL (5 min). Sin esto,
+# cada inventario/movers/búsqueda con la fuente caída repetía dos lookups condenados
+# a fallar, gastando cuota y hasta 30 s de timeout. El backoff vive en la propia caché
+# (`mark_failed`), aparte del último dato bueno.
 
 
-def _in_fail_backoff(key: str, now: float) -> bool:
-    failed = _lookup_failed_at.get(key)
-    return failed is not None and now - failed < _LOOKUP_FAIL_TTL
+def _lookup_stale(market: str) -> dict[str, float]:
+    stale = _market_lookup_cache.stale(market)
+    return stale if stale is not None else {}
 
 
 async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> dict[str, float]:
     now = time.monotonic()
-    cached = _market_lookup_cache.get(market)
-    if cached and now - cached[1] < MARKET_LOOKUP_CACHE_TTL:
-        return cached[0]
-    fail_key = f"lookup:{market}"
-    if _in_fail_backoff(fail_key, now):
-        return (cached[0] if cached else {})
+    hit = _market_lookup_cache.fresh(market, now)
+    if hit is not None:
+        return hit
+    if _market_lookup_cache.in_backoff(market, now):
+        return _lookup_stale(market)
     try:
         try:
             data = await steamwebapi.market_prices(client, market, {"format": "json"}, timeout=30.0)
@@ -345,25 +330,24 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
             raise
         except UpstreamError as exc:
             logger.warning("[market-lookup] %s returned %s", market, exc.status)
-            _lookup_failed_at[fail_key] = now
-            return (cached[0] if cached else {})
+            _market_lookup_cache.mark_failed(market, now)
+            return _lookup_stale(market)
         if not isinstance(data, list):
-            _lookup_failed_at[fail_key] = now
-            return (cached[0] if cached else {})
+            _market_lookup_cache.mark_failed(market, now)
+            return _lookup_stale(market)
         lookup: dict[str, float] = {}
         for item in data:
             name = item.get("market_hash_name") or item.get("markethashname") or item.get("name")
             price = item.get("price") or item.get("value") or 0
             if name and price:
                 lookup[name] = float(price)
-        _market_lookup_cache[market] = (lookup, now)
-        _lookup_failed_at.pop(fail_key, None)
+        _market_lookup_cache.put(market, lookup, now)
         logger.info("[market-lookup] %s: %d prices loaded", market, len(lookup))
         return lookup
     except Exception as exc:
         logger.warning("[market-lookup] could not fetch %s: %s", market, exc)
-        _lookup_failed_at[fail_key] = now
-        return (cached[0] if cached else {})
+        _market_lookup_cache.mark_failed(market, now)
+        return _lookup_stale(market)
 
 
 async def _enrich_market_prices(client: httpx.AsyncClient, items: list) -> list:
@@ -404,9 +388,9 @@ async def _fetch_fx_rate(client: httpx.AsyncClient) -> tuple[float | None, bool]
     y el cliente se queda en USD.
     """
     now = time.monotonic()
-    cached = _fx_cache.get("usdeur")
-    if cached and now - cached[1] < FX_CACHE_TTL:
-        return cached[0], True
+    hit = _fx_cache.fresh("usdeur", now)
+    if hit is not None:
+        return hit, True
     try:
         try:
             data = await fx.latest_usd_eur(client)
@@ -414,30 +398,34 @@ async def _fetch_fx_rate(client: httpx.AsyncClient) -> tuple[float | None, bool]
             raise   # red: lo registra el except genérico de abajo, como antes
         except UpstreamError as exc:
             logger.warning("[fx] frankfurter returned %s", exc.status)
-            return (cached[0], False) if cached else (None, False)
+            return _fx_cache.stale("usdeur"), False
         rate = (data.get("rates") or {}).get("EUR")
         # Un tipo USD/EUR fuera de este rango es un error de la fuente, no un
         # movimiento de mercado: mejor servir el ultimo bueno que corromper precios.
         if not isinstance(rate, (int, float)) or not 0.5 < rate < 2.0:
             logger.warning("[fx] tasa implausible: %r", rate)
-            return (cached[0], False) if cached else (None, False)
-        _fx_cache["usdeur"] = (float(rate), now)
+            return _fx_cache.stale("usdeur"), False
+        _fx_cache.put("usdeur", float(rate), now)
         logger.info("[fx] USD/EUR = %s", rate)
         return float(rate), True
     except Exception as exc:
         logger.warning("[fx] failed: %s", exc)
-        return (cached[0], False) if cached else (None, False)
+        return _fx_cache.stale("usdeur"), False
+
+
+def _providers_stale() -> list[dict]:
+    """PERF-17: con la fuente caída, el último dato bueno si existe; si no, el respaldo."""
+    last = _market_providers_cache.stale("providers")
+    return last if last is not None else _FALLBACK_PROVIDERS
 
 
 async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
     now = time.monotonic()
-    cached = _market_providers_cache.get("providers")
-    if cached and now - cached[1] < MARKET_PROVIDERS_CACHE_TTL:
-        return cached[0]
-    # PERF-17: con la fuente caída, el último dato bueno si existe; si no, el respaldo.
-    stale = cached[0] if cached else _FALLBACK_PROVIDERS
-    if _in_fail_backoff("providers", now):
-        return stale
+    hit = _market_providers_cache.fresh("providers", now)
+    if hit is not None:
+        return hit
+    if _market_providers_cache.in_backoff("providers", now):
+        return _providers_stale()
     try:
         try:
             data = await steamwebapi.info_markets(client)
@@ -445,11 +433,11 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
             raise
         except UpstreamError as exc:
             logger.warning("[market-providers] info/markets returned %s", exc.status)
-            _lookup_failed_at["providers"] = now
-            return stale
+            _market_providers_cache.mark_failed("providers", now)
+            return _providers_stale()
         if not isinstance(data, list):
-            _lookup_failed_at["providers"] = now
-            return stale
+            _market_providers_cache.mark_failed("providers", now)
+            return _providers_stale()
 
         if data:
             logger.info("[market-providers] sample keys: %s", list(data[0].keys()))
@@ -474,12 +462,11 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
         for pid in ("csfloat", "buff"):
             providers.append(lookup.get(pid) or next(f for f in _FALLBACK_PROVIDERS if f["id"] == pid))
 
-        _market_providers_cache["providers"] = (providers, now)
-        _lookup_failed_at.pop("providers", None)
+        _market_providers_cache.put("providers", providers, now)
         logger.info("[market-providers] loaded %d providers", len(providers))
         return providers
     except Exception as exc:
         logger.warning("[market-providers] failed: %s", exc)
-        _lookup_failed_at["providers"] = now
-        return stale
+        _market_providers_cache.mark_failed("providers", now)
+        return _providers_stale()
 

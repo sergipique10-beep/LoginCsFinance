@@ -13,7 +13,7 @@ import pytest
 import main
 from steam.routes import market as market_routes
 from stores import (
-    _fx_cache, _item_history_cache, _item_price_cache, _lookup_failed_at,
+    _fx_cache, _item_history_cache, _item_price_cache,
     _market_index_cache, _market_lookup_cache, _market_prices_cache,
     _market_providers_cache, _search_cache, _topmovers_raw_cache,
 )
@@ -40,7 +40,7 @@ SKIN_CARD_KEYS = {
 }
 
 CACHES = (
-    _fx_cache, _item_history_cache, _item_price_cache, _lookup_failed_at,
+    _fx_cache, _item_history_cache, _item_price_cache,
     _market_index_cache, _market_lookup_cache, _market_prices_cache,
     _market_providers_cache, _search_cache, _topmovers_raw_cache,
 )
