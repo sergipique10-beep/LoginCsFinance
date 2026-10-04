@@ -8,7 +8,10 @@ import httpx
 import pytest
 
 from steam import services
-from stores import _lookup_failed_at, _market_lookup_cache, _market_providers_cache
+from stores import (
+    LOOKUP_FAIL_TTL, MARKET_LOOKUP_CACHE_TTL, MARKET_PROVIDERS_CACHE_TTL,
+    _market_lookup_cache, _market_providers_cache,
+)
 
 
 class _FakeClient:
@@ -27,7 +30,7 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _clean():
-    stores = (_market_lookup_cache, _market_providers_cache, _lookup_failed_at)
+    stores = (_market_lookup_cache, _market_providers_cache)
     saved = [dict(s) for s in stores]
     for s in stores:
         s.clear()
@@ -38,7 +41,10 @@ def _clean():
 
 
 def _expire_backoff(key: str) -> None:
-    _lookup_failed_at[key] = time.monotonic() - services._LOOKUP_FAIL_TTL - 1
+    # CLEAN-09: el backoff vive en cada caché ("lookup:<market>" → _market_lookup_cache).
+    cache, k = ((_market_lookup_cache, key.split(":", 1)[1]) if key.startswith("lookup:")
+                else (_market_providers_cache, key))
+    cache.mark_failed(k, now=time.monotonic() - LOOKUP_FAIL_TTL - 1)
 
 
 # ── _fetch_market_price_lookup ────────────────────────────────────────────────
@@ -70,7 +76,7 @@ async def test_price_lookup_serves_last_good_during_backoff():
     assert await services._fetch_market_price_lookup(good, "csfloat") == {"AK": 10.0}
     # El dato bueno caduca y la fuente cae.
     lookup, _ = _market_lookup_cache["csfloat"]
-    _market_lookup_cache["csfloat"] = (lookup, time.monotonic() - services.MARKET_LOOKUP_CACHE_TTL - 1)
+    _market_lookup_cache["csfloat"] = (lookup, time.monotonic() - MARKET_LOOKUP_CACHE_TTL - 1)
 
     down = _FakeClient(status=500)
     assert await services._fetch_market_price_lookup(down, "csfloat") == {"AK": 10.0}
@@ -84,7 +90,7 @@ async def test_price_lookup_success_clears_failure_mark():
     _expire_backoff("lookup:csfloat")
     good = _FakeClient(status=200, payload=[{"market_hash_name": "AK", "price": 10}])
     await services._fetch_market_price_lookup(good, "csfloat")
-    assert "lookup:csfloat" not in _lookup_failed_at
+    assert not _market_lookup_cache.in_backoff("csfloat")
 
 
 # ── _fetch_market_providers ───────────────────────────────────────────────────
@@ -104,7 +110,7 @@ async def test_providers_serve_last_good_during_backoff():
     good = _FakeClient(status=200, payload=[{"id": "csfloat", "name": "CSFloat X", "logo": "https://l/x.png"}])
     providers = await services._fetch_market_providers(good)
     assert providers[1]["name"] == "CSFloat X"
-    _market_providers_cache["providers"] = (providers, time.monotonic() - services.MARKET_PROVIDERS_CACHE_TTL - 1)
+    _market_providers_cache["providers"] = (providers, time.monotonic() - MARKET_PROVIDERS_CACHE_TTL - 1)
 
     down = _FakeClient(exc=httpx.ConnectError("down"))
     assert await services._fetch_market_providers(down) == providers

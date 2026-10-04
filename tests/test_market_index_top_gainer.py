@@ -63,7 +63,7 @@ def catalogo():
     _item_image_cache.clear(); _item_rarity_cache.clear()
     _register_flat(STICKER)
     _register_skin(SKIN)
-    _image_cache_meta["ts"] = time.monotonic()
+    _image_cache_meta.put("catalog", 1)
     yield
     for store, old in zip((_item_image_cache, _item_rarity_cache, _image_cache_meta), saved):
         store.clear(); store.update(old)

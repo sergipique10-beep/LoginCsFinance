@@ -100,7 +100,7 @@ def _para_llm(items: Sequence[Mapping[str, Any]], limite: int = _TOP_ITEMS_LLM) 
 
 async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncClient) -> dict:
     """Devuelve precio detallado de una skin por nombre exacto."""
-    from stores import _search_cache, SEARCH_CACHE_TTL, _item_price_cache, ITEM_PRICE_CACHE_TTL
+    from stores import _item_price_cache
     from steam.clients import steamwebapi
     from steam.services import (
         _enrich_prices,
@@ -118,9 +118,9 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
     now = time.monotonic()
 
     # Cache de precio individual
-    cached = _item_price_cache.get(cache_key)
-    if cached and now - cached[1] < ITEM_PRICE_CACHE_TTL:
-        return cached[0]
+    hit = _item_price_cache.fresh(cache_key, now)
+    if hit is not None:
+        return hit
 
     client_http: httpx.AsyncClient = client
     data = await steamwebapi.items(
@@ -154,7 +154,7 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
     _enrich_images_from_cache([item])
 
     if enriched:
-        _item_price_cache[cache_key] = (item, now)
+        _item_price_cache.put(cache_key, item, now)
     return item
 
 
@@ -162,7 +162,7 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
 
 async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     """Busca skins por nombre y devuelve resultados relevantes."""
-    from stores import _search_cache, SEARCH_CACHE_TTL
+    from stores import _search_cache
     from steam.clients import steamwebapi
     from steam.services import (
         _enrich_market_prices,
@@ -180,9 +180,9 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
 
     cache_key = q.lower()
     now = time.monotonic()
-    cached = _search_cache.get(cache_key)
-    if cached and now - cached[1] < SEARCH_CACHE_TTL:
-        return _para_llm(cached[0])
+    hit = _search_cache.fresh(cache_key, now)
+    if hit is not None:
+        return _para_llm(hit)
 
     data = await steamwebapi.items(
         client,
@@ -206,7 +206,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
 
     # El cache guarda el item completo (lo consumen otros callers); la proyección
     # es solo para lo que ve el modelo.
-    _search_cache[cache_key] = (result, now)
+    _search_cache.put(cache_key, result, now)
     return _para_llm(result)
 
 

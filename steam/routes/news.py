@@ -5,7 +5,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 
 from auth.service import _get_client_ip, _rate_limit
-from stores import NEWS_CACHE_TTL, _news_cache
+from stores import _news_cache
 from ..clients import steam_news
 from ..errors import SourceTimeout, SourceUnavailable, UpstreamError
 from ..mappers.news import _map_news_item, is_readable_news
@@ -27,9 +27,9 @@ async def get_cs2_news(request: Request, count: int = 5):
     # PERF-06: sin caché cada petición costaba 5,6–12,3 s desde Render (Steam +
     # un GET por noticia para el og:image). Misma forma que _inventory_cache.
     now = time.monotonic()
-    cached = _news_cache.get(count)
-    if cached and now - cached[1] < NEWS_CACHE_TTL:
-        return cached[0]
+    hit = _news_cache.fresh(count, now)
+    if hit is not None:
+        return hit
 
     try:
         # UX-05: se piden más de las necesarias porque después se descartan las
@@ -56,5 +56,5 @@ async def get_cs2_news(request: Request, count: int = 5):
         for item in newsitems
     ])
     items = [_map_news_item(item, i, images[i]) for i, item in enumerate(newsitems)]
-    _news_cache[count] = (items, now)
+    _news_cache.put(count, items, now)
     return items

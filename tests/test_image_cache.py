@@ -1,5 +1,8 @@
 """CAL-08: la caché de imágenes solo se da por cargada si al menos una fuente cargó.
-Si fallan todas, backoff corto (_IMAGE_EMPTY_TTL) en vez de 23 h sin reintento."""
+Si fallan todas, backoff corto (IMAGE_FAIL_TTL) en vez de 23 h sin reintento.
+
+CLEAN-09: la marca de carga buena es la entrada "catalog" de `_image_cache_meta` (una
+TtlCache) y el fallo total, su `mark_failed`."""
 import asyncio
 import time
 from unittest.mock import MagicMock
@@ -7,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from steam import services
-from stores import _image_cache_meta, _item_image_cache, _item_rarity_cache
+from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
 
 N_SOURCES = 7
 
@@ -45,7 +48,7 @@ async def test_total_failure_does_not_stamp_ts():
     await services._fetch_static_images(client)
 
     assert client.calls == N_SOURCES
-    assert "ts" not in _image_cache_meta
+    assert "catalog" not in _image_cache_meta
 
 
 async def test_total_failure_backs_off_then_retries():
@@ -56,7 +59,7 @@ async def test_total_failure_backs_off_then_retries():
     assert client.calls == N_SOURCES
 
     # Pasado el backoff, la siguiente llamada reintenta las siete descargas.
-    _image_cache_meta["failed_ts"] = time.monotonic() - services._IMAGE_EMPTY_TTL - 1
+    _image_cache_meta.mark_failed("catalog", now=time.monotonic() - IMAGE_FAIL_TTL - 1)
     await services._fetch_static_images(client)
     assert client.calls == 2 * N_SOURCES
 
@@ -66,8 +69,8 @@ async def test_one_source_ok_stamps_ts():
 
     await services._fetch_static_images(client)
 
-    assert "ts" in _image_cache_meta
-    assert "failed_ts" not in _image_cache_meta
+    assert "catalog" in _image_cache_meta
+    assert not _image_cache_meta.in_backoff("catalog")
     assert _item_image_cache["AK-47 | Redline"] == "https://img/x.png"
 
     await services._fetch_static_images(client)           # TTL largo: no vuelve a pedir
@@ -104,7 +107,7 @@ async def test_concurrent_reload_downloads_once():
     await asyncio.gather(*[services._fetch_static_images(client) for _ in range(5)])
 
     assert client.calls == N_SOURCES          # 7, no 35
-    assert "ts" in _image_cache_meta
+    assert "catalog" in _image_cache_meta
 
 
 async def test_concurrent_total_failure_downloads_once():
@@ -126,9 +129,9 @@ async def test_cancelled_loader_releases_lock_and_leaves_no_stamp():
         await task
 
     assert not services._image_cache_lock.locked()
-    assert "ts" not in _image_cache_meta
-    assert "failed_ts" not in _image_cache_meta
+    assert "catalog" not in _image_cache_meta
+    assert not _image_cache_meta.in_backoff("catalog")
 
     gate.set()
     await asyncio.wait_for(services._fetch_static_images(client), timeout=1)
-    assert "ts" in _image_cache_meta
+    assert "catalog" in _image_cache_meta

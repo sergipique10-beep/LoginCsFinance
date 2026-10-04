@@ -291,6 +291,11 @@ Dos invariantes del troceado, ambos load-bearing:
 ## In-memory stores (single-worker only)
 
 All stores live in `stores.py`. **TODO:** replace with Redis before running multiple workers.
+Desde CLEAN-09 las cachés de `steam/` son `TtlCache` (subclase de `dict` de `(valor, ts)`):
+migrar a Redis (CAL-04) es cambiar esa clase. Nada en `steam/` ni `tools/` compara `cached[1]`
+a mano (guardia en `tests/test_stores_ttl_cache.py`): se usa `fresh(key, now, empty_ttl=)`,
+`stale(key)` (stale-on-error), `put`, y `mark_failed` / `in_backoff` para el caché negativo,
+aparte del último dato bueno (PERF-17). `stats()` da `hits`, `misses` y `stale_served`.
 
 **Excepción — refresh tokens (SEC-11):** viven en la tabla Supabase `refresh_tokens` (`auth/refresh_repo.py`, DDL en `docs/sql/refresh_tokens.sql`), no en memoria: un dict se vaciaba en cada deploy o despertar de Render y cerraba la sesión de todos. Fila existe y no ha caducado = válido; `consume` es un `DELETE ... RETURNING` (rotación de un solo uso sin carrera) y purga caducados. Si Supabase falla, `session_store()` responde **503, nunca 401**: un 401 hace que el cliente nativo borre su refresh. En tests, `conftest.py` sustituye el repo por `REFRESH_DB` (dict).
 
@@ -299,10 +304,15 @@ All stores live in `stores.py`. **TODO:** replace with Redis before running mult
 | `_nonces` | nonce → (issued_at, redirect_origin) | CSRF protection for OpenID |
 | `_auth_codes` | code → (steam_id, expires_at) | One-time codes (TTL 30 s) |
 | `_rate_store` | ip → [timestamps] | Sliding-window rate limiter |
-| `_profile_cache` | steam_id → (data, cached_at) | 23 h cache — steamwebapi Starter: 20 req/60s per endpoint, 2k/day |
-| `_inventory_cache` | steam_id → (data, cached_at) | 23 h cache |
-| `_market_index_cache` | tf → (data, cached_at) | 23 h cache; keyed by timeframe |
-| `_item_history_cache` | `name:interval` → (data, cached_at) | 23 h cache; shared by `/item/history` and `_enrich_prices` |
+| `_profile_cache` | steam_id → perfil | `TtlCache` 23 h — steamwebapi Starter: 20 req/60s per endpoint |
+| `_inventory_cache` | steam_id → items | `TtlCache` 23 h |
+| `_market_index_cache` | tf → índice | `TtlCache` 23 h; stale ante 402 |
+| `_item_history_cache` | `name:interval:market:days` / `name:csfloat:35d` → puntos | `TtlCache` 23 h; el enriquecimiento pasa `empty_ttl=HISTORY_EMPTY_TTL` (5 min) |
+| `_topmovers_raw_cache` | `"latest"` → (gainers, losers) | `TtlCache`; solo se lee como stale (darle TTL es CAL-12) |
+| `_search_cache` / `_item_price_cache` / `_market_prices_cache` | clave del usuario → resultado | `TtlCache` 5 min con `max_entries` 200 / 500 / 100 (expulsa la más antigua al escribir) |
+| `_market_lookup_cache` / `_market_providers_cache` | market / `"providers"` → precios / lista | `TtlCache` 23 h, backoff `LOOKUP_FAIL_TTL` (5 min) tras un fallo |
+| `_image_cache_meta` | `"catalog"` → nº de entradas | `TtlCache` 23 h; fallo total → backoff `IMAGE_FAIL_TTL` (CAL-08) |
+| `_news_cache` / `_fx_cache` | count / `"usdeur"` | `TtlCache` 30 min / 24 h |
 
 ## Rankings de mercado (`market_trending` / `market_movers`)
 
