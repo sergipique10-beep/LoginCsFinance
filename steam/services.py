@@ -19,6 +19,11 @@ logger = logging.getLogger("uvicorn.error")
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
 STEAM_MARKET_API = "https://www.steamwebapi.com/market"
 
+# SEC-16: cuerpo del 503 cuando steamwebapi da 402 (cuota MENSUAL agotada, reset el
+# día 10). No es un 429: el usuario no va «demasiado rápido» y reintentar no sirve.
+# `code` es el contrato con el front (error.interceptor.ts); el texto puede cambiar.
+UPSTREAM_QUOTA_DETAIL = {"code": "upstream_quota", "message": "steamwebapi monthly quota exhausted"}
+
 # Tipo de cambio: frankfurter sirve los tipos de referencia del BCE, sin clave ni
 # registro. El host .app redirige 301 a .dev, asi que se apunta directo a .dev.
 _FX_API = "https://api.frankfurter.dev/v1/latest"

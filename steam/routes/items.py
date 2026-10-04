@@ -26,6 +26,7 @@ from ..price_capture import QuotaExhausted
 from ..services import (
     STEAM_WEB_API,
     STEAM_MARKET_API,
+    UPSTREAM_QUOTA_DETAIL,
     _enrich_market_prices,
     _enrich_images_from_cache,
 )
@@ -252,7 +253,7 @@ async def _degraded_inventory(request: Request, steam_id: str, exc: Exception, o
         logger.warning("[inventory-402] user=%s origin=%s cuota agotada served=%s",
                        steam_id, origin, "snapshot" if snap else "none")
         if snap is None:
-            raise HTTPException(status_code=502, detail="Steam returned 402")
+            raise HTTPException(status_code=503, detail=UPSTREAM_QUOTA_DETAIL)  # SEC-16
     return snap
 
 

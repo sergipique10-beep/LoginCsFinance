@@ -20,6 +20,7 @@ from ..market_rows import _to_row, _row_to_item
 from ..services import (
     STEAM_WEB_API,
     STEAM_MARKET_API,
+    UPSTREAM_QUOTA_DETAIL,
     _MOVERS_LIMIT,
     _enrich_prices,
     _enrich_market_prices,
@@ -172,6 +173,14 @@ def _turnover(item: dict) -> float:
     vende más piezas que una AK de $28 aunque mueva 17x menos dinero.
     """
     return (item.get("priceLatest") or 0) * (item.get("sold24h") or 0)
+
+def _quota_exhausted(cached: tuple | None):
+    """SEC-16 — 402 de steamwebapi: mejor un dato caducado que un error, porque la
+    cuota no vuelve hasta el día 10. Sin caché, 503 con `upstream_quota`."""
+    if cached:
+        return cached[0]
+    raise HTTPException(status_code=503, detail=UPSTREAM_QUOTA_DETAIL)
+
 
 _VALID_MARKETS = frozenset({
     "buff", "skinport", "skinbaron", "dmarket", "waxpeer",
@@ -340,7 +349,7 @@ async def get_market_items(
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
 
     if resp.status_code == 402:
-        raise HTTPException(status_code=429, detail="Steam API daily limit reached — try again tomorrow")
+        return _quota_exhausted(cached)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
@@ -405,7 +414,7 @@ async def get_market_price(
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
 
     if resp.status_code == 402:
-        raise HTTPException(status_code=429, detail="Steam API daily limit reached — try again tomorrow")
+        return _quota_exhausted(cached)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
@@ -569,7 +578,7 @@ async def get_market_index(
 
     if resp.status_code == 402:
         logger.warning("[market-index] daily limit reached (402)")
-        raise HTTPException(status_code=429, detail="Steam API daily limit reached — try again tomorrow")
+        return _quota_exhausted(cached)
     if resp.status_code != 200:
         logger.error("[market-index] steamwebapi returned %s | body: %s", resp.status_code, resp.text[:500])
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
@@ -935,7 +944,7 @@ async def get_market_prices(
         raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
 
     if resp.status_code == 402:
-        raise HTTPException(status_code=429, detail="Steam API daily limit reached — try again tomorrow")
+        return _quota_exhausted(cached)
     if resp.status_code == 404:
         raise HTTPException(status_code=404, detail=f"Market '{market}' not found or no prices available")
     if resp.status_code != 200:
