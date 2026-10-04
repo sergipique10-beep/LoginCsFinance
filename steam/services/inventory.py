@@ -9,7 +9,7 @@ import httpx
 from steam.adapters.steam_adapter import adapt_inventory
 from steam.api import steam_client
 from steam.domain.models import SkinCard
-from steam.mappers.items import _map_item
+from steam.mappers.item_mapper import _map_item
 from steam.services import catalog, pricing
 
 logger = logging.getLogger("uvicorn.error")

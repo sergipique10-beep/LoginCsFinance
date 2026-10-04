@@ -3,7 +3,7 @@
 Sustituye al self-check `python -m steam.market_rows` (hoy `steam/mappers/rows.py`). `_row_to_item` es lo que sirven
 /market/trending y /market/movers, así que su conjunto de claves es contrato con el front.
 """
-from steam.mappers.rows import _row_to_item, _to_row
+from steam.mappers.row_mapper import _row_to_item, _to_row
 
 ITEM_KEYS = {
     "borderColor", "buffPrice", "csfloatPrice", "exterior", "floatMax", "floatMin",

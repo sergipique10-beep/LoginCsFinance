@@ -4,9 +4,9 @@ from collections.abc import Mapping
 from functools import partial
 from typing import Any
 
-from steam.adapters._common import mappings, require_dict, require_list
+from steam.adapters._common import history_points, mappings, require_dict, require_list
 from steam.domain.models import (
-    IndexPoint, MarketIndexData, PriceQuote, PriceRow, ProfileData, SteamItem, TopMover, Variant,
+    HistoryPoint, IndexPoint, MarketIndexData, PriceQuote, PriceRow, ProfileData, SteamItem, TopMover, Variant,
 )
 from steam.domain.validators import as_bool, as_float, as_int, as_str
 from steam.errors import UNEXPECTED_FORMAT, UnexpectedPayload
@@ -176,6 +176,11 @@ def adapt_market_index(raw: Any) -> MarketIndexData:
         buy_order_price_index=f(d.get("buyorderpriceindex"), field="buyorderpriceindex"),
         dropped_movers=dropped_g + dropped_l,
     )
+
+
+def adapt_legacy_history(raw: Any) -> list[HistoryPoint]:
+    """`/history` (ruta legacy de Steam): fechas y `sold`."""
+    return history_points(raw, "sold", source=SOURCE, op="history")
 
 
 def adapt_price_rows(raw: Any, *, market: str) -> list[PriceRow]:

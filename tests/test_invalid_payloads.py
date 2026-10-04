@@ -45,7 +45,7 @@ def test_un_contenedor_es_invalid_field(fn):
     (steam_adapter.adapt_market_index, {"topmovers": []}), (steam_adapter.adapt_market_index, {"topmovers": {"gainers": {}}}),
     (lambda r: steam_adapter.adapt_price_rows(r, market="buff"), {}),
     (csfloat_adapter.adapt_history, {"error": "x"}), (buff_adapter.adapt_history, [[]]),
-    (news_adapter.adapt_news, []), (news_adapter.adapt_news, {"appnews": []}),
+    (news_adapter.adapt_news, []), (news_adapter.adapt_news, {"appnews": []}), (news_adapter.adapt_news, {"appnews": {"newsitems": "x"}}),
     (news_adapter.adapt_news, {"appnews": {"newsitems": {}}}),
     (lambda r: static_catalog_adapter.adapt_catalog_source(r, label="skins"), {}),
     (provider_adapter.adapt_markets, {"id": "x"}), (fx_adapter.adapt_rates, []),
@@ -163,6 +163,7 @@ def test_news(payload):
     assert a.title == "Release Notes" and a.date == 1700000000 and a.feed_name == "steam_community_announcements"
     assert b.contents == "" and b.author == ""           # noticia con contenido vacío: sigue siendo una noticia
     assert news_adapter.adapt_news({"appnews": {"newsitems": [{}]}})[0].title is None
+    assert news_adapter.adapt_news({}) == [] and news_adapter.adapt_news({"appnews": {}}) == []   # contrato: sin noticias
 
 
 def test_catalogo(payload):
@@ -183,3 +184,4 @@ def test_fx(payload):
     assert fx_adapter.adapt_rates(payload("frankfurter")).eur == 0.92
     assert fx_adapter.adapt_rates({"rates": {}}).eur is None and fx_adapter.adapt_rates({}).eur is None
     assert fx_adapter.adapt_rates({"rates": {"EUR": "lento"}}).eur is None
+    assert fx_adapter.adapt_rates({"rates": {"EUR": "0.88"}}).eur is None   # string: anomalía, no tasa

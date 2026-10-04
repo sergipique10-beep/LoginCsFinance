@@ -102,7 +102,7 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
     """Devuelve precio detallado de una skin por nombre exacto."""
     from stores import _item_price_cache
     from steam.adapters.steam_adapter import adapt_items
-    from steam.mappers.items import _map_item
+    from steam.mappers.item_mapper import _map_item
     from steam.services import catalog, pricing
     from steam.services.market import search_items
 
@@ -157,7 +157,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     from stores import _search_cache
     from steam.domain.names import is_sticker_slab
     from steam.adapters.steam_adapter import adapt_items
-    from steam.mappers.items import _map_item
+    from steam.mappers.item_mapper import _map_item
     from steam.services import catalog, pricing
     from steam.services.market import search_items
 
@@ -205,7 +205,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
 async def _ver_trending(*, client: httpx.AsyncClient) -> list[dict]:
     """Items trending por volumen 24h (desde Supabase)."""
     from steam.rankings_repo import trending_repo
-    from steam.mappers.rows import _row_to_item
+    from steam.mappers.row_mapper import _row_to_item
 
     rows = await trending_repo.fetch_snapshot()
     return _para_llm([_row_to_item(row) for row in rows])
@@ -216,7 +216,7 @@ async def _ver_trending(*, client: httpx.AsyncClient) -> list[dict]:
 async def _ver_movers(*, client: httpx.AsyncClient) -> dict:
     """Top movers (hot & cold) del mercado CS2 24h."""
     from steam.rankings_repo import movers_repo
-    from steam.mappers.rows import _row_to_item
+    from steam.mappers.row_mapper import _row_to_item
 
     rows = await movers_repo.fetch_snapshot()
     hot = _para_llm([_row_to_item(r) for r in rows if r.get("bucket") == "hot"])

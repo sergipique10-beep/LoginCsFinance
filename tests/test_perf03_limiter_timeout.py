@@ -69,7 +69,7 @@ async def test_precio_tool_answers_without_deltas_when_busy_and_does_not_cache(m
     raw = {"markethashname": "AK", "image": "https://img/ak.png", "pricelatestsell": 10}
     client = MagicMock()
     client.get = AsyncMock(return_value=MagicMock(status_code=200, json=lambda: [raw]))
-    monkeypatch.setattr("steam.mappers.items._map_item", lambda r: {"name": "AK", "priceLatest": 10.0})
+    monkeypatch.setattr("steam.mappers.item_mapper._map_item", lambda r: {"name": "AK", "priceLatest": 10.0})
     monkeypatch.setattr(pricing, "enrich_prices", AsyncMock(side_effect=HistoryBusy("AK")))
     monkeypatch.setattr(pricing, "enrich_market_prices", AsyncMock(side_effect=lambda c, items: items))
     monkeypatch.setattr(catalog, "fetch_static_images", AsyncMock())

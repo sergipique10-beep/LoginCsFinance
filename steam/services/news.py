@@ -5,11 +5,12 @@ import time
 import httpx
 
 from stores import _news_cache
+from steam.adapters.news_adapter import adapt_news
 from steam.api import news_client
 from steam.errors import InvalidPayload, UpstreamError
 from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import NewsItem
-from steam.mappers.news import _map_news_item, is_readable_news
+from steam.mappers.news_mapper import _map_news_item, is_readable_news
 
 # Cuántas noticias se piden de más para poder descartar las no latinas (UX-05),
 # y tope duro para que un `count` alto no dispare una petición enorme a Steam.
@@ -44,16 +45,14 @@ async def get_cs2_news(client: httpx.AsyncClient, count: int) -> list[NewsItem]:
     # que no están en alfabeto latino. El tope evita que un `count` alto
     # dispare una petición enorme a Steam.
     fetch_count = min(count * NEWS_OVERFETCH, NEWS_MAX_FETCH)
-    data = await news_client.get_news(client, fetch_count)
-
-    newsitems = data.get("appnews", {}).get("newsitems", [])
+    newsitems = adapt_news(await news_client.get_news(client, fetch_count))   # forma rara → UnexpectedPayload
 
     # UX-05: fuera las ilegibles (ruso, chino...), y recorte al `count` pedido.
     # Si el filtro se lo lleva TODO nos quedamos con las originales: más vale una
     # noticia en ruso que un feed vacío.
     readable = [n for n in newsitems if is_readable_news(n)]
     newsitems = (readable or newsitems)[:count]
-    images = await asyncio.gather(*[_og_image(client, item.get("url", "")) for item in newsitems])
+    images = await asyncio.gather(*[_og_image(client, entry.url or "") for entry in newsitems])
     items = [_map_news_item(item, i, images[i]) for i, item in enumerate(newsitems)]
     _news_cache.put(count, items, now)
     return items

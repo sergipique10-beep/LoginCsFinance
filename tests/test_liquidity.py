@@ -6,8 +6,8 @@ tendría otros. Ver docs/superpowers/specs/2026-07-14-liquidity-score-design.md.
 from steam.adapters.steam_adapter import adapt_item
 from steam.domain.models import TopMover
 from steam.liquidity import compute_liquidity as _compute_liquidity
-from steam.mappers.items import _map_item
-from steam.mappers.movers import _map_topmovers_item
+from steam.mappers.item_mapper import _map_item
+from steam.mappers.movers_mapper import _map_topmovers_item
 from steam.services.market import _MOVERS_SELECT
 
 

@@ -5,6 +5,7 @@ import time
 import httpx
 
 from stores import _fx_cache
+from steam.adapters.fx_adapter import adapt_rates
 from steam.api import fx_client
 from steam.domain.validators import plausible_fx_rate
 from steam.errors.handling import reason_of
@@ -41,7 +42,7 @@ async def fetch_fx_rate(client: httpx.AsyncClient) -> Fetched[float | None]:
         except UpstreamError as exc:
             logger.warning("[fx] frankfurter returned %s", exc.status)
             return _fx_stale(reason_of(exc))
-        rate = (data.get("rates") or {}).get("EUR")
+        rate = adapt_rates(data).eur   # forma rara → UnexpectedPayload, lo recoge el except de abajo
         # Un tipo USD/EUR fuera de este rango es un error de la fuente, no un
         # movimiento de mercado: mejor servir el ultimo bueno que corromper precios.
         if not plausible_fx_rate(rate):

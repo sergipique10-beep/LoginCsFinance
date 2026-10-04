@@ -4,11 +4,12 @@ La Steam News API (appid 730) no admite filtro de idioma: devuelve lo que public
 cada partner. `feedlabel` identifica la fuente, no el idioma, así que el filtro
 mira el propio titular.
 """
-from steam.mappers.news import is_readable_news
+from steam.adapters.news_adapter import adapt_news_entry
+from steam.mappers.news_mapper import is_readable_news
 
 
-def n(title: str) -> dict:
-    return {"title": title}
+def n(title: str):
+    return adapt_news_entry({"title": title})
 
 
 class TestIsReadableNews:
@@ -37,7 +38,7 @@ class TestIsReadableNews:
 
     def test_sin_titular_pasa(self):
         # Sin titular no hay nada que juzgar: que decida el resto del pipeline.
-        assert is_readable_news({})
+        assert is_readable_news(adapt_news_entry({}))
         assert is_readable_news(n("   "))
 
     def test_solo_numeros_y_simbolos_pasa(self):
@@ -56,7 +57,7 @@ class TestEndpointIntegration:
             n("CS2 Update Three"),
         ]
         readable = [i for i in items if is_readable_news(i)]
-        assert [i["title"] for i in readable[:2]] == ["CS2 Update One", "CS2 Update Two"]
+        assert [i.title for i in readable[:2]] == ["CS2 Update One", "CS2 Update Two"]
 
     def test_fallback_si_todo_es_ilegible(self):
         # Caso degenerado: más vale una noticia en ruso que un feed vacío.

@@ -30,11 +30,13 @@ files:
   - steam/inventory_snapshot_repo.py
   - steam/liquidity.py
   - steam/mappers/__init__.py
-  - steam/mappers/items.py
-  - steam/mappers/market_index.py
-  - steam/mappers/movers.py
-  - steam/mappers/news.py
-  - steam/mappers/rows.py
+  - steam/mappers/item_mapper.py
+  - steam/mappers/market_index_mapper.py
+  - steam/mappers/movers_mapper.py
+  - steam/mappers/news_mapper.py
+  - steam/mappers/profile_mapper.py
+  - steam/mappers/provider_mapper.py
+  - steam/mappers/row_mapper.py
   - steam/price_capture.py
   - steam/price_history_repo.py
   - steam/rankings_repo.py
@@ -103,11 +105,11 @@ por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
 | Inventario | 410 / 411 | `[]` guardado en caché y snapshot | invisible | CAL-13 | `inventory` · `http_410`/`http_411` |
 | Inventario | JSON inválido | 500 | 500 | CAL-14 | — |
 | Perfil `/me` | 402 / 429 | 502 | sin `code` | CAL-14 | — |
-| Perfil `/me` | campos ausentes | perfil en blanco cacheado 23 h | invisible | CAL-14 | `profile` · `empty_body` (cuerpo vacío) |
+| Perfil `/me` | 200 sin perfil | perfil en blanco **sin cachear** | invisible | resuelto (CLEAN-14) | `profile` · `empty_body` |
 | Histórico (enriquecimiento) | fallo de csfloat/history | `[]` 5 min; deltas de `_inline_delta` | invisible | conservar | `history` · `reason_of(exc)` |
 | `/item/history` | ventana llena / 429 | stale, o 503 + `Retry-After` | `code: upstream_rate_limit` | conservar (SEC-16) | `item_history` · `rate_limit` (solo stale) |
 | `/item/history` | 402 | `200 []` sin cachear | invisible | CAL-14 | `item_history` · `quota` |
-| `/item/history` | cuerpo no lista | `[]` cacheado 23 h | invisible | CAL-14 | `item_history` · `unexpected_format` |
+| `/item/history` | cuerpo no lista | `200 []` **sin cachear** | invisible | resuelto (CLEAN-14); el 502 es Fase 2 | `item_history` · `unexpected_format` |
 | Lookup CSFloat/Buff | fallo | stale o `{}`, backoff 5 min | precios a `null` | conservar (PERF-17) | `market_lookup` · motivo o `backoff` |
 | Proveedores | fallo | stale o `_FALLBACK_PROVIDERS` | invisible | conservar (PERF-17) | `providers` · motivo o `backoff` |
 | FX | fallo / tasa fuera de 0,5–2,0 | última tasa o ninguna | `stale` en el cuerpo | conservar (UX-08) | — |

@@ -19,7 +19,7 @@ from stores import (
     _market_providers_cache, _search_cache, _topmovers_raw_cache,
 )
 from tests.test_steam_contract_rows import ITEM_KEYS as ROW_ITEM_KEYS, SAMPLE
-from steam.mappers.rows import _to_row
+from steam.mappers.row_mapper import _to_row
 
 NAME = "AK-47 | Redline (Field-Tested)"
 RAW = {

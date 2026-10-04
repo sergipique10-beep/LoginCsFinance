@@ -26,10 +26,10 @@ from steam.domain.validators import MIN_SOLD_MOVERS, MIN_SOLD_TRENDING, ranking_
 from steam.errors import (
     QuotaExhausted, SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
 )
-from steam.mappers.items import _map_item
-from steam.mappers.market_index import _map_market_index_point
-from steam.mappers.movers import _MOVERS_LIMIT, _build_movers_from_topmovers, _map_topmovers_item
-from steam.mappers.rows import _row_to_item, _to_row
+from steam.mappers.item_mapper import _map_item
+from steam.mappers.market_index_mapper import _map_market_index_point
+from steam.mappers.movers_mapper import _MOVERS_LIMIT, _build_movers_from_topmovers, _map_topmovers_item
+from steam.mappers.row_mapper import _row_to_item, _to_row
 from steam.rankings_repo import movers_repo, trending_repo
 from steam.services import catalog, pricing
 

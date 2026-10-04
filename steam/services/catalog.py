@@ -10,9 +10,10 @@ from collections.abc import Sequence
 import httpx
 
 from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
+from steam.adapters.static_catalog_adapter import adapt_catalog_source
 from steam.api import static_catalog_client
 from steam.errors.handling import log_degraded
-from steam.domain.models import SteamItem
+from steam.domain.models import CatalogEntry, SteamItem
 from steam.domain.names import catalog_keys_for_skin, image_lookup_candidates, without_souvenir
 from steam.errors import InvalidPayload, UpstreamError
 
@@ -51,36 +52,30 @@ def enrich_images_from_cache(items: list) -> list:
     return items
 
 
-def _rarity_of(item: dict) -> tuple[str, str] | None:
-    """(rareza, color hex sin '#') de un ítem del catálogo estático, o None si no la trae."""
-    rarity = item.get("rarity") or {}
-    name, color = rarity.get("name"), (rarity.get("color") or "").lstrip("#")
-    return (name, color) if name and color else None
+def _rarity_of(entry: CatalogEntry) -> tuple[str, str] | None:
+    """(rareza, color hex sin '#') de una entrada del catálogo, o None si no la trae."""
+    return (entry.rarity_name, entry.rarity_color) if entry.rarity_name and entry.rarity_color else None
 
 
-def _register_keys(keys: list[str], item: dict, image: str) -> None:
-    rarity = _rarity_of(item)
+def _register_keys(keys: list[str], entry: CatalogEntry, image: str) -> None:
+    rarity = _rarity_of(entry)
     for key in keys:
         _item_image_cache[key] = image
         if rarity:
             _item_rarity_cache[key] = rarity
 
 
-def _register_skin(item: dict) -> None:
-    name = item.get("name", "")
-    image = item.get("image", "")
-    if not name or not image:
+def _register_skin(entry: CatalogEntry) -> None:
+    if not entry.name or not entry.image:
         return
-    wears = [w.get("name", "") for w in item.get("wears", []) if w.get("name")]
-    _register_keys(catalog_keys_for_skin(name, wears, bool(item.get("stattrak"))), item, image)
+    _register_keys(catalog_keys_for_skin(entry.name, list(entry.wears), entry.stattrak), entry, entry.image)
 
 
-def _register_flat(item: dict) -> None:
-    image = item.get("image", "")
-    if not image:
+def _register_flat(entry: CatalogEntry) -> None:
+    if not entry.image:
         return
-    keys = [item.get(field, "") for field in ("market_hash_name", "name")]
-    _register_keys([k for k in keys if k], item, image)
+    keys = [k for k in (entry.market_hash_name, entry.name) if k]
+    _register_keys(keys, entry, entry.image)
 
 
 def rarity_from_cache(name: str) -> tuple[str, str] | None:
@@ -145,18 +140,18 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
 
     for label, url in sources_with_wears:
         try:
-            data = await static_catalog_client.fetch_source(client, url)
-            for item in data:
-                _register_skin(item)
+            data = adapt_catalog_source(await static_catalog_client.fetch_source(client, url), label=label)
+            for entry in data:
+                _register_skin(entry)
             fetched[label] = len(data)
         except Exception as exc:
             _log_catalog_failure(label, exc)
 
     for label, url in sources_flat:
         try:
-            data = await static_catalog_client.fetch_source(client, url)
-            for item in data:
-                _register_flat(item)
+            data = adapt_catalog_source(await static_catalog_client.fetch_source(client, url), label=label)
+            for entry in data:
+                _register_flat(entry)
             fetched[label] = len(data)
         except Exception as exc:
             _log_catalog_failure(label, exc)

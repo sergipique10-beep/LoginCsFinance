@@ -66,7 +66,6 @@ def test_me_402_es_503_upstream_quota(steam_api, client):
     assert resp.json()["detail"]["code"] == "upstream_quota"
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 def test_me_no_cachea_un_perfil_vacio(steam_api, client):
     steam_api.on("api/profile", json=[])
     client.get("/me")
@@ -192,7 +191,6 @@ def test_item_history_402_sin_cache_es_503_upstream_quota(steam_api, client):
     assert resp.json()["detail"]["code"] == "upstream_quota"
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 def test_item_history_no_cachea_23h_un_cuerpo_que_no_es_lista(steam_api, client):
     steam_api.on("api/history", json={"error": "x"})
     client.get("/item/history", params={"name": NAME})

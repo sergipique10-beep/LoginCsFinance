@@ -3,7 +3,7 @@ import html
 import re
 from datetime import datetime, timezone
 
-from steam.domain.models import NewsItem
+from steam.domain.models import NewsEntry, NewsItem
 
 
 def _clean_news_content(raw: str, max_chars: int = 220) -> str:
@@ -38,13 +38,13 @@ _NON_LATIN_RE = re.compile(
 _NON_LATIN_THRESHOLD = 0.2
 
 
-def is_readable_news(item: dict) -> bool:
+def is_readable_news(entry: NewsEntry) -> bool:
     """False si el titular está mayoritariamente en un alfabeto no latino.
 
     Se mira solo el titular: es lo que el usuario lee en la lista, y el cuerpo
     puede traer markup y nombres propios que ensucian la proporción.
     """
-    title = (item.get("title") or "").strip()
+    title = (entry.title or "").strip()
     if not title:
         return True  # sin titular no hay nada que juzgar; que decida el resto
 
@@ -56,9 +56,9 @@ def is_readable_news(item: dict) -> bool:
     return (non_latin / len(letters)) <= _NON_LATIN_THRESHOLD
 
 
-def _map_news_item(item: dict, index: int, image_url: str = "") -> NewsItem:
-    feedname  = item.get("feedname", "").lower()
-    feedlabel = item.get("feedlabel", "NEWS")
+def _map_news_item(entry: NewsEntry, index: int, image_url: str = "") -> NewsItem:
+    feedname  = (entry.feed_name or "").lower()
+    feedlabel = entry.feed_label if entry.feed_label is not None else "NEWS"
 
     if "blog" in feedname or "valve" in feedname:
         category_color = "4a9eff"
@@ -68,22 +68,22 @@ def _map_news_item(item: dict, index: int, image_url: str = "") -> NewsItem:
         category_color = "f0c040"
 
     try:
-        date_str = datetime.fromtimestamp(item["date"], tz=timezone.utc).strftime("%Y-%m-%d")
-    except (KeyError, ValueError, OSError):
+        date_str = datetime.fromtimestamp(entry.date, tz=timezone.utc).strftime("%Y-%m-%d") if entry.date is not None else ""
+    except (ValueError, OSError, OverflowError):
         date_str = ""
 
-    author = item.get("author", "").strip()
-    excerpt = _clean_news_content(item.get("contents", ""))
+    author = (entry.author or "").strip()
+    excerpt = _clean_news_content(entry.contents or "")
 
     return {
-        "id":            str(item.get("gid", index)),
+        "id":            entry.gid if entry.gid is not None else str(index),
         "category":      feedlabel.upper(),
         "categoryColor": category_color,
-        "title":         item.get("title", ""),
+        "title":         entry.title or "",
         "source":        author if author else feedlabel,
         "date":          date_str,
         "imageUrl":      image_url,
         "featured":      index == 0,
-        "url":           item.get("url", ""),
+        "url":           entry.url or "",
         "content":       excerpt,
     }

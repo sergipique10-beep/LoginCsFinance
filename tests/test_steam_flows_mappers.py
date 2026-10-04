@@ -8,15 +8,16 @@ from datetime import date, timedelta
 import httpx
 import pytest
 
+from steam.adapters.news_adapter import adapt_news_entry
 from steam.adapters.steam_adapter import adapt_inventory, adapt_item, adapt_items, adapt_market_index
 from steam.api.news_client import fetch_og_image
 from steam.domain.catalog import WEAPON_CATEGORY, weapon_category
 from steam.errors import SourceUnavailable, UpstreamError
-from steam.mappers.items import (
+from steam.mappers.item_mapper import (
     _STEAM_CDN, _delta_from_history, _normalize_image, _resolve_phase, _safe_delta,
 )
-from steam.mappers.market_index import _map_market_index_point
-from steam.mappers.news import _map_news_item, is_readable_news
+from steam.mappers.market_index_mapper import _map_market_index_point
+from steam.mappers.news_mapper import _map_news_item, is_readable_news
 
 
 def _d(days_ago: int) -> str:
@@ -86,24 +87,24 @@ def test_market_index_point_normal_e_incompleto():
     ("CS2 大会 结果", False),
 ])
 def test_is_readable_news(title, expected):
-    assert is_readable_news({"title": title}) is expected
+    assert is_readable_news(adapt_news_entry({"title": title})) is expected
 
 
 @pytest.mark.parametrize("feedname, color", [
     ("Valve Blog", "4a9eff"), ("hltv.org", "8847ff"), ("PC Gamer", "f0c040"),
 ])
 def test_map_news_item_colores(feedname, color):
-    assert _map_news_item({"feedname": feedname, "date": 0}, 0)["categoryColor"] == color
+    assert _map_news_item(adapt_news_entry({"feedname": feedname, "date": 0}), 0)["categoryColor"] == color
 
 
 def test_map_news_item_incompleto():
-    out = _map_news_item({}, 3)
+    out = _map_news_item(adapt_news_entry({}), 3)
     assert out["id"] == "3"
     assert out["date"] == ""                  # sin fecha → "" (no excepción)
     assert out["source"] == "NEWS"            # sin autor → feedlabel
     assert out["category"] == "NEWS"
     assert out["featured"] is False
-    assert _map_news_item({"author": "  Ana  ", "date": 0}, 0)["source"] == "Ana"
+    assert _map_news_item(adapt_news_entry({"author": "  Ana  ", "date": 0}), 0)["source"] == "Ana"
 
 
 def _client(status=200, text="", exc=None):
@@ -138,14 +139,14 @@ async def test_fetch_og_image_lanza_el_error_tipado(status, exc, error):
 # ── CLEAN-13: las fixtures de tests/fixtures/ son payloads válidos para los mappers ──
 
 def test_fixture_items_produce_tarjetas_completas(payload):
-    from steam.mappers.items import _map_item
+    from steam.mappers.item_mapper import _map_item
     from tests.test_steam_contract_market import SKIN_CARD_KEYS
     for item in adapt_items(payload("steamwebapi/items")):
         assert set(_map_item(item)) == SKIN_CARD_KEYS
 
 
 def test_fixture_inventory_anidado_y_plano(payload):
-    from steam.mappers.items import _map_item
+    from steam.mappers.item_mapper import _map_item
     nested, flat = adapt_inventory(payload("steamwebapi/inventory"))
     assert _map_item(nested)["floatValue"] == 0.2345
     assert _map_item(flat)["name"] == "Solitude (Field-Tested)"   # markethashname gana a marketname

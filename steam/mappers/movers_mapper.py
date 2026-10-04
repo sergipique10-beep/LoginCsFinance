@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from steam.domain.models import MoverItem, TopMover
 from steam.domain.catalog import weapon_category
 from steam.domain.names import is_sticker_slab
-from steam.mappers.items import _normalize_image
+from steam.mappers.item_mapper import _normalize_image
 
 logger = logging.getLogger("uvicorn.error")
 
