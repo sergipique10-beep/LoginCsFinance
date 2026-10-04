@@ -2,6 +2,15 @@
 feature: steam
 files:
   - steam/cap_history_repo.py
+  - steam/adapters/__init__.py
+  - steam/adapters/_common.py
+  - steam/adapters/buff_adapter.py
+  - steam/adapters/csfloat_adapter.py
+  - steam/adapters/fx_adapter.py
+  - steam/adapters/news_adapter.py
+  - steam/adapters/provider_adapter.py
+  - steam/adapters/static_catalog_adapter.py
+  - steam/adapters/steam_adapter.py
   - steam/api/__init__.py
   - steam/api/buff_client.py
   - steam/api/csfloat_client.py
