@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from settings import (
-    STEAM_API_KEY, STEAM_GAME,
+    STEAM_GAME,
     INVENTORY_429_MAX_RETRIES, INVENTORY_429_BACKOFF_BASE, INVENTORY_429_BACKOFF_CAP,
 )
 from stores import (
@@ -24,6 +24,7 @@ from .. import inventory_snapshot_repo
 from ..mappers import _map_item
 from ..price_capture import QuotaExhausted
 from ..services import (
+    steam_auth_headers,
     STEAM_WEB_API,
     STEAM_MARKET_API,
     UPSTREAM_QUOTA_DETAIL,
@@ -86,7 +87,8 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
     try:
         resp = await request.app.state.http_client.get(
             f"{STEAM_WEB_API}/profile",
-            params={"id": steam_id, "key": STEAM_API_KEY},
+            headers=steam_auth_headers(),
+            params={"id": steam_id},
         )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Steam profile request timed out")
@@ -117,10 +119,10 @@ async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
     try:
         resp = await request.app.state.http_client.get(
             f"{STEAM_WEB_API}/inventory",
+            headers=steam_auth_headers(),
             params={
                 "steam_id": steam_id,
                 "game": STEAM_GAME,
-                "key": STEAM_API_KEY,
                 "language": "english",
                 "limit": 5000,
                 # steamwebapi answers from its own inventory snapshot unless told not to.
@@ -336,7 +338,6 @@ async def get_item_history(
         today = date.today()
         url = f"{STEAM_MARKET_API}/{market}/history"
         params = {
-            "key": STEAM_API_KEY,
             "market_hash_name": name,
             "start_date": (today - timedelta(days=days)).isoformat(),
             "end_date": today.isoformat(),
@@ -344,7 +345,7 @@ async def get_item_history(
         volume_key = "quantity"
     else:
         url = f"{STEAM_WEB_API}/history"
-        params = {"key": STEAM_API_KEY, "market_hash_name": name, "interval": interval, "format": "json"}
+        params = {"market_hash_name": name, "interval": interval, "format": "json"}
         volume_key = "sold"
 
     try:
@@ -353,7 +354,7 @@ async def get_item_history(
         return _upstream_busy(cached)
 
     try:
-        resp = await request.app.state.http_client.get(url, params=params)
+        resp = await request.app.state.http_client.get(url, params=params, headers=steam_auth_headers())
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Steam history request timed out")
     except httpx.RequestError as exc:

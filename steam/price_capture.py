@@ -14,8 +14,8 @@ from pathlib import Path
 
 import httpx
 
-from settings import STEAM_API_KEY, PRICE_LOOKUP_CAP, PRICE_DAILY_BUDGET
-from steam.services import STEAM_WEB_API, _history_limiter
+from settings import PRICE_LOOKUP_CAP, PRICE_DAILY_BUDGET
+from steam.services import STEAM_WEB_API, _history_limiter, steam_auth_headers
 from steam import price_history_repo as repo
 
 logger = logging.getLogger("uvicorn.error")
@@ -65,7 +65,8 @@ async def _lookup_item(client: httpx.AsyncClient, name: str) -> dict:
     await _history_limiter.acquire()
     resp = await client.get(
         f"{STEAM_WEB_API}/item",
-        params={"key": STEAM_API_KEY, "game": "cs2",
+        headers=steam_auth_headers(),
+        params={"game": "cs2",
                 "market_hash_name": name, "format": "json"},
         timeout=_LOOKUP_TIMEOUT,
         follow_redirects=True,

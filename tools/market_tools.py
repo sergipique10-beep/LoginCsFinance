@@ -98,7 +98,6 @@ def _para_llm(items: list[dict], limite: int = _TOP_ITEMS_LLM) -> list[dict]:
 
 async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncClient) -> dict:
     """Devuelve precio detallado de una skin por nombre exacto."""
-    from settings import STEAM_API_KEY
     from stores import _search_cache, SEARCH_CACHE_TTL, _item_price_cache, ITEM_PRICE_CACHE_TTL
     from steam.services import (
         STEAM_WEB_API,
@@ -107,6 +106,7 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
         _cache_images,
         _fetch_static_images,
         _enrich_images_from_cache,
+        steam_auth_headers,
     )
     from steam.mappers import _map_item
 
@@ -124,8 +124,8 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
     client_http: httpx.AsyncClient = client
     resp = await client_http.get(
         f"{STEAM_WEB_API}/items",
+        headers=steam_auth_headers(),
         params={
-            "key": STEAM_API_KEY,
             "game": "cs2",
             "search": query,
             "max": 30,
@@ -170,7 +170,6 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
 
 async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     """Busca skins por nombre y devuelve resultados relevantes."""
-    from settings import STEAM_API_KEY
     from stores import _search_cache, SEARCH_CACHE_TTL
     from steam.services import (
         STEAM_WEB_API,
@@ -178,6 +177,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
         _cache_images,
         _fetch_static_images,
         _enrich_images_from_cache,
+        steam_auth_headers,
     )
     from steam.mappers import _map_item
 
@@ -195,8 +195,8 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
 
     resp = await client.get(
         f"{STEAM_WEB_API}/items",
+        headers=steam_auth_headers(),
         params={
-            "key": STEAM_API_KEY,
             "game": "cs2",
             "search": q,
             "max": 10,
