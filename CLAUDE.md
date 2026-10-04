@@ -420,7 +420,7 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `BASE_URL` | `http://localhost:8000` | Must be reachable by Steam for the OpenID callback (use ngrok in local dev) |
 | `FRONTEND_URL` | `http://localhost:4200` | CORS origin and post-login redirect target |
 | `JWT_SECRET` | `change-this-secret` | Signs all tokens. Startup warns if default or < 32 chars. Use `secrets.token_urlsafe(48)` to generate. |
-| `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. |
+| `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. Viaja en la cabecera `X-Api-Key` vía `steam_auth_headers()` (`steam/services.py`), **nunca** en la query (SEC-13): una URL con la clave acaba en los logs. Solo en llamadas a steamwebapi, nunca como cabecera por defecto del cliente compartido. |
 | `LEETIFY_API_KEY` | *(empty)* | Clave de la API pública de Leetify (SEC-09). Sin ella `/me/stats*` da 503. También en Render. |
 | `STEAM_GAME` | `cs2` | Game ID passed to the steamwebapi.com inventory endpoint |
 | `INVENTORY_429_MAX_RETRIES` / `_BACKOFF_BASE` / `_BACKOFF_CAP` | `4` / `5` s / `120` s | Reintento en segundo plano del inventario tras un 429 (PERF-14) |

@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from settings import STEAM_API_KEY, CAP_TICK_TOKEN, PRICE_TICK_TOKEN, TRENDING_TRACK_TOP
+from settings import CAP_TICK_TOKEN, PRICE_TICK_TOKEN, TRENDING_TRACK_TOP
 from stores import (
     MARKET_INDEX_CACHE_TTL,
     SEARCH_CACHE_TTL, MARKET_PRICES_CACHE_TTL, ITEM_PRICE_CACHE_TTL,
@@ -31,6 +31,7 @@ from ..services import (
     _fetch_static_images,
     _rarity_from_cache,
     _build_movers_from_topmovers,
+    steam_auth_headers,
 )
 from steam.price_capture import capture as price_capture_run
 
@@ -201,8 +202,8 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{STEAM_WEB_API}/items",
+            headers=steam_auth_headers(),
             params={
-                "key": STEAM_API_KEY,
                 "game": "cs2",
                 "sort_by": "soldZa",
                 "max": _ITEMS_FETCH_MAX,
@@ -274,7 +275,8 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
         try:
             mi_resp = await client.get(
                 f"{STEAM_WEB_API}/market-index/cs2",
-                params={"key": STEAM_API_KEY, "format": "json"},
+                headers=steam_auth_headers(),
+                params={"format": "json"},
                 timeout=15.0,
             )
             if mi_resp.status_code == 200:
@@ -334,8 +336,8 @@ async def get_market_items(
     try:
         resp = await request.app.state.http_client.get(
             f"{STEAM_WEB_API}/items",
+            headers=steam_auth_headers(),
             params={
-                "key": STEAM_API_KEY,
                 "game": "cs2",
                 "search": query,
                 "max": _SEARCH_LIMIT,
@@ -399,8 +401,8 @@ async def get_market_price(
     try:
         resp = await request.app.state.http_client.get(
             f"{STEAM_WEB_API}/items",
+            headers=steam_auth_headers(),
             params={
-                "key": STEAM_API_KEY,
                 "game": "cs2",
                 "search": query,
                 "max": _SEARCH_LIMIT,
@@ -456,8 +458,8 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
     try:
         resp = await client.get(
             f"{STEAM_WEB_API}/items",
+            headers=steam_auth_headers(),
             params={
-                "key": STEAM_API_KEY,
                 "game": "cs2",
                 "sort_by": "soldZa",
                 "max": _ITEMS_FETCH_MAX,
@@ -515,7 +517,8 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
         try:
             mi_resp = await client.get(
                 f"{STEAM_WEB_API}/market-index/cs2",
-                params={"key": STEAM_API_KEY, "format": "json"},
+                headers=steam_auth_headers(),
+                params={"format": "json"},
                 timeout=15.0,
             )
             if mi_resp.status_code == 200:
@@ -569,7 +572,8 @@ async def get_market_index(
     try:
         resp = await request.app.state.http_client.get(
             f"{STEAM_WEB_API}/market-index/cs2",
-            params={"key": STEAM_API_KEY, "format": "json"},
+            headers=steam_auth_headers(),
+            params={"format": "json"},
         )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Market index request timed out")
@@ -718,7 +722,8 @@ async def cap_tick(
     try:
         resp = await request.app.state.http_client.get(
             f"{STEAM_WEB_API}/market-index/cs2",
-            params={"key": STEAM_API_KEY, "format": "json"},
+            headers=steam_auth_headers(),
+            params={"format": "json"},
             timeout=15.0,
         )
     except (httpx.TimeoutException, httpx.RequestError) as exc:
@@ -926,7 +931,7 @@ async def get_market_prices(
     if cached and now - cached[1] < MARKET_PRICES_CACHE_TTL:
         return cached[0]
 
-    params: dict = {"key": STEAM_API_KEY}
+    params: dict = {}
     if name:
         params["market_hash_name"] = name
     if currency:
@@ -935,6 +940,7 @@ async def get_market_prices(
     try:
         resp = await request.app.state.http_client.get(
             f"{STEAM_MARKET_API}/{market}/prices",
+            headers=steam_auth_headers(),
             params=params,
             timeout=15.0,
         )

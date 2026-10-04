@@ -76,9 +76,10 @@ async def _ver_inventario(
         STEAM_MARKET_API,
         _enrich_market_prices,
         _enrich_images_from_cache,
+        steam_auth_headers,
     )
     from steam.mappers import _map_item
-    from settings import STEAM_API_KEY, STEAM_GAME
+    from settings import STEAM_GAME
 
     import time
 
@@ -90,10 +91,10 @@ async def _ver_inventario(
         try:
             resp = await client.get(
                 f"{STEAM_WEB_API}/inventory",
+                headers=steam_auth_headers(),
                 params={
                     "steam_id": steam_id,
                     "game": STEAM_GAME,
-                    "key": STEAM_API_KEY,
                     "language": "english",
                     "limit": 5000,
                     "no_cache": 1,

@@ -19,6 +19,17 @@ logger = logging.getLogger("uvicorn.error")
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
 STEAM_MARKET_API = "https://www.steamwebapi.com/market"
 
+
+def steam_auth_headers() -> dict[str, str]:
+    """Cabecera de autenticación de steamwebapi (SEC-13).
+
+    La clave va en `X-Api-Key`, nunca en la query (`?key=` es el modo legacy): una
+    URL con el secreto acaba en cualquier log que registre URLs, como el INFO de
+    httpx o el `str()` de sus excepciones. Solo en llamadas a steamwebapi: el
+    cliente compartido también habla con GitHub, frankfurter, Leetify…
+    """
+    return {"X-Api-Key": STEAM_API_KEY}
+
 # SEC-16: cuerpo del 503 cuando steamwebapi da 402 (cuota MENSUAL agotada, reset el
 # día 10). No es un 429: el usuario no va «demasiado rápido» y reintentar no sirve.
 # `code` es el contrato con el front (error.interceptor.ts); el texto puede cambiar.
@@ -116,8 +127,8 @@ async def _fetch_history_for_item(
         today = date.today()
         resp = await client.get(
             f"{STEAM_MARKET_API}/csfloat/history",
+            headers=steam_auth_headers(),
             params={
-                "key": STEAM_API_KEY,
                 "market_hash_name": name,
                 "start_date": (today - timedelta(days=35)).isoformat(),
                 "end_date": today.isoformat(),
@@ -393,7 +404,8 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
     try:
         resp = await client.get(
             f"{STEAM_MARKET_API}/{market}/prices",
-            params={"key": STEAM_API_KEY, "format": "json"},
+            headers=steam_auth_headers(),
+            params={"format": "json"},
             timeout=30.0,
         )
         if resp.status_code != 200:
@@ -497,7 +509,7 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
     try:
         resp = await client.get(
             f"{STEAM_WEB_API}/info/markets",
-            params={"key": STEAM_API_KEY},
+            headers=steam_auth_headers(),
             timeout=15.0,
         )
         if resp.status_code != 200:
