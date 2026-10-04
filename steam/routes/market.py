@@ -877,6 +877,11 @@ async def movers_tick(request: Request, x_cap_token: str | None = Header(default
     result = await _compute_movers(request.app.state.http_client)
     rows = [_to_row(item, rank, "hot")  for rank, item in enumerate(result["hot"])] \
          + [_to_row(item, rank, "cold") for rank, item in enumerate(result["cold"])]
+    # CAL-10: sin filas es que no respondió ninguna fuente. Un replace-all vaciaría la
+    # tabla y la Home se quedaría sin hot/cold: se conserva el snapshot anterior.
+    if not rows:
+        logger.warning("[movers-tick] sin datos de ninguna fuente; se conserva el snapshot anterior")
+        return {"ok": False, "count": 0, "kept_previous": True}
     await movers_repo.replace_snapshot(rows)
     logger.info("[movers-tick] snapshot saved: %d items", len(rows))
     return {"ok": True, "count": len(rows)}

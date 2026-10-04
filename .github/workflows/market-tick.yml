@@ -53,8 +53,14 @@ jobs:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
           CAP_TICK_TOKEN: ${{ secrets.CAP_TICK_TOKEN }}
       - name: POST /internal/movers-tick
+        # CAL-10: sin ninguna fuente el tick conserva el snapshot anterior y lo dice
+        # con kept_previous. Se avisa sin poner el job en rojo: la Home sigue sirviendo.
         run: |
-          curl -fsS -m 120 --retry 2 -X POST "$BASE_URL/internal/movers-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN"
+          RESP=$(curl -fsS -m 120 --retry 2 -X POST "$BASE_URL/internal/movers-tick" -H "X-Cap-Token: $CAP_TICK_TOKEN")
+          echo "$RESP"
+          if echo "$RESP" | grep -q '"kept_previous":true'; then
+            echo "::warning::movers-tick sin datos de steamwebapi (/items y market-index): se conserva el snapshot anterior de market_movers."
+          fi
         env:
           BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
           CAP_TICK_TOKEN: ${{ secrets.CAP_TICK_TOKEN }}
