@@ -70,6 +70,9 @@ _item_rarity_cache: dict[str, tuple[str, str]] = {}  # markethashname → (rarez
 _image_cache_meta: dict[str, float] = {}  # "ts" → última carga buena; "failed_ts" → último fallo total (CAL-08)
 _market_lookup_cache: dict[str, tuple[dict, float]] = {}  # market → ({name: price}, ts)
 _market_providers_cache: dict[str, tuple[list, float]] = {}  # "providers" → (list, ts)
+# PERF-17: caché negativo de los dos de arriba. "lookup:<market>" / "providers" → ts
+# del último fallo. Aparte para no pisar el último dato bueno (stale-on-error).
+_lookup_failed_at: dict[str, float] = {}
 _fx_cache: dict[str, tuple[float, float]] = {}  # "usdeur" → (rate, ts). Sin TTL al servir el fallback: ver services._fetch_fx_rate
 
 _inventory_refresh_cooldown: dict[str, float] = {}  # steam_id → monotonic timestamp of last forced refresh
