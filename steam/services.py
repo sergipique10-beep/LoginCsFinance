@@ -10,7 +10,7 @@ from stores import (
     ITEM_HISTORY_CACHE_TTL, IMAGE_CACHE_TTL, MARKET_LOOKUP_CACHE_TTL,
     MARKET_PROVIDERS_CACHE_TTL, FX_CACHE_TTL,
     _item_history_cache, _item_image_cache, _item_rarity_cache, _image_cache_meta,
-    _market_lookup_cache, _market_providers_cache, _fx_cache,
+    _market_lookup_cache, _market_providers_cache, _fx_cache, _lookup_failed_at,
 )
 from steam.mappers import _delta_from_history, _map_topmovers_item
 
@@ -371,11 +371,25 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
 _TRACKED_MARKETS = ("csfloat", "buff")
 
 
+# PERF-17: tras un fallo, no se reintenta durante 5 min (como _HISTORY_EMPTY_TTL).
+# Sin esto, cada inventario/movers/búsqueda con la fuente caída repetía dos lookups
+# condenados a fallar, gastando cuota y hasta 30 s de timeout.
+_LOOKUP_FAIL_TTL = 300
+
+
+def _in_fail_backoff(key: str, now: float) -> bool:
+    failed = _lookup_failed_at.get(key)
+    return failed is not None and now - failed < _LOOKUP_FAIL_TTL
+
+
 async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> dict[str, float]:
     now = time.monotonic()
     cached = _market_lookup_cache.get(market)
     if cached and now - cached[1] < MARKET_LOOKUP_CACHE_TTL:
         return cached[0]
+    fail_key = f"lookup:{market}"
+    if _in_fail_backoff(fail_key, now):
+        return (cached[0] if cached else {})
     try:
         resp = await client.get(
             f"{STEAM_MARKET_API}/{market}/prices",
@@ -384,9 +398,11 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
         )
         if resp.status_code != 200:
             logger.warning("[market-lookup] %s returned %s", market, resp.status_code)
+            _lookup_failed_at[fail_key] = now
             return (cached[0] if cached else {})
         data = resp.json()
         if not isinstance(data, list):
+            _lookup_failed_at[fail_key] = now
             return (cached[0] if cached else {})
         lookup: dict[str, float] = {}
         for item in data:
@@ -395,10 +411,12 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
             if name and price:
                 lookup[name] = float(price)
         _market_lookup_cache[market] = (lookup, now)
+        _lookup_failed_at.pop(fail_key, None)
         logger.info("[market-lookup] %s: %d prices loaded", market, len(lookup))
         return lookup
     except Exception as exc:
         logger.warning("[market-lookup] could not fetch %s: %s", market, exc)
+        _lookup_failed_at[fail_key] = now
         return (cached[0] if cached else {})
 
 
@@ -472,6 +490,10 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
     cached = _market_providers_cache.get("providers")
     if cached and now - cached[1] < MARKET_PROVIDERS_CACHE_TTL:
         return cached[0]
+    # PERF-17: con la fuente caída, el último dato bueno si existe; si no, el respaldo.
+    stale = cached[0] if cached else _FALLBACK_PROVIDERS
+    if _in_fail_backoff("providers", now):
+        return stale
     try:
         resp = await client.get(
             f"{STEAM_WEB_API}/info/markets",
@@ -480,10 +502,12 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
         )
         if resp.status_code != 200:
             logger.warning("[market-providers] info/markets returned %s", resp.status_code)
-            return _FALLBACK_PROVIDERS
+            _lookup_failed_at["providers"] = now
+            return stale
         data = resp.json()
         if not isinstance(data, list):
-            return _FALLBACK_PROVIDERS
+            _lookup_failed_at["providers"] = now
+            return stale
 
         if data:
             logger.info("[market-providers] sample keys: %s", list(data[0].keys()))
@@ -509,11 +533,13 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
             providers.append(lookup.get(pid) or next(f for f in _FALLBACK_PROVIDERS if f["id"] == pid))
 
         _market_providers_cache["providers"] = (providers, now)
+        _lookup_failed_at.pop("providers", None)
         logger.info("[market-providers] loaded %d providers", len(providers))
         return providers
     except Exception as exc:
         logger.warning("[market-providers] failed: %s", exc)
-        return _FALLBACK_PROVIDERS
+        _lookup_failed_at["providers"] = now
+        return stale
 
 
 # ── Movers ────────────────────────────────────────────────────────────────────
