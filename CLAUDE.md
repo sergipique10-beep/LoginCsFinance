@@ -99,17 +99,25 @@ LoginCsFinance/
                     #   (items, item, inventory, profile, market_index, market_prices,
                     #   market_history, legacy_history, info_markets). Devuelve el JSON del
                     #   200 tal cual o lanza el error tipado; no parsea nada
-    mappers.py      # Pure data transformers (sin HTTP): _map_item, _map_market_index_point,
-                    #   _map_news_item, _clean_news_content,
-                    #   _delta_from_history, _best_price_from_markets, _safe_delta
+    domain/
+      models.py       # TypedDict del contrato JSON (CLEAN-08): RankedCard (_row_to_item) ⊂
+                    #   SkinCard (_map_item) ⊂ MoverItem (+_change24h interno), RankingRow,
+                    #   MarketIndexPoint, NewsItem, MarketProvider, HistoryPoint.
+                    #   tests/test_steam_models.py ata sus claves a los tests de contrato
+    mappers/        # Mappers puros, uno por dominio (sin HTTP, sin caché, sin fallback):
+      items.py        #   _map_item, _inline_delta, _safe_delta, _delta_from_history,
+                    #   _resolve_phase, _normalize_image, _weapon_category
+      movers.py       #   _map_topmovers_item, _build_movers_from_topmovers, _MOVERS_LIMIT
+      market_index.py #   _map_market_index_point
+      news.py         #   _map_news_item, _clean_news_content, is_readable_news
+      rows.py         #   _row_to_item, _to_row (filas de market_trending / market_movers)
     liquidity.py    # Liquidity Score (0-100): compute_liquidity. Puro, sin deps internas.
     services.py     # Async service helpers and image-cache utilities:
                     #   _fetch_history_for_item, _enrich_prices (inventory enrichment)
                     #   _cache_images, _enrich_images_from_cache (image cache fill/lookup)
                     #   _register_skin, _register_flat (ByMykel static data registration)
                     #   _fetch_static_images (lazy loader for ByMykel/CSGO-API)
-                    #   _build_movers_from_topmovers (hot/cold builder from market-index)
-                    #   Constants: _STATIC_*_URL, _WEAR_NAMES, _MOVERS_LIMIT
+                    #   Constants: _STATIC_*_URL, _WEAR_NAMES
     cap_history_repo.py  # Supabase data layer for the CS2 price-index history:
                     #   get_supabase (module-cached client, service_role),
                     #   insert_snapshot (upsert by ts), fetch_range (rows since cutoff).
@@ -140,11 +148,12 @@ LoginCsFinance/
 **Dependency order** (no circular imports):
 
 ```
-settings.py, stores.py, middleware.py, steam/liquidity.py, steam/errors.py  ← nothing internal
+settings.py, stores.py, middleware.py, steam/liquidity.py, steam/errors.py,
+steam/domain/models.py  ← nothing internal
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
 steam/clients/*         ← steam/errors, settings (solo steamwebapi)
-steam/mappers.py        ← steam/liquidity
+steam/mappers/*         ← steam/domain, steam/liquidity
 steam/services.py       ← steam/clients, steam/errors, steam/mappers, stores
 steam/cap_history_repo.py ← settings (+ supabase)
 steam/routes/*          ← steam/clients, steam/errors, steam/services, steam/mappers,
@@ -169,7 +178,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
 | DELETE | `/me` | Bearer (+cookie/body refresh) | **Borrado de cuenta (LAUNCH-04)**: borra `device_tokens`, `price_alerts`, `portfolio_history`, `inventory_snapshots` (PERF-14) y **todos** sus `refresh_tokens` (SEC-11) del SteamID, vacía sus cachés en memoria, revoca el refresh y limpia la cookie. Idempotente. Es la URL de borrado que exige Google Play, vía botón en Perfil |
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
-| GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers.py:_map_item` + enrichment below). **Ante un 429 de steamwebapi (PERF-14)** devuelve el último snapshot con las cabeceras `X-Inventory-Stale: 1` y `X-Inventory-Captured-At` (ISO-8601); el cuerpo sigue siendo la lista. Ver «Degradación ante 429» |
+| GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers/items.py:_map_item` + enrichment below). **Ante un 429 de steamwebapi (PERF-14)** devuelve el último snapshot con las cabeceras `X-Inventory-Stale: 1` y `X-Inventory-Captured-At` (ISO-8601); el cuerpo sigue siendo la lista. Ver «Degradación ante 429» |
 | POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio en `stores.py`). |
 | GET | `/market/movers` | Bearer | Top gainers/losers 24 h (hot & cold), servido del snapshot de `market_movers`. |
 | GET | `/market/items` | Bearer | **Búsqueda** por nombre — `?q=` es obligatorio (400 si falta). No es un listado. |
@@ -198,7 +207,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 
 ## Data mapping
 
-steamwebapi.com responses are transformed in `steam/mappers.py` before being returned:
+steamwebapi responses are transformed in `steam/mappers/` before being returned:
 
 - `_map_item(item)` — inventory items → camelCase shape (`priceLatest`, `priceDelta24h`, `floatValue`, `phase`, `externalPrices`, etc.). Handles both flat `/inventory` and nested `/float/assets?with_items=1` formats.
 - `_delta_from_history(pts, days, latest)` — computes % price change vs. N days ago from a history list. Used by `_enrich_prices`.
@@ -206,7 +215,7 @@ steamwebapi.com responses are transformed in `steam/mappers.py` before being ret
 - `_map_news_item(item, index, image_url)` — Steam news items → normalized shape; `featured: true` for index 0; includes `content` excerpt via `_clean_news_content`
 - `steam_news.fetch_og_image(client, url)` (`steam/clients/steam_news.py`) — async OG image scraper used by `/news/cs2`
 
-**Price deltas** (`_inline_delta` in `steam/mappers.py`): deltas are computed from the **`pricereal` family** (`pricereal` vs `pricereal24h/7d/30d`). Do **not** use `pricelatestsell24h/7d/30d` — steamwebapi returns those identical to `pricelatestsell` for every item, so any delta derived from them is always `None` → `"N/A"` badges everywhere. `_inline_delta` also discards historical values more than 10× away from the current price (the API occasionally returns garbage, e.g. `pricereal30d=0.22` for a $17.57 skin → +7886%). `None` means no sales data and renders as `"N/A"`.
+**Price deltas** (`_inline_delta` in `steam/mappers/items.py`): deltas are computed from the **`pricereal` family** (`pricereal` vs `pricereal24h/7d/30d`). Do **not** use `pricelatestsell24h/7d/30d` — steamwebapi returns those identical to `pricelatestsell` for every item, so any delta derived from them is always `None` → `"N/A"` badges everywhere. `_inline_delta` also discards historical values more than 10× away from the current price (the API occasionally returns garbage, e.g. `pricereal30d=0.22` for a $17.57 skin → +7886%). `None` means no sales data and renders as `"N/A"`.
 
 **History-derived enrichment** (`_enrich_prices` in `steam/services.py`): fires one concurrent `csfloat/history` call per item and overwrites the deltas with history-derived values. Cached per item in `_item_history_cache`. Used by `/market/*` (trending, movers) only — **not** by `/inventory`, which would need one API call per item and blow the 18/60s limiter. Inventory therefore relies entirely on `_inline_delta`.
 
@@ -267,7 +276,7 @@ Dos invariantes del troceado, ambos load-bearing:
 
 `POST /internal/price-tick` (cron diario, `.github/workflows/price-tick.yml`) recorre la cola `price_tick_queue` **por prioridad y, dentro de ella, menos-recientemente-capturadas primero** (`last_captured` asc, nulls primero) hasta `min(PRICE_LOOKUP_CAP, presupuesto restante)`, hace lookup por-nombre vía el `_history_limiter` compartido, y hace upsert idempotente por `(market_hash_name, date)`. Best-effort: un fallo por skin no aborta la corrida. El seed inicial sale de `steam/data/tracked_seed.json`.
 
-**Dónde vive**: solo en `/inventory` y `/market/items` (search) — los dos endpoints que sirven la salida de `_map_item`. **`/market/trending` y `/market/movers` NO lo llevan**: sirven snapshots de Supabase vía `_row_to_item` (`steam/market_rows.py`), que no lo transporta.
+**Dónde vive**: solo en `/inventory` y `/market/items` (search) — los dos endpoints que sirven la salida de `_map_item`. **`/market/trending` y `/market/movers` NO lo llevan**: sirven snapshots de Supabase vía `_row_to_item` (`steam/mappers/rows.py`), que no lo transporta.
 
 ⚠️ **`liquidity_breakdown` NO puede añadirse a las tablas de ranking sin tocar el frontend a la vez.** El detail sheet (`skin-detail-sheet.component.ts`) detecta "esto es un snapshot pobre, pide el item completo a `/market/price`" con `liquidityBreakdown === undefined`, y es la única señal que le queda: el snapshot ya transporta volumen (`sold24h`, `offerVolume`, `hoursToSold`, `priceReal`, `steamUrl` — se añadieron para arreglar el `"Vol: undefined/24h"` que salía en todas las tarjetas). Si `_row_to_item` empieza a emitir `liquidityBreakdown`, el sheet deja de enriquecer **en silencio** y el bloque de liquidez queda vacío para siempre. El invariante está protegido por `tests/test_steam_contract_rows.py::test_no_emite_liquidity_breakdown` (antes, un self-check `python -m steam.market_rows`; CAL-09).
 

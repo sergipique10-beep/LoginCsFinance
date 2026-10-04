@@ -4,7 +4,8 @@ Todos los pesos salen de esa pregunta. Un score que midiera "salud del mercado"
 tendría otros. Ver docs/superpowers/specs/2026-07-14-liquidity-score-design.md.
 """
 from steam.liquidity import compute_liquidity
-from steam.mappers import _map_item, _map_topmovers_item
+from steam.mappers.items import _map_item
+from steam.mappers.movers import _map_topmovers_item
 from steam.routes.market import _MOVERS_SELECT
 
 

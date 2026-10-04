@@ -8,7 +8,7 @@ from auth.service import _get_client_ip, _rate_limit
 from stores import NEWS_CACHE_TTL, _news_cache
 from ..clients import steam_news
 from ..errors import SourceTimeout, SourceUnavailable, UpstreamError
-from ..mappers import _map_news_item, is_readable_news
+from ..mappers.news import _map_news_item, is_readable_news
 
 logger = logging.getLogger("uvicorn.error")
 

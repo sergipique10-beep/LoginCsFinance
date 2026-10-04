@@ -11,7 +11,7 @@ import feedparser
 import httpx
 
 from settings import RAG_FEEDS
-from steam.mappers import _clean_news_content
+from steam.mappers.news import _clean_news_content
 from rag import embeddings, repo
 
 logger = logging.getLogger("uvicorn.error")

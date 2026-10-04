@@ -14,7 +14,7 @@ from stores import (
 from steam.clients import fx, static_catalog, steamwebapi
 from steam.clients.steamwebapi import _history_limiter
 from steam.errors import HistoryBusy, InvalidPayload, SourceTimeout, SourceUnavailable, UpstreamError
-from steam.mappers import _delta_from_history, _map_topmovers_item
+from steam.mappers.items import _delta_from_history
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -35,8 +35,6 @@ _STATIC_AGENTS_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main
 _STATIC_PATCHES_URL   = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/patches.json"
 
 _WEAR_NAMES = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred"]
-
-_MOVERS_LIMIT = 10
 
 
 # ── Price history ─────────────────────────────────────────────────────────────
@@ -485,21 +483,3 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
         _lookup_failed_at["providers"] = now
         return stale
 
-
-# ── Movers ────────────────────────────────────────────────────────────────────
-
-def _build_movers_from_topmovers(gainers: list, losers: list) -> dict | None:
-    if not gainers and not losers:
-        return None
-    def _is_slab(raw: dict) -> bool:
-        name = (raw.get("marketname") or raw.get("markethashname") or "").lower()
-        return "sticker slab" in name
-    hot  = [_map_topmovers_item(g) for g in gainers if not _is_slab(g)][:_MOVERS_LIMIT]
-    cold = [_map_topmovers_item(l) for l in losers  if not _is_slab(l)][:_MOVERS_LIMIT]
-    logger.info("[market-movers] topmovers raw: gainers=%d losers=%d | after_filter: hot=%d cold=%d",
-                len(gainers), len(losers), len(hot), len(cold))
-    hot  = sorted(hot,  key=lambda x: x["_change24h"], reverse=True)
-    cold = sorted(cold, key=lambda x: x["_change24h"])
-    for item in hot + cold:
-        del item["_change24h"]
-    return {"hot": hot, "cold": cold}

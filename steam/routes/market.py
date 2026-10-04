@@ -1,6 +1,8 @@
 import logging
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone, timedelta
+from typing import Any, TypeVar
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -15,13 +17,15 @@ from stores import (
 from auth.service import market_rate_limit, require_jwt, token_matches
 from ..cap_history_repo import insert_snapshot, fetch_range
 from ..rankings_repo import trending_repo, movers_repo
-from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point
-from ..market_rows import _to_row, _row_to_item
+from ..domain.models import SkinCard
+from ..mappers.items import _map_item
+from ..mappers.market_index import _map_market_index_point
+from ..mappers.movers import _MOVERS_LIMIT, _build_movers_from_topmovers, _map_topmovers_item
+from ..mappers.rows import _to_row, _row_to_item
 from ..clients import steamwebapi
 from ..errors import QuotaExhausted, SourceTimeout, SourceUnavailable, UpstreamError
 from ..services import (
     UPSTREAM_QUOTA_DETAIL,
-    _MOVERS_LIMIT,
     _enrich_prices,
     _enrich_market_prices,
     _fetch_market_providers,
@@ -30,7 +34,6 @@ from ..services import (
     _enrich_images_from_cache,
     _fetch_static_images,
     _rarity_from_cache,
-    _build_movers_from_topmovers,
 )
 from steam.price_capture import capture as price_capture_run
 
@@ -102,8 +105,8 @@ _PRECIO_MIN_RANKING = 10.80
 # latencia (~1 s), ambos asumibles.
 _ITEMS_FETCH_MAX = 5000
 
-# Cuántos items como mucho de una misma categoría en el ranking. `_category_rank`
-# ordena por prioridad de categoría, lo que AGOTA la primera antes de pasar a la
+# Cuántos items como mucho de una misma categoría en el ranking. Ordenar por
+# prioridad de categoría (el antiguo `_category_rank`) AGOTA la primera antes de pasar a la
 # siguiente: con "Rifle" en cabeza, los 18 huecos salían todos rifles (4 variantes
 # de la misma skin incluidas). El material para diversificar existe — con
 # max=5000 hay 113 rifles, 47 pistolas, 41 snipers, 18 SMG, 6 cuchillos — solo
@@ -121,7 +124,10 @@ def _skin_base(nombre: str) -> str:
     return nombre.split(" (")[0].strip().lower()
 
 
-def _diversificar(items: list[dict], limite: int) -> list[dict]:
+_Card = TypeVar("_Card", bound=Mapping[str, Any])
+
+
+def _diversificar(items: list[_Card], limite: int) -> list[_Card]:
     """Reparte el ranking entre categorías en vez de agotarlas por prioridad.
 
     Recorre los candidatos ya ordenados por relevancia y va aceptando mientras la
@@ -129,12 +135,12 @@ def _diversificar(items: list[dict], limite: int) -> list[dict]:
     huecos —porque no hay bastante variedad— se rellenan con los descartados en
     orden, para no devolver una lista más corta de lo pedido.
     """
-    aceptados: list[dict] = []
+    aceptados: list[_Card] = []
     # Solo se reservan para relleno los descartados por cuota de CATEGORÍA: una
     # lista corta es peor que una con dos rifles de más. Las variantes de desgaste
     # de una misma skin no vuelven nunca — cuatro Crane Flight no dicen nada que
     # no diga una, y ocupan el hueco de un activo distinto.
-    relleno: list[dict] = []
+    relleno: list[_Card] = []
     por_categoria: dict[str, int] = {}
     por_skin: dict[str, int] = {}
 
@@ -165,7 +171,7 @@ def _diversificar(items: list[dict], limite: int) -> list[dict]:
     return (aceptados + relleno)[:limite]
 
 
-def _turnover(item: dict) -> float:
+def _turnover(item: Mapping[str, Any]) -> float:
     """Facturación 24h estimada: precio × unidades vendidas.
 
     Criterio de relevancia para los rankings, en vez de las unidades sueltas.
@@ -227,7 +233,8 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
             # Diversificar ANTES de enriquecer: _enrich_prices gasta una llamada
             # por item (limiter 18/60s), así que descartar después sería tirar
             # cuota en items que no se van a mostrar.
-            candidates = _diversificar(mapped, _MOVERS_LIMIT * 2)
+            # list[Any]: _enrich_prices devuelve dicts nuevos sin tipar.
+            candidates: list[Any] = _diversificar(mapped, _MOVERS_LIMIT * 2)
             logger.info("[market-movers] candidates: %d (capped from %d)", len(candidates), len(mapped))
             candidates = await _enrich_prices(client, candidates)
             with_delta = sorted(
@@ -277,15 +284,15 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
 
     if raw_topmovers:
         gainers, losers, _ = raw_topmovers
-        result = _build_movers_from_topmovers(gainers, losers)
-        if result:
+        fallback = _build_movers_from_topmovers(gainers, losers)
+        if fallback:
             await _fetch_static_images(client)
-            _enrich_images_from_cache(result["hot"])
-            _enrich_images_from_cache(result["cold"])
-            await _enrich_market_prices(client, result["hot"])
-            await _enrich_market_prices(client, result["cold"])
-            logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(result["hot"]), len(result["cold"]))
-            return result
+            _enrich_images_from_cache(fallback["hot"])
+            _enrich_images_from_cache(fallback["cold"])
+            await _enrich_market_prices(client, fallback["hot"])
+            await _enrich_market_prices(client, fallback["cold"])
+            logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(fallback["hot"]), len(fallback["cold"]))
+            return fallback
 
     logger.warning("[market-movers] no data available from any source")
     return {"hot": [], "cold": []}
@@ -404,7 +411,7 @@ async def get_market_price(
     return item
 
 
-async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
+async def _compute_trending(client: httpx.AsyncClient) -> list[SkinCard]:
     """Calcula el ranking trending actual (sin cache, sin persistencia).
 
     Llamado tanto por GET /market/trending (antes de la migración a
@@ -437,7 +444,7 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
             # por unidades: ordenar por piezas vendidas premia lo barato por
             # construcción y llenaba la lista de items de céntimos.
             # Por relevancia (turnover) y luego se reparte entre categorías. Antes
-            # se ordenaba por _category_rank primero, lo que agotaba "Rifle" antes
+            # se ordenaba por categoría primero (`_category_rank`, ya borrado), lo que agotaba "Rifle" antes
             # de llegar a ninguna otra categoría.
             result = _diversificar(
                 sorted(result, key=_turnover, reverse=True), _TRENDING_CAPTURE_LIMIT
@@ -803,7 +810,8 @@ async def movers_tick(request: Request, x_cap_token: str | None = Header(default
     if not token_matches(x_cap_token, CAP_TICK_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
     result = await _compute_movers(request.app.state.http_client)
-    rows = [_to_row(item, rank, "hot")  for rank, item in enumerate(result["hot"])] \
+    # list[Any]: los repos de Supabase tipan dict y RankingRow es un TypedDict.
+    rows: list[Any] = [_to_row(item, rank, "hot")  for rank, item in enumerate(result["hot"])] \
          + [_to_row(item, rank, "cold") for rank, item in enumerate(result["cold"])]
     # CAL-10: sin filas es que no respondió ninguna fuente. Un replace-all vaciaría la
     # tabla y la Home se quedaría sin hot/cold: se conserva el snapshot anterior.

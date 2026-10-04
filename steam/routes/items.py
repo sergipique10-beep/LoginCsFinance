@@ -20,7 +20,7 @@ from stores import (
 )
 from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
-from ..mappers import _map_item
+from ..mappers.items import _map_item
 from ..clients import steamwebapi
 from ..clients.steamwebapi import _history_limiter
 from ..errors import QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UpstreamError

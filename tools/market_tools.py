@@ -8,6 +8,8 @@ importa y llama funciones existentes.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import httpx
 
@@ -54,7 +56,7 @@ _PRECIO_MIN_LLM = 10.80
 _TICKS_MIN_SENAL = 1
 
 
-def _tiene_senal(item: dict) -> bool:
+def _tiene_senal(item: Mapping[str, Any]) -> bool:
     """¿El movimiento de este item significa algo, o es ruido de granularidad?
 
     Una Galil a $0.10 que "sube un 11%" ha subido un centavo — el tick mínimo.
@@ -74,7 +76,7 @@ def _tiene_senal(item: dict) -> bool:
     return abs(delta) > umbral_pct
 
 
-def _para_llm(items: list[dict], limite: int = _TOP_ITEMS_LLM) -> list[dict]:
+def _para_llm(items: Sequence[Mapping[str, Any]], limite: int = _TOP_ITEMS_LLM) -> list[dict]:
     """Filtra el ruido, proyecta a los campos que el modelo usa y recorta.
 
     Sin la proyección, `ver_movers` mete 20 items × 29 campos (17 KB) en el
@@ -107,7 +109,7 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
         _fetch_static_images,
         _enrich_images_from_cache,
     )
-    from steam.mappers import _map_item
+    from steam.mappers.items import _map_item
 
     import time
 
@@ -138,7 +140,8 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
         return {"error": f"skin '{query}' no encontrada"}
 
     _cache_images([raw])
-    item = _map_item(raw)
+    # dict y no SkinCard: el chat le añade `aviso`, que no es del contrato con el front.
+    item: dict[str, Any] = dict(_map_item(raw))
     try:
         (item,) = await _enrich_prices(client_http, [item], limiter_timeout=CHAT_LIMITER_TIMEOUT)
         enriched = True
@@ -167,7 +170,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
         _fetch_static_images,
         _enrich_images_from_cache,
     )
-    from steam.mappers import _map_item
+    from steam.mappers.items import _map_item
 
     import time
 
@@ -212,7 +215,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
 async def _ver_trending(*, client: httpx.AsyncClient) -> list[dict]:
     """Items trending por volumen 24h (desde Supabase)."""
     from steam.rankings_repo import trending_repo
-    from steam.market_rows import _row_to_item
+    from steam.mappers.rows import _row_to_item
 
     rows = await trending_repo.fetch_snapshot()
     return _para_llm([_row_to_item(row) for row in rows])
@@ -223,7 +226,7 @@ async def _ver_trending(*, client: httpx.AsyncClient) -> list[dict]:
 async def _ver_movers(*, client: httpx.AsyncClient) -> dict:
     """Top movers (hot & cold) del mercado CS2 24h."""
     from steam.rankings_repo import movers_repo
-    from steam.market_rows import _row_to_item
+    from steam.mappers.rows import _row_to_item
 
     rows = await movers_repo.fetch_snapshot()
     hot = _para_llm([_row_to_item(r) for r in rows if r.get("bucket") == "hot"])

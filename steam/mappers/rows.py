@@ -5,9 +5,13 @@ ISkinCard usado por el frontend. `_to_row` hace el mapeo inverso, usado tanto po
 el trending-tick como (via el parámetro opcional `bucket`) por la futura feature
 de movers hot/cold.
 """
+from collections.abc import Mapping
+from typing import Any
+
+from steam.domain.models import RankedCard, RankingRow
 
 
-def _row_to_item(row: dict) -> dict:
+def _row_to_item(row: dict) -> RankedCard:
     """Convierte una fila de market_trending (snake_case) al shape ISkinCard (camelCase).
 
     OJO — `liquidityBreakdown` NO se emite aquí, y es deliberado: el detail
@@ -58,13 +62,13 @@ def _row_to_item(row: dict) -> dict:
     }
 
 
-def _to_row(item: dict, rank: int, bucket: str | None = None) -> dict:
+def _to_row(item: Mapping[str, Any], rank: int, bucket: str | None = None) -> RankingRow:
     """Convierte un item ISkinCard-shaped (camelCase) a una fila de market_trending (snake_case).
 
     `bucket` es opcional (usado por movers para distinguir "hot"/"cold"); el
     trending-tick no lo pasa, así que la fila queda igual que antes.
     """
-    row = {
+    row: RankingRow = {
         "name": item["name"],
         "rank": rank,
         "slug": item.get("slug", ""),
