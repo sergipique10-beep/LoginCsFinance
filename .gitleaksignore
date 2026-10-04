@@ -1,0 +1,7 @@
+# Falsos positivos de gitleaks, uno por linea, con fingerprint y motivo (AOS-02).
+# Formato: <commit>:<fichero>:<regla>:<linea>. Solo entran aqui hallazgos REVISADOS a mano:
+# un secreto real no se ignora, se rota (EDS-3 §3.1).
+
+# Placeholder literal `Authorization: Bearer <token>` en un plan de implementacion
+# (2026-10-04, revisado: no es un token, es el texto "<token>").
+c76bbcc93115d778ada382a75adc230f981a598c:docs/superpowers/plans/2026-07-08-trending-tick.md:curl-auth-header:592
