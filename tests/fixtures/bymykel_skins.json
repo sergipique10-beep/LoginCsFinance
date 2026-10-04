@@ -1,0 +1,24 @@
+[
+  {
+    "name": "AK-47 | Redline",
+    "image": "https://bymykel/ak.png",
+    "stattrak": true,
+    "rarity": {
+      "name": "Classified",
+      "color": "#d32ce6"
+    },
+    "wears": [
+      {
+        "name": "Field-Tested"
+      },
+      {
+        "name": "Minimal Wear"
+      }
+    ]
+  },
+  {
+    "name": "Sin imagen",
+    "image": "",
+    "wears": []
+  }
+]

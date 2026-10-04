@@ -126,3 +126,19 @@ async def test_fetch_og_image(status, text, exc, expected):
 async def test_fetch_og_image_sin_url_no_pide():
     async with _client(exc=AssertionError("no debería pedir")) as client:
         assert await fetch_og_image(client, "") == ""
+
+
+# ── CLEAN-13: las fixtures de tests/fixtures/ son payloads válidos para los mappers ──
+
+def test_fixture_items_produce_tarjetas_completas(payload):
+    from steam.mappers.items import _map_item
+    from tests.test_steam_contract_market import SKIN_CARD_KEYS
+    for raw in payload("steamwebapi/items"):
+        assert set(_map_item(raw)) == SKIN_CARD_KEYS
+
+
+def test_fixture_inventory_anidado_y_plano(payload):
+    from steam.mappers.items import _map_item
+    nested, flat = payload("steamwebapi/inventory")
+    assert _map_item(nested)["floatValue"] == 0.2345
+    assert _map_item(flat)["name"] == "Solitude (Field-Tested)"   # markethashname gana a marketname

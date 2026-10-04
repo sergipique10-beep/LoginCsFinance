@@ -1,0 +1,15 @@
+[
+  {
+    "market_hash_name": "Sticker | Crown (Foil)",
+    "name": "Crown (Foil)",
+    "image": "https://bymykel/crown.png",
+    "rarity": {
+      "name": "Extraordinary",
+      "color": "#eb4b4b"
+    }
+  },
+  {
+    "name": "Sin imagen",
+    "image": ""
+  }
+]

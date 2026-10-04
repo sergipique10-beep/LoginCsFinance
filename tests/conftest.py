@@ -1,4 +1,6 @@
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from unittest.mock import AsyncMock
@@ -15,6 +17,16 @@ from auth import refresh_repo
 from steam import inventory_snapshot_repo
 
 STEAM_ID = "test_steam_id"
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture
+def payload():
+    """CLEAN-13: payloads de ejemplo de las fuentes externas (`tests/fixtures/`), con la
+    forma que leen los adapters. `payload("steamwebapi/items")` devuelve una copia."""
+    def _load(name: str):
+        return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+    return _load
 
 # PERF-14: la tabla inventory_snapshots, en memoria. steam_id → (items, captured_at).
 SNAPSHOT_DB: dict[str, tuple[list, str]] = {}

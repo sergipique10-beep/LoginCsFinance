@@ -82,7 +82,8 @@ def test_contadores():
 
 
 def test_nadie_compara_cached_1_a_mano():
-    pattern = re.compile(r"cached\[1\]")
+    # CLEAN-13: antes solo `cached[1]`; un `entry[1] < ttl` se escapaba.
+    pattern = re.compile(r"\b\w+\[1\]\s*[<>]|[<>]\s*\w+\[1\]\b|now\s*-\s*\w+\[1\]")
     offenders = [
         str(p.relative_to(ROOT))
         for d in ("steam", "tools")

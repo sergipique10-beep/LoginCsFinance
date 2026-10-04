@@ -1,0 +1,63 @@
+[
+  {
+    "id": "730_ak47_redline_ft",
+    "markethashname": "AK-47 | Redline (Field-Tested)",
+    "marketname": "AK-47 | Redline (Field-Tested)",
+    "slug": "ak-47-redline-field-tested",
+    "weapontype": "Rifle",
+    "itemtype": "ak-47",
+    "itemname": "Redline",
+    "image": "https://community.akamai.steamstatic.com/economy/image/ak47redline",
+    "rarity": "Classified",
+    "color": "d32ce6",
+    "bordercolor": "d32ce6",
+    "quality": "Normal",
+    "isstattrak": false,
+    "issouvenir": false,
+    "isstar": false,
+    "tag5": "Field-Tested",
+    "minfloat": 0.1,
+    "maxfloat": 0.7,
+    "paintindex": 282,
+    "variants": [],
+    "pricelatestsell": 20.0,
+    "pricelatest": 20.5,
+    "pricemedian": 19.8,
+    "pricereal": 19.0,
+    "pricereal24h": 18.0,
+    "pricereal7d": 17.5,
+    "pricereal30d": 16.0,
+    "pricesafe": 19.5,
+    "pricemin": 18.0,
+    "pricemax": 22.0,
+    "prices": [
+      {
+        "market": "steam",
+        "price": 20.0,
+        "quantity": 120
+      },
+      {
+        "market": "csfloat",
+        "price": 18.9,
+        "quantity": 40
+      },
+      {
+        "market": "buff",
+        "price": 18.2,
+        "quantity": 65
+      }
+    ],
+    "sold24h": 50,
+    "sold7d": 300,
+    "sold30d": 1200,
+    "soldtotal": 90000,
+    "offervolume": 800,
+    "buyordervolume": 150,
+    "buyorderprice": 18.5,
+    "hourstosold": 3.5,
+    "marketable": true,
+    "tradable": true,
+    "markettradablerestriction": 7,
+    "steamurl": "https://steamcommunity.com/market/listings/730/AK-47%20%7C%20Redline%20%28Field-Tested%29"
+  }
+]

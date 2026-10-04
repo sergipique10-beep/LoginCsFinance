@@ -1,0 +1,45 @@
+{
+  "turnover24h": 1234567.89,
+  "sold24h": 98765,
+  "history": [
+    {
+      "ts": "2026-10-01T00:00:00Z",
+      "value": 100.5,
+      "change": 1.2,
+      "volume": 500
+    },
+    {
+      "ts": "2026-10-02T00:00:00Z",
+      "value": 101.0,
+      "change": 0.5,
+      "volume": null
+    }
+  ],
+  "topmovers": {
+    "gainers": [
+      {
+        "markethashname": "Gainer A",
+        "price": 1.0,
+        "change24h": 50,
+        "image": "gainerhash",
+        "itemtype": "glock-18",
+        "sold24h": 10,
+        "sold7d": 20,
+        "sold30d": 30,
+        "soldtotal": 40
+      },
+      {
+        "markethashname": "Sticker Slab | X",
+        "price": 1.0,
+        "change24h": 99
+      }
+    ],
+    "losers": [
+      {
+        "markethashname": "Loser A",
+        "price": 3.0,
+        "change24h": -10
+      }
+    ]
+  }
+}
