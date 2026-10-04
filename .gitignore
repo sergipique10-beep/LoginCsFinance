@@ -7,3 +7,7 @@ __pycache__/
 certs/
 *.pem
 *.key
+# Definition of Done y cobertura (AOS-02)
+logs/
+.coverage
+coverage.xml
