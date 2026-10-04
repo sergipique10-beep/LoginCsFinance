@@ -32,7 +32,9 @@ jobs:
       - name: gitleaks (binario fijado por version y checksum, todo el historial)
         if: always()
         run: |
-          set -eu
+          # pipefail: sin el, `gitleaks | tee` devuelve el exit de tee y un leak queda en verde
+          # (paso aqui el 2026-10-04 en el primer run: 1 leak y paso verde; EL-12 en cs-finance-meta).
+          set -euo pipefail
           base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
           curl -sSL -o gitleaks.tgz "$base/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           curl -sSL -o checksums.txt "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
