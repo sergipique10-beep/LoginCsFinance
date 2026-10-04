@@ -88,14 +88,19 @@ LoginCsFinance/
                     #   body_excerpt, retry_after) y sus hijas QuotaExhausted (402),
                     #   RateLimited (429), SourceTimeout (→504), SourceUnavailable (→502);
                     #   InvalidPayload (200 ilegible, NO hereda de UpstreamError); HistoryBusy
-    clients/
+    clients/          # Una función por endpoint externo: devuelve el JSON del 200 o lanza el
+                    #   error tipado. Sin caché, sin fallback, sin normalizar (CLEAN-06/07)
+      http.py         # get_json (transporte común + mapeo a errores), parse_retry_after
+      static_catalog.py # fetch_source: un JSON de ByMykel/CSGO-API (15 s); exige lista
+      fx.py           # latest_usd_eur: frankfurter (10 s)
+      steam_news.py   # get_news (Steam News, timeout del cliente), fetch_og_image (4 s, "" si falla)
       steamwebapi.py  # Cliente único de steamwebapi (CLEAN-06): STEAM_WEB_API/STEAM_MARKET_API,
                     #   steam_auth_headers, _history_limiter, y una función por endpoint
                     #   (items, item, inventory, profile, market_index, market_prices,
                     #   market_history, legacy_history, info_markets). Devuelve el JSON del
                     #   200 tal cual o lanza el error tipado; no parsea nada
-    mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
-                    #   _map_news_item, _fetch_og_image, _clean_news_content,
+    mappers.py      # Pure data transformers (sin HTTP): _map_item, _map_market_index_point,
+                    #   _map_news_item, _clean_news_content,
                     #   _delta_from_history, _best_price_from_markets, _safe_delta
     liquidity.py    # Liquidity Score (0-100): compute_liquidity. Puro, sin deps internas.
     services.py     # Async service helpers and image-cache utilities:
@@ -138,7 +143,7 @@ LoginCsFinance/
 settings.py, stores.py, middleware.py, steam/liquidity.py, steam/errors.py  ← nothing internal
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
-steam/clients/steamwebapi.py ← steam/errors, settings
+steam/clients/*         ← steam/errors, settings (solo steamwebapi)
 steam/mappers.py        ← steam/liquidity
 steam/services.py       ← steam/clients, steam/errors, steam/mappers, stores
 steam/cap_history_repo.py ← settings (+ supabase)
@@ -199,7 +204,7 @@ steamwebapi.com responses are transformed in `steam/mappers.py` before being ret
 - `_delta_from_history(pts, days, latest)` — computes % price change vs. N days ago from a history list. Used by `_enrich_prices`.
 - `_map_market_index_point(point)` — time-series points → `{ date, price, change, volume }`
 - `_map_news_item(item, index, image_url)` — Steam news items → normalized shape; `featured: true` for index 0; includes `content` excerpt via `_clean_news_content`
-- `_fetch_og_image(client, url)` — async OG image scraper used by `/news/cs2`
+- `steam_news.fetch_og_image(client, url)` (`steam/clients/steam_news.py`) — async OG image scraper used by `/news/cs2`
 
 **Price deltas** (`_inline_delta` in `steam/mappers.py`): deltas are computed from the **`pricereal` family** (`pricereal` vs `pricereal24h/7d/30d`). Do **not** use `pricelatestsell24h/7d/30d` — steamwebapi returns those identical to `pricelatestsell` for every item, so any delta derived from them is always `None` → `"N/A"` badges everywhere. `_inline_delta` also discards historical values more than 10× away from the current price (the API occasionally returns garbage, e.g. `pricereal30d=0.22` for a $17.57 skin → +7886%). `None` means no sales data and renders as `"N/A"`.
 

@@ -17,16 +17,11 @@ from typing import Any
 import httpx
 
 from settings import STEAM_API_KEY, STEAM_GAME
-from steam.errors import (
-    InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UpstreamError,
-)
+from steam.clients.http import FollowRedirects, Timeout, get_json
 
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
 STEAM_MARKET_API = "https://www.steamwebapi.com/market"
 
-_BODY_EXCERPT = 500
-_Timeout = Any  # float o httpx.USE_CLIENT_DEFAULT
-_FollowRedirects = Any  # bool o httpx.USE_CLIENT_DEFAULT (el tipo no es público)
 
 
 def steam_auth_headers() -> dict[str, str]:
@@ -78,45 +73,17 @@ _history_limiter = _SlidingWindowLimiter(limit=18, window=60.0)
 
 # ── Transporte ────────────────────────────────────────────────────────────────
 
-def _parse_retry_after(value: str | None) -> float | None:
-    # ponytail: solo la forma en segundos; la forma fecha-HTTP se trata como ausente.
-    try:
-        return max(0.0, float(value)) if value else None
-    except ValueError:
-        return None
-
-
 async def _get(client: httpx.AsyncClient, url: str, params: dict | None = None, *,
-               timeout: _Timeout = httpx.USE_CLIENT_DEFAULT,
-               follow_redirects: _FollowRedirects = httpx.USE_CLIENT_DEFAULT) -> Any:
-    try:
-        resp = await client.get(url, headers=steam_auth_headers(), params=params,
-                                timeout=timeout, follow_redirects=follow_redirects)
-    except httpx.TimeoutException as exc:
-        raise SourceTimeout(str(exc)) from exc
-    except httpx.RequestError as exc:
-        raise SourceUnavailable(str(exc)) from exc
-
-    # ponytail: solo 200 es éxito, como comprobaban casi todos los llamadores; un
-    # 2xx distinto de steamwebapi no se ha visto nunca.
-    if resp.status_code == 200:
-        try:
-            return resp.json()
-        except ValueError as exc:
-            raise InvalidPayload(resp.text[:_BODY_EXCERPT]) from exc
-
-    excerpt = resp.text[:_BODY_EXCERPT]
-    if resp.status_code == 402:
-        raise QuotaExhausted(excerpt)
-    if resp.status_code == 429:
-        raise RateLimited(_parse_retry_after(resp.headers.get("Retry-After")), excerpt)
-    raise UpstreamError(resp.status_code, excerpt)
+               timeout: Timeout = httpx.USE_CLIENT_DEFAULT,
+               follow_redirects: FollowRedirects = httpx.USE_CLIENT_DEFAULT) -> Any:
+    return await get_json(client, url, params, headers=steam_auth_headers(),
+                          timeout=timeout, follow_redirects=follow_redirects)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 async def items(client: httpx.AsyncClient, *, select: str, max: int, search: str | None = None,
-                sort_by: str | None = None, timeout: _Timeout = 15.0) -> Any:
+                sort_by: str | None = None, timeout: Timeout = 15.0) -> Any:
     """GET /items: búsqueda (`search`) o ranking (`sort_by`). UNA petición sea cual
     sea `max`."""
     params: dict = {"game": "cs2"}
@@ -156,19 +123,19 @@ async def profile(client: httpx.AsyncClient, steam_id: str) -> Any:
     return await _get(client, f"{STEAM_WEB_API}/profile", {"id": steam_id})
 
 
-async def market_index(client: httpx.AsyncClient, *, timeout: _Timeout = httpx.USE_CLIENT_DEFAULT) -> Any:
+async def market_index(client: httpx.AsyncClient, *, timeout: Timeout = httpx.USE_CLIENT_DEFAULT) -> Any:
     return await _get(client, f"{STEAM_WEB_API}/market-index/cs2", {"format": "json"}, timeout=timeout)
 
 
 async def market_prices(client: httpx.AsyncClient, market: str, params: dict, *,
-                        timeout: _Timeout) -> Any:
+                        timeout: Timeout) -> Any:
     """GET /market/{market}/prices: la lista entera (lookup) o un item (`/market/prices`)."""
     return await _get(client, f"{STEAM_MARKET_API}/{market}/prices", params, timeout=timeout)
 
 
 async def market_history(client: httpx.AsyncClient, market: str, market_hash_name: str,
                          start_date: str, end_date: str, *,
-                         timeout: _Timeout = httpx.USE_CLIENT_DEFAULT) -> Any:
+                         timeout: Timeout = httpx.USE_CLIENT_DEFAULT) -> Any:
     """GET /market/{market}/history (csfloat, buff): fechas y `quantity`."""
     return await _get(client, f"{STEAM_MARKET_API}/{market}/history", {
         "market_hash_name": market_hash_name, "start_date": start_date, "end_date": end_date,
