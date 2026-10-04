@@ -338,6 +338,12 @@ la cuota compartida de steamwebapi. Sigue siendo en memoria y single-worker (CAL
 `detail: UPSTREAM_QUOTA_DETAIL` (`{"code": "upstream_quota", ...}`, en `steam/services.py`).
 El front reconoce `code` y muestra su propio aviso: no comparar el texto.
 
+**`/item/history` pasa por `_history_limiter`** (SEC-16) con espera máxima de 3 s
+(`ITEM_HISTORY_LIMITER_TIMEOUT`). Ventana llena o 429 de steamwebapi → caché caducada si la hay;
+si no, `503` con `UPSTREAM_RATE_LIMIT_DETAIL` (`code: "upstream_rate_limit"`) y `Retry-After: 60`.
+Antes iba directa a steamwebapi y su 429 salía como `502 Steam returned 429` («El servidor no
+responde» en el móvil, visto por CDP al abrir ~7 detalles seguidos).
+
 ## Proxy de Leetify (`stats/`, SEC-09)
 
 `stats/router.py` sirve `/me/stats` y `/me/stats/matches`. La clave (`LEETIFY_API_KEY`) viaja a

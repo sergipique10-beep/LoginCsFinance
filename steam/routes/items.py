@@ -27,6 +27,8 @@ from ..services import (
     STEAM_WEB_API,
     STEAM_MARKET_API,
     UPSTREAM_QUOTA_DETAIL,
+    UPSTREAM_RATE_LIMIT_DETAIL,
+    _history_limiter,
     _enrich_market_prices,
     _enrich_images_from_cache,
 )
@@ -34,6 +36,17 @@ from ..services import (
 # Markets soportados por el endpoint por-market de steamwebapi (market/<m>/history).
 # Steam usa la ruta legacy (steam/api/history) sin market — se deja fuera de aquí.
 _HISTORY_MARKETS = {"buff", "csfloat"}
+
+# SEC-16: espera máxima por un hueco en `_history_limiter` (como el chat en PERF-03).
+# Un detalle de skin no puede quedarse 60 s cargando mientras un cron llena la ventana.
+ITEM_HISTORY_LIMITER_TIMEOUT = 3.0
+
+
+def _upstream_busy(cached: tuple | None):
+    """Ventana de steamwebapi llena: caché caducada si la hay; si no, 503 con Retry-After."""
+    if cached:
+        return cached[0]
+    raise HTTPException(status_code=503, detail=UPSTREAM_RATE_LIMIT_DETAIL, headers={"Retry-After": "60"})
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -335,6 +348,11 @@ async def get_item_history(
         volume_key = "sold"
 
     try:
+        await asyncio.wait_for(_history_limiter.acquire(), timeout=ITEM_HISTORY_LIMITER_TIMEOUT)
+    except asyncio.TimeoutError:
+        return _upstream_busy(cached)
+
+    try:
         resp = await request.app.state.http_client.get(url, params=params)
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Steam history request timed out")
@@ -344,6 +362,9 @@ async def get_item_history(
     if resp.status_code == 402:
         logger.warning("[item-history] daily limit reached for %s (%s)", name, market or "steam")
         return []
+    if resp.status_code == 429:
+        logger.warning("[item-history] steamwebapi 429 for %s (%s)", name, market or "steam")
+        return _upstream_busy(cached)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
 
