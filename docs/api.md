@@ -96,6 +96,7 @@ Response `200`: array of inventory item objects (structure defined by steamwebap
 |--------|--------|-------|
 | `401` | `Token expired` / `Invalid token` | Missing or invalid Bearer token |
 | `403` | `Inventory is private` | User's Steam inventory is set to private |
+| `503` | `{"code": "upstream_quota", ...}` | steamwebapi returned 402 (monthly quota exhausted) and there is no snapshot to serve (SEC-16) |
 | `502` | `"Could not reach Steam: {exc}"` | `httpx.RequestError` — network failure contacting steamwebapi.com |
 | `502` | `"Steam returned {status_code}"` | steamwebapi.com returned a non-200 status (e.g. 401, 403, 429) |
 | `502` | `"Unexpected response format from Steam API"` | steamwebapi.com returned HTTP 200 but the body was not a JSON array (e.g. an error object) |

@@ -323,11 +323,20 @@ el registro de token devuelve error y el news-tick no tiene dónde deduplicar.
 ## Rate limit de lecturas de mercado (SEC-03)
 
 `_rate_limit(ip, limit=, bucket=)` en `auth/service.py` tiene presupuestos separados: el de
-`/auth/*`, `/rag/chat` y `/news/cs2` (10/60 s por IP, bucket vacío) y el de las **ocho
-lecturas `/market/*`** (`market_rate_limit`, 60/60 s por IP, bucket `market`), declarado como
-`dependencies=[Depends(market_rate_limit)]` en cada decorador. Abrir Market son ~6 llamadas;
-un bucle o un bug de reintentos del frontend recibe 429 antes de agotar la cuota compartida
-de steamwebapi. Sigue siendo en memoria y single-worker (CAL-04).
+`/auth/*` (10/60 s por IP, bucket vacío), el de las **lecturas `/market/*`**
+(`market_rate_limit`, 60/60 s, bucket `market`), el de **`/item/history`**
+(`item_history_rate_limit`, 60/60 s, bucket `item-history`, SEC-16: cada detalle de skin hace 2
+llamadas), el de `/me/stats*` (20/60 s, `stats`) y los de `/rag/chat` y `/news/cs2` (10/60 s,
+buckets `chat` y `news`). **Regla (SEC-16): el bucket vacío es solo para `/auth/*`.** Una ruta
+nueva que lo comparta puede dejar `/auth/refresh` en 429 y cerrar la sesión del usuario. Abrir
+Market son ~6 llamadas; un bucle o un bug de reintentos del frontend recibe 429 antes de agotar
+la cuota compartida de steamwebapi. Sigue siendo en memoria y single-worker (CAL-04).
+
+**402 de steamwebapi (cuota mensual agotada) nunca es un 429** (SEC-16): `/market/items`,
+`/market/price`, `/market/index` y `/market/prices` sirven su caché aunque esté caducada
+(`_quota_exhausted` en `steam/routes/market.py`); sin caché, `503` con
+`detail: UPSTREAM_QUOTA_DETAIL` (`{"code": "upstream_quota", ...}`, en `steam/services.py`).
+El front reconoce `code` y muestra su propio aviso: no comparar el texto.
 
 ## Proxy de Leetify (`stats/`, SEC-09)
 
@@ -470,7 +479,7 @@ Dos errores distintos, dos tratamientos — no confundirlos:
 | steamwebapi | Significa | `/inventory` |
 |---|---|---|
 | **429** | Límite por minuto (20/60 s en Starter): transitorio | Sirve el snapshot + **reintenta en segundo plano** |
-| **402** | Cuota mensual agotada (PERF-09): dura hasta el día 10 | Sirve el snapshot si lo hay, **nunca reintenta** (sin snapshot: 502, como antes) |
+| **402** | Cuota mensual agotada (PERF-09): dura hasta el día 10 | Sirve el snapshot si lo hay, **nunca reintenta** (sin snapshot: 503 `upstream_quota`, SEC-16) |
 
 - **Snapshot durable**: tabla Supabase `inventory_snapshots` (`steam_id` PK, `items` jsonb, `captured_at`), DDL en **`docs/sql/inventory_snapshots.sql` — hay que ejecutarlo a mano en Supabase antes de desplegar** (sin la tabla el guardado falla en silencio y un 429 vuelve a dar error). Una fila por usuario, sobrescrita en cada lectura 200 (`_store` en `steam/routes/items.py`). No sirve `_inventory_cache`: se vacía cuando Render duerme y solo guarda un `monotonic()`. Es dato personal: RLS sin políticas y se borra con la cuenta.
 - **Reintento**: `_retry_inventory`, una tarea `asyncio` por usuario (`_retry_tasks`), backoff exponencial con jitter (`_backoff`: mitad fija + mitad aleatoria, nunca menos que `Retry-After`). Mientras haya uno en curso, `GET /inventory` sirve el snapshot **sin llamar a steamwebapi** (cada llamada extra sería otro 429). Si recupera, rellena `_inventory_cache` y el snapshot. **Ceiling:** vive en el proceso: si Render duerme se pierde y el siguiente GET reintenta por su cuenta.

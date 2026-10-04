@@ -131,12 +131,13 @@ def test_402_never_schedules_a_retry_even_with_snapshot(client, monkeypatch):
     schedule.assert_not_called()
 
 
-def test_402_without_snapshot_is_the_old_502_and_no_retry(client, monkeypatch):
+def test_402_without_snapshot_is_503_upstream_quota_and_no_retry(client, monkeypatch):
     schedule = _quota_exhausted(monkeypatch)
 
     resp = client.get("/inventory")
 
-    assert resp.status_code == 502
+    assert resp.status_code == 503   # SEC-16: antes 502, que el front leía como «servidor caído»
+    assert resp.json()["detail"]["code"] == "upstream_quota"
     schedule.assert_not_called()
 
 
