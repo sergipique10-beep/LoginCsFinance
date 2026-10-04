@@ -3,7 +3,9 @@ construye con él cuando /items no responde."""
 import logging
 
 from steam.domain.models import MoverItem
-from steam.mappers.items import _normalize_image, _weapon_category
+from steam.domain.catalog import weapon_category
+from steam.domain.names import is_sticker_slab
+from steam.mappers.items import _normalize_image
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -29,7 +31,7 @@ def _map_topmovers_item(raw: dict) -> MoverItem:
         # mal (ver nota en _map_item).
         "name":           raw.get("markethashname") or raw.get("marketname", ""),
         "slug":           raw.get("slug", ""),
-        "weaponType":     raw.get("weapontype") or _weapon_category(raw.get("itemtype")),
+        "weaponType":     raw.get("weapontype") or weapon_category(raw.get("itemtype")),
         "itemName":       raw.get("itemname"),
         "itemType":       raw.get("itemtype"),
         "image":          _normalize_image(raw.get("image", "")),
@@ -81,8 +83,7 @@ def _build_movers_from_topmovers(gainers: list, losers: list) -> dict[str, list[
     if not gainers and not losers:
         return None
     def _is_slab(raw: dict) -> bool:
-        name = (raw.get("marketname") or raw.get("markethashname") or "").lower()
-        return "sticker slab" in name
+        return is_sticker_slab(raw.get("marketname") or raw.get("markethashname") or "")
     hot  = [_map_topmovers_item(g) for g in gainers if not _is_slab(g)][:_MOVERS_LIMIT]
     cold = [_map_topmovers_item(l) for l in losers  if not _is_slab(l)][:_MOVERS_LIMIT]
     logger.info("[market-movers] topmovers raw: gainers=%d losers=%d | after_filter: hot=%d cold=%d",

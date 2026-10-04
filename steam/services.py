@@ -13,6 +13,9 @@ from stores import (
 from steam.clients import fx, static_catalog, steamwebapi
 from steam.clients.steamwebapi import _history_limiter
 from steam.errors import HistoryBusy, InvalidPayload, SourceTimeout, SourceUnavailable, UpstreamError
+from steam.domain import catalog
+from steam.domain.models import MarketProvider
+from steam.domain.names import catalog_keys_for_skin, image_lookup_candidates, without_souvenir
 from steam.mappers.items import _delta_from_history
 
 logger = logging.getLogger("uvicorn.error")
@@ -32,9 +35,6 @@ _STATIC_KNIVES_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main
 _STATIC_CRATES_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/crates.json"
 _STATIC_AGENTS_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/agents.json"
 _STATIC_PATCHES_URL   = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/patches.json"
-
-_WEAR_NAMES = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred"]
-
 
 # ── Price history ─────────────────────────────────────────────────────────────
 
@@ -148,23 +148,10 @@ def _enrich_images_from_cache(items: list) -> list:
         return items
     for item in items:
         if not item.get("image"):
-            name = item.get("name", "")
-            img = _item_image_cache.get(name, "")
-            # StatTrak variants share the same skin image as their base version.
-            # Removing "StatTrak™ " covers all cases in one step:
-            #   "★ StatTrak™ X (wear)" → "★ X (wear)"  (knife, image from API)
-            #   "StatTrak™ X (wear)"   → "X (wear)"     (weapon, image from API or ByMykel)
-            if not img and "StatTrak™ " in name:
-                img = _item_image_cache.get(name.replace("StatTrak™ ", "", 1), "")
-            # Non-StatTrak "★ X": ByMykel stores knives without the star prefix.
-            if not img and name.startswith("★ "):
-                img = _item_image_cache.get(name[2:], "")
-            # Souvenir items: try the base skin name without the "Souvenir " prefix.
-            if not img and name.startswith("Souvenir "):
-                item_type = (item.get("itemType") or "").lower()
-                if "charm" not in item_type:
-                    img = _item_image_cache.get(name[len("Souvenir "):], "")
-            item["image"] = img
+            candidates = image_lookup_candidates(item.get("name", ""), item.get("itemType"))
+            item["image"] = next(
+                (img for key in candidates if (img := _item_image_cache.get(key))), "",
+            )
     return items
 
 
@@ -189,13 +176,7 @@ def _register_skin(item: dict) -> None:
     if not name or not image:
         return
     wears = [w.get("name", "") for w in item.get("wears", []) if w.get("name")]
-    if not wears:
-        wears = _WEAR_NAMES
-    bases = [name, f"★ {name}"]
-    if item.get("stattrak"):
-        bases += [f"StatTrak™ {name}", f"★ StatTrak™ {name}"]
-    keys = bases + [f"{base} ({wear})" for base in bases for wear in wears]
-    _register_keys(keys, item, image)
+    _register_keys(catalog_keys_for_skin(name, wears, bool(item.get("stattrak"))), item, image)
 
 
 def _register_flat(item: dict) -> None:
@@ -209,10 +190,10 @@ def _register_flat(item: dict) -> None:
 def _rarity_from_cache(name: str) -> tuple[str, str] | None:
     """Rareza de un market_hash_name según el catálogo estático (UX-39). Sirve para
     payloads que no la traen, como topmovers. None si el ítem no está en el catálogo
-    (p. ej. sticker slabs): quien pinta decide qué hacer sin ella."""
+    (p. ej. los slabs de stickers): quien pinta decide qué hacer sin ella."""
     found = _item_rarity_cache.get(name)
-    if not found and name.startswith("Souvenir "):
-        found = _item_rarity_cache.get(name[len("Souvenir "):])
+    if not found and (base := without_souvenir(name)) is not None:
+        found = _item_rarity_cache.get(base)
     return found
 
 
@@ -351,32 +332,16 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
 
 
 async def _enrich_market_prices(client: httpx.AsyncClient, items: list) -> list:
-    """Añade `<market>Price` por cada mercado de _TRACKED_MARKETS. **Muta** los
+    """Añade `<market>Price` por cada mercado de catalog.TRACKED_MARKETS. **Muta** los
     items en sitio y devuelve la misma lista."""
-    lookups = await asyncio.gather(*(_fetch_market_price_lookup(client, m) for m in _TRACKED_MARKETS))
+    markets = catalog.TRACKED_MARKETS
+    lookups = await asyncio.gather(*(_fetch_market_price_lookup(client, m) for m in markets))
     for item in items:
         name = item.get("name", "")
-        for market, lookup in zip(_TRACKED_MARKETS, lookups, strict=True):
+        for market, lookup in zip(markets, lookups, strict=True):
             item[f"{market}Price"] = lookup.get(name) or None   # csfloatPrice, buffPrice
     return items
 
-
-_STEAM_FAVICON = "https://store.steampowered.com/favicon.ico"
-
-_PROVIDER_IDS = {"csfloat", "buff"}
-
-# Known public logos used as fallback when the API doesn't return them
-_KNOWN_LOGOS: dict[str, str] = {
-    "steam":   _STEAM_FAVICON,
-    "csfloat": "https://csfloat.com/favicon.ico",
-    "buff":    "https://buff.163.com/favicon.ico",
-}
-
-_FALLBACK_PROVIDERS = [
-    {"id": "steam",   "name": "Steam",   "logoUrl": _KNOWN_LOGOS["steam"]},
-    {"id": "csfloat", "name": "CSFloat", "logoUrl": _KNOWN_LOGOS["csfloat"]},
-    {"id": "buff",    "name": "Buff163", "logoUrl": _KNOWN_LOGOS["buff"]},
-]
 
 
 async def _fetch_fx_rate(client: httpx.AsyncClient) -> tuple[float | None, bool]:
@@ -413,13 +378,13 @@ async def _fetch_fx_rate(client: httpx.AsyncClient) -> tuple[float | None, bool]
         return _fx_cache.stale("usdeur"), False
 
 
-def _providers_stale() -> list[dict]:
+def _providers_stale() -> list[MarketProvider]:
     """PERF-17: con la fuente caída, el último dato bueno si existe; si no, el respaldo."""
     last = _market_providers_cache.stale("providers")
-    return last if last is not None else _FALLBACK_PROVIDERS
+    return last if last is not None else catalog.fallback_providers()
 
 
-async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
+async def _fetch_market_providers(client: httpx.AsyncClient) -> list[MarketProvider]:
     now = time.monotonic()
     hit = _market_providers_cache.fresh("providers", now)
     if hit is not None:
@@ -442,10 +407,10 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
         if data:
             logger.info("[market-providers] sample keys: %s", list(data[0].keys()))
 
-        lookup: dict[str, dict] = {}
+        lookup: dict[str, MarketProvider] = {}
         for m in data:
             mid = (m.get("id") or m.get("key") or m.get("name") or "").lower()
-            if mid in _PROVIDER_IDS:
+            if mid in catalog.PROVIDER_IDS:
                 api_logo = (
                     m.get("logo") or m.get("logoUrl") or m.get("logo_url") or
                     m.get("image") or m.get("imageUrl") or m.get("image_url") or
@@ -455,12 +420,12 @@ async def _fetch_market_providers(client: httpx.AsyncClient) -> list[dict]:
                 lookup[mid] = {
                     "id":      mid,
                     "name":    m.get("name") or mid.capitalize(),
-                    "logoUrl": api_logo or _KNOWN_LOGOS.get(mid, ""),
+                    "logoUrl": api_logo or catalog.KNOWN_LOGOS.get(mid, ""),
                 }
 
-        providers = [{"id": "steam", "name": "Steam", "logoUrl": _STEAM_FAVICON}]
+        providers: list[MarketProvider] = [{"id": "steam", "name": "Steam", "logoUrl": catalog.STEAM_FAVICON}]
         for pid in ("csfloat", "buff"):
-            providers.append(lookup.get(pid) or next(f for f in _FALLBACK_PROVIDERS if f["id"] == pid))
+            providers.append(lookup.get(pid) or catalog.fallback_provider(pid))
 
         _market_providers_cache.put("providers", providers, now)
         logger.info("[market-providers] loaded %d providers", len(providers))

@@ -9,7 +9,9 @@ files:
   - steam/clients/steam_news.py
   - steam/clients/steamwebapi.py
   - steam/domain/__init__.py
+  - steam/domain/catalog.py
   - steam/domain/models.py
+  - steam/domain/names.py
   - steam/errors.py
   - steam/inventory_snapshot_repo.py
   - steam/liquidity.py

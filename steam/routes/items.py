@@ -23,6 +23,7 @@ from .. import inventory_snapshot_repo
 from ..mappers.items import _map_item
 from ..clients import steamwebapi
 from ..clients.steamwebapi import _history_limiter
+from ..domain.catalog import HISTORY_MARKETS
 from ..errors import QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UpstreamError
 from ..services import (
     UPSTREAM_QUOTA_DETAIL,
@@ -31,9 +32,6 @@ from ..services import (
     _enrich_images_from_cache,
 )
 
-# Markets soportados por el endpoint por-market de steamwebapi (market/<m>/history).
-# Steam usa la ruta legacy (steam/api/history) sin market — se deja fuera de aquí.
-_HISTORY_MARKETS = {"buff", "csfloat"}
 
 # SEC-16: espera máxima por un hueco en `_history_limiter` (como el chat en PERF-03).
 # Un detalle de skin no puede quedarse 60 s cargando mientras un cron llena la ventana.
@@ -286,7 +284,7 @@ async def get_item_history(
     # Buff163/CSFloat usan el endpoint por-market (fechas + quantity); Steam usa la
     # ruta legacy (interval + sold). Distintos hosts, params y forma de respuesta.
     client = request.app.state.http_client
-    if market in _HISTORY_MARKETS:
+    if market in HISTORY_MARKETS:
         today = date.today()
         fetch = partial(
             steamwebapi.market_history,

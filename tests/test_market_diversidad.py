@@ -5,9 +5,8 @@ antes de pasar a la siguiente: con "Rifle" en cabeza los 18 huecos del trending
 salían todos rifles, incluidas 4 variantes de desgaste de la misma skin.
 """
 
-from steam.routes.market import (
-    _MAX_POR_CATEGORIA, _MAX_POR_SKIN, _diversificar, _skin_base,
-)
+from steam.domain.names import skin_base as _skin_base
+from steam.routes.market import _MAX_POR_CATEGORIA, _MAX_POR_SKIN, _diversificar
 
 
 def _item(nombre: str, categoria: str) -> dict:

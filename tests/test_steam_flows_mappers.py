@@ -9,9 +9,9 @@ import httpx
 import pytest
 
 from steam.clients.steam_news import fetch_og_image
+from steam.domain.catalog import WEAPON_CATEGORY, weapon_category
 from steam.mappers.items import (
-    _STEAM_CDN, _WEAPON_CATEGORY, _delta_from_history, _normalize_image, _resolve_phase,
-    _safe_delta, _weapon_category,
+    _STEAM_CDN, _delta_from_history, _normalize_image, _resolve_phase, _safe_delta,
 )
 from steam.mappers.market_index import _map_market_index_point
 from steam.mappers.news import _map_news_item, is_readable_news
@@ -58,14 +58,14 @@ def test_resolve_phase(item, expected):
 
 
 def test_weapon_category_exact_and_fallbacks():
-    key, cat = next(iter(_WEAPON_CATEGORY.items()))
-    assert _weapon_category(key.upper()) == cat           # normaliza mayúsculas
-    assert _weapon_category(None) is None
-    assert _weapon_category("Sport Gloves") == "Gloves"
-    assert _weapon_category("shadow daggers") == "Knife"
-    assert _weapon_category("sticker capsule") == "Sticker"
-    assert _weapon_category("special agent") == "Agent"
-    assert _weapon_category("music kit") == "Music Kit"   # último recurso: title()
+    key, cat = next(iter(WEAPON_CATEGORY.items()))
+    assert weapon_category(key.upper()) == cat           # normaliza mayúsculas
+    assert weapon_category(None) is None
+    assert weapon_category("Sport Gloves") == "Gloves"
+    assert weapon_category("shadow daggers") == "Knife"
+    assert weapon_category("sticker capsule") == "Sticker"
+    assert weapon_category("special agent") == "Agent"
+    assert weapon_category("music kit") == "Music Kit"   # último recurso: title()
 
 
 def test_market_index_point_normal_e_incompleto():

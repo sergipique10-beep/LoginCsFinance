@@ -15,7 +15,9 @@ from stores import (
 from auth.service import market_rate_limit, require_jwt, token_matches
 from ..cap_history_repo import insert_snapshot, fetch_range
 from ..rankings_repo import trending_repo, movers_repo
+from ..domain.catalog import VALID_MARKETS
 from ..domain.models import SkinCard
+from ..domain.names import is_sticker_slab, skin_base
 from ..mappers.items import _map_item
 from ..mappers.market_index import _map_market_index_point
 from ..mappers.movers import _MOVERS_LIMIT, _build_movers_from_topmovers, _map_topmovers_item
@@ -117,11 +119,6 @@ _MAX_POR_CATEGORIA = 4
 _MAX_POR_SKIN = 2
 
 
-def _skin_base(nombre: str) -> str:
-    """Nombre sin el desgaste: 'AK-47 | Crane Flight (Field-Tested)' → sin '(...)'."""
-    return nombre.split(" (")[0].strip().lower()
-
-
 _Card = TypeVar("_Card", bound=Mapping[str, Any])
 
 
@@ -154,7 +151,7 @@ def _diversificar(items: list[_Card], limite: int) -> list[_Card]:
 
     for it in items:
         cat = it.get("weaponType") or "?"
-        base = _skin_base(it.get("name") or "")
+        base = skin_base(it.get("name") or "")
         if por_skin.get(base, 0) >= max_skin:
             continue
         if por_categoria.get(cat, 0) >= max_categoria:
@@ -186,13 +183,6 @@ def _quota_exhausted(stale: Any):
     raise HTTPException(status_code=503, detail=UPSTREAM_QUOTA_DETAIL)
 
 
-_VALID_MARKETS = frozenset({
-    "buff", "skinport", "skinbaron", "dmarket", "waxpeer",
-    "bitskins", "csgotm", "haloskins", "tradeit", "skinbid",
-    "csfloat", "youpin",
-})
-
-
 async def _compute_movers(client: httpx.AsyncClient) -> dict:
     """Calcula el ranking hot/cold actual (sin cache, sin persistencia).
 
@@ -221,7 +211,7 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
                 latest = float(raw.get("pricelatestsell") or 0)
                 volume = int(raw.get("sold24h") or 0)
                 if (latest >= _PRECIO_MIN_RANKING and volume >= 5
-                        and "sticker slab" not in (raw.get("marketname") or "").lower()):
+                        and not is_sticker_slab(raw.get("marketname") or "")):
                     mapped.append(_map_item(raw))
             # Ordenar por turnover (precio × unidades), no por precio suelto: mide
             # qué mueve dinero de verdad. Cap at 20 (= _MOVERS_LIMIT * 2): exactly
@@ -338,7 +328,7 @@ async def get_market_items(
     result = [
         _map_item(raw) for raw in data
         if float(raw.get("pricelatestsell") or 0) > 0
-        and "sticker slab" not in (raw.get("marketname") or raw.get("market_hash_name") or "").lower()
+        and not is_sticker_slab(raw.get("marketname") or raw.get("market_hash_name") or "")
     ][:_SEARCH_LIMIT]
 
     await _fetch_static_images(request.app.state.http_client)
@@ -858,10 +848,10 @@ async def get_market_prices(
     user: dict = Depends(require_jwt),
 ):
     market = market.lower().strip()
-    if market not in _VALID_MARKETS:
+    if market not in VALID_MARKETS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown market '{market}'. Valid: {', '.join(sorted(_VALID_MARKETS))}",
+            detail=f"Unknown market '{market}'. Valid: {', '.join(sorted(VALID_MARKETS))}",
         )
 
     cache_key = f"{market}:{(name or '').lower()}:{(currency or 'usd').lower()}"

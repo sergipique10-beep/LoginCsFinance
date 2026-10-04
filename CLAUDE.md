@@ -100,13 +100,20 @@ LoginCsFinance/
                     #   market_history, legacy_history, info_markets). Devuelve el JSON del
                     #   200 tal cual o lanza el error tipado; no parsea nada
     domain/
+      names.py        # Reglas de nombres (CLEAN-10): image_lookup_candidates, catalog_keys_for_skin,
+                    #   without_souvenir, is_sticker_slab, skin_base. Los prefijos «StatTrak™ »,
+                    #   «★ », «Souvenir » y la marca de slab solo aparecen aquí (guardia en
+                    #   tests/test_domain_names.py)
+      catalog.py      # Constantes inmutables: WEAR_NAMES, WEAPON_CATEGORY + weapon_category,
+                    #   TRACKED_MARKETS / VALID_MARKETS / HISTORY_MARKETS, proveedores
+                    #   (KNOWN_LOGOS, PROVIDER_IDS, fallback_providers() devuelve copia)
       models.py       # TypedDict del contrato JSON (CLEAN-08): RankedCard (_row_to_item) ⊂
                     #   SkinCard (_map_item) ⊂ MoverItem (+_change24h interno), RankingRow,
                     #   MarketIndexPoint, NewsItem, MarketProvider, HistoryPoint.
                     #   tests/test_steam_models.py ata sus claves a los tests de contrato
     mappers/        # Mappers puros, uno por dominio (sin HTTP, sin caché, sin fallback):
       items.py        #   _map_item, _inline_delta, _safe_delta, _delta_from_history,
-                    #   _resolve_phase, _normalize_image, _weapon_category
+                    #   _resolve_phase, _normalize_image
       movers.py       #   _map_topmovers_item, _build_movers_from_topmovers, _MOVERS_LIMIT
       market_index.py #   _map_market_index_point
       news.py         #   _map_news_item, _clean_news_content, is_readable_news
@@ -117,7 +124,7 @@ LoginCsFinance/
                     #   _cache_images, _enrich_images_from_cache (image cache fill/lookup)
                     #   _register_skin, _register_flat (ByMykel static data registration)
                     #   _fetch_static_images (lazy loader for ByMykel/CSGO-API)
-                    #   Constants: _STATIC_*_URL, _WEAR_NAMES
+                    #   Constants: _STATIC_*_URL
     cap_history_repo.py  # Supabase data layer for the CS2 price-index history:
                     #   get_supabase (module-cached client, service_role),
                     #   insert_snapshot (upsert by ts), fetch_range (rows since cutoff).
@@ -153,6 +160,7 @@ steam/domain/models.py  ← nothing internal
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
 steam/clients/*         ← steam/errors, settings (solo steamwebapi)
+steam/domain/*          ← steam/domain (catalog → models, names → catalog)
 steam/mappers/*         ← steam/domain, steam/liquidity
 steam/services.py       ← steam/clients, steam/errors, steam/mappers, stores
 steam/cap_history_repo.py ← settings (+ supabase)
