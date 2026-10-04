@@ -375,8 +375,6 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
     )
 
 
-# ── Movers ────────────────────────────────────────────────────────────────────
-
 # ── Multi-market price lookup ─────────────────────────────────────────────────
 
 _TRACKED_MARKETS = ("csfloat", "buff")
@@ -433,14 +431,11 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
 
 
 async def _enrich_market_prices(client: httpx.AsyncClient, items: list) -> list:
-    csfloat_lookup, buff_lookup = await asyncio.gather(
-        _fetch_market_price_lookup(client, "csfloat"),
-        _fetch_market_price_lookup(client, "buff"),
-    )
+    lookups = await asyncio.gather(*(_fetch_market_price_lookup(client, m) for m in _TRACKED_MARKETS))
     for item in items:
         name = item.get("name", "")
-        item["csfloatPrice"] = csfloat_lookup.get(name) or None
-        item["buffPrice"] = buff_lookup.get(name) or None
+        for market, lookup in zip(_TRACKED_MARKETS, lookups, strict=True):
+            item[f"{market}Price"] = lookup.get(name) or None   # csfloatPrice, buffPrice
     return items
 
 

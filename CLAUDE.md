@@ -214,7 +214,7 @@ La predicción es **determinista, no la hace el LLM**: se expone como tool y el 
 - **`predict/trend.py`** — regresión lineal OLS sin numpy. Devuelve estimación puntual **siempre acompañada de `intervalo`** (±1.96·σ residual, ensanchado por `sqrt(1+h/n)`), `tendencia`, `confianza`, `horizon_days` (1-30), `r2`, `model_version` (`linreg-ols-v1`) y `backtest`.
 - **`predict/backtest.py`** — walk-forward: en cada corte t ajusta solo con `prices[:t]` y compara la proyección a H días contra el real en `t+H`. Compara MAE del modelo vs. el naive ("dentro de H días, el precio de hoy"). Requiere ≥5 cortes (`MIN_FOLDS`) para pronunciarse.
 - **Gate**: si el backtest dice que **no supera a naive**, la confianza se fuerza a `"baja"` sea cual sea el R². La cifra se sigue devolviendo, pero declarada como poco fiable — el system prompt obliga al agente a advertirlo. En un random walk el modelo pierde contra naive y el gate salta (verificado en `tests/test_predict_trend.py`).
-- **Fuente histórica** (`predict/service.py:_historico`): prioriza la serie propia de `precios_historicos` (≥20 puntos); si aún no hay suficientes o Supabase falla, cae a `_fetch_history_for_item` (CSFloat ~50d, con limiter y caché). Ambas devuelven la misma forma `[{date, price, volume}]`.
+- **Fuente histórica** (`predict/service.py:_historico`): prioriza la serie propia de `precios_historicos` (≥20 puntos); si aún no hay suficientes o Supabase falla, cae a `_fetch_history_for_item` (CSFloat, 35 días, con limiter y caché). Ambas devuelven la misma forma `[{date, price, volume}]`.
 
 ## Captura de precios por-skin (`steam/price_capture.py`)
 
