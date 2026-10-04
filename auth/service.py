@@ -13,6 +13,7 @@ from settings import COOKIE_SECURE, JWT_SECRET
 from stores import (
     NONCE_TTL, CODE_TTL,
     RATE_LIMIT_CALLS, RATE_LIMIT_WINDOW, MARKET_RATE_LIMIT_CALLS, STATS_RATE_LIMIT_CALLS,
+    ITEM_HISTORY_RATE_LIMIT_CALLS,
     ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL, TOKEN_AUDIENCE,
     _nonces, _rate_store,
 )
@@ -89,6 +90,13 @@ def leetify_rate_limit(request: Request) -> None:
     """SEC-09 — dependencia del router de /me/stats*. Cada llamada que no acierta
     la caché consume cuota de Leetify, así que tiene su propio cupo por IP."""
     _rate_limit(_get_client_ip(request), limit=STATS_RATE_LIMIT_CALLS, bucket="stats")
+
+
+def item_history_rate_limit(request: Request) -> None:
+    """SEC-16 — dependencia de /item/history. Cada detalle de skin pide 2 rangos
+    (timeframe + 365 d); en el cupo de auth, 5 detalles bastaban para un 429 que
+    además bloqueaba /auth/refresh. La caché de 23 h ya acota el coste upstream."""
+    _rate_limit(_get_client_ip(request), limit=ITEM_HISTORY_RATE_LIMIT_CALLS, bucket="item-history")
 
 
 def _issue_nonce(redirect_origin: str) -> str:

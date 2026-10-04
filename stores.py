@@ -18,6 +18,7 @@ CODE_TTL = 30                # seconds a one-time auth code remains valid
 RATE_LIMIT_CALLS = 10        # max requests per window per IP
 MARKET_RATE_LIMIT_CALLS = 60  # SEC-03: lecturas /market/* por IP y ventana (Market abre ~6 llamadas)
 STATS_RATE_LIMIT_CALLS = 20   # SEC-09: /me/stats* por IP y ventana (el perfil abre 2 llamadas)
+ITEM_HISTORY_RATE_LIMIT_CALLS = 60  # SEC-16: /item/history por IP y ventana (cada detalle de skin abre 2)
 RATE_LIMIT_WINDOW = 60       # seconds
 
 ACCESS_TOKEN_TTL = timedelta(minutes=30)
