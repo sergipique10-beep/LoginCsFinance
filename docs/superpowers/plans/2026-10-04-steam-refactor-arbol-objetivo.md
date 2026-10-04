@@ -273,3 +273,24 @@ Por fase, además:
 - **F5**: `tests/test_steam_layers.py` con las reglas nuevas en verde.
 - **End-to-end** (una vez por fase, con el venv): `venv/bin/python -m uvicorn main:app --port 8000` y `curl localhost:8000/` → 200; `GET /news/cs2` (sin auth) → 200 con las claves de `NewsItem`; `POST /auth/dev-token` 404 salvo `DEBUG=true` (smoke de `deploy-smoke.yml`).
 - CI (`.github/workflows/ci.yml`) debe estar en verde en cada push de fase; Render despliega solo tras CI.
+
+
+---
+
+## Salida de fase
+
+### Fase 0 (CLEAN-13, commit `8826523`)
+- **Movido:** nada. **Igual:** todo el comportamiento.
+- **Riesgo reducido:** las capas nuevas nacen con guardia de dependencias por AST; `x[1] <` ya no esquiva la guardia de `TtlCache`; hay payloads de ejemplo versionados (`tests/fixtures/`).
+- **Prueba:** `tests/test_steam_layers.py::test_orden_de_dependencias`, `tests/test_steam_flows_mappers.py::test_fixture_*`. DoD en verde (807 tests, cobertura 89 %).
+- **Pendiente:** nada.
+
+### Fase 1 (CLEAN-14, commits `c16c270`..`08df69f`)
+- **Movido:** `steam/errors.py` → `errors/domain_errors.py`, `steam/degraded.py` → `errors/handling.py`; `steam/clients/` → `steam/api/` (steam_client, news_client, static_catalog_client, fx_client, http); `steam/mappers/{items,news,movers,market_index,rows}.py` → `*_mapper.py`.
+- **Nuevo:** `api/csfloat_client.py`, `api/buff_client.py`, `MARKET_CLIENTS`; `http.get_text`; `steam/adapters/` (9 ficheros); modelos internos en `domain/models.py`; `as_float/as_int/as_bool/as_str` e `InvalidField`; `mappers/profile_mapper.py`, `mappers/provider_mapper.py`; `tests/test_invalid_payloads.py` (56 casos), `tests/test_steam_errors.py`.
+- **Igual:** el contrato JSON de todas las rutas (los `tests/test_steam_contract_*` no se han tocado salvo quitar 4 `xfail`); la cadena de precio, las reglas de plausibilidad, las cachés y sus TTL, el limiter, los flows de `[steam-degraded]`.
+- **Riesgo reducido:** ningún service lee claves del JSON crudo (`grep "isinstance(data, list)" steam/services` → 0 salvo un log); el mapping de `HistoryPoint` tiene una sola implementación; una forma inesperada nombra fuente y operación; un campo con tipo imposible es `InvalidField`, no un 500 por `ValueError`; `fetch_og_image` ya no traga errores sin motivo.
+- **CAL-14 cerrados de paso (4 xfail fuera):** gainer sin `markethashname` en `/market/index` (descartado, no 500); perfil vacío no se cachea; `/item/history` con cuerpo ilegible no cachea 23 h; `change24h` ausente = 0.0. Quedan 13 `xfail` (CAL-11, CAL-12, CAL-13 y el resto de CAL-14: status codes) para la Fase 2.
+- **Prueba:** DoD en verde (873 tests, cobertura ~90 %, ruff 73 → 71, mypy 61 → 56).
+- **Pendiente para la Fase 2:** `http_error_for` (InvalidPayload → 502, 402/429 con `code` en /me, búsqueda e /item/history); los 13 `xfail`; `except Exception` → tuplas tipadas (13 sitios); `Fetched` en news/profile/inventory/history/lookup; `capture_trending` no purga con `status="error"`.
+- **Deuda consciente dejada:** `canonical_price` y `price_capture._lookup_item` siguen sobre el dict crudo de `/item` (8 mocks en tests de alerts y price-capture; se cambia en la Fase 5.4); `tools/market_tools` llama al adapter antes de `_map_item` (3 líneas por tool); `domain/names.py` y `liquidity.py` siguen en su sitio hasta la Fase 4.
