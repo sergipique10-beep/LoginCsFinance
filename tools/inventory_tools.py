@@ -71,15 +71,13 @@ async def _ver_inventario(
     ``steam_id`` se inyecta desde el JWT en el router — no viene de Gemini.
     """
     from stores import _inventory_cache, INVENTORY_CACHE_TTL
+    from steam.clients import steamwebapi
+    from steam.errors import InvalidPayload, UpstreamError
     from steam.services import (
-        STEAM_WEB_API,
-        STEAM_MARKET_API,
         _enrich_market_prices,
         _enrich_images_from_cache,
-        steam_auth_headers,
     )
     from steam.mappers import _map_item
-    from settings import STEAM_GAME
 
     import time
 
@@ -89,26 +87,16 @@ async def _ver_inventario(
         items = cached[0]
     else:
         try:
-            resp = await client.get(
-                f"{STEAM_WEB_API}/inventory",
-                headers=steam_auth_headers(),
-                params={
-                    "steam_id": steam_id,
-                    "game": STEAM_GAME,
-                    "language": "english",
-                    "limit": 5000,
-                    "no_cache": 1,
-                },
-            )
+            data = await steamwebapi.inventory(client, steam_id)
+        except InvalidPayload:
+            raise   # un 200 ilegible no se tragaba antes del cliente
         except Exception as exc:
-            logger.warning("[tools] ver_inventario falló: %s", exc)
+            if isinstance(exc, UpstreamError) and exc.status is not None:
+                logger.warning("[tools] ver_inventario steamwebapi → %s", exc.status)
+            else:
+                logger.warning("[tools] ver_inventario falló: %s", exc)
             return []
 
-        if resp.status_code != 200:
-            logger.warning("[tools] ver_inventario steamwebapi → %s", resp.status_code)
-            return []
-
-        data = resp.json()
         if not isinstance(data, list):
             return []
 

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from steam import price_capture
+from steam.clients import steamwebapi
 
 
 @pytest.fixture(autouse=True)
@@ -202,12 +203,12 @@ async def test_capture_counts_errors(monkeypatch):
 
 import httpx
 
-from steam.price_capture import QuotaExhausted
+from steam.errors import QuotaExhausted
 
 
 @pytest.mark.asyncio
 async def test_lookup_raises_quota_exhausted_on_402(monkeypatch):
-    monkeypatch.setattr(price_capture._history_limiter, "acquire", AsyncMock())
+    monkeypatch.setattr(steamwebapi._history_limiter, "acquire", AsyncMock())
     client = MagicMock()
     client.get = AsyncMock(return_value=httpx.Response(402, text='{"status":402,"message":"monthly limit"}'))
 

@@ -11,7 +11,7 @@ import logging
 
 import httpx
 
-from steam.services import HistoryBusy
+from steam.errors import HistoryBusy
 
 # PERF-03: el _history_limiter (18 req/60 s) hace esperar a los crons, que es lo
 # correcto para batch; en el chat esa espera va dentro de la respuesta al usuario
@@ -99,14 +99,13 @@ def _para_llm(items: list[dict], limite: int = _TOP_ITEMS_LLM) -> list[dict]:
 async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncClient) -> dict:
     """Devuelve precio detallado de una skin por nombre exacto."""
     from stores import _search_cache, SEARCH_CACHE_TTL, _item_price_cache, ITEM_PRICE_CACHE_TTL
+    from steam.clients import steamwebapi
     from steam.services import (
-        STEAM_WEB_API,
         _enrich_prices,
         _enrich_market_prices,
         _cache_images,
         _fetch_static_images,
         _enrich_images_from_cache,
-        steam_auth_headers,
     )
     from steam.mappers import _map_item
 
@@ -122,22 +121,12 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
         return cached[0]
 
     client_http: httpx.AsyncClient = client
-    resp = await client_http.get(
-        f"{STEAM_WEB_API}/items",
-        headers=steam_auth_headers(),
-        params={
-            "game": "cs2",
-            "search": query,
-            "max": 30,
-            "select": "id,marketname,markethashname,slug,image,pricelatestsell,pricereal,pricereal24h,pricereal7d,pricereal30d,color,bordercolor,rarity,quality,isstattrak,issouvenir,isstar,itemtype,itemname,tag5,sold24h,sold7d,sold30d,soldtotal,pricesafe,pricemin,pricemax,offervolume,buyordervolume,buyorderprice,prices,hourstosold,marketable,tradable,markettradablerestriction,steamurl,minfloat,maxfloat,paintindex",
-            "format": "json",
-            "production": "1",
-        },
-        timeout=15.0,
+    data = await steamwebapi.items(
+        client_http,
+        search=query,
+        max=30,
+        select="id,marketname,markethashname,slug,image,pricelatestsell,pricereal,pricereal24h,pricereal7d,pricereal30d,color,bordercolor,rarity,quality,isstattrak,issouvenir,isstar,itemtype,itemname,tag5,sold24h,sold7d,sold30d,soldtotal,pricesafe,pricemin,pricemax,offervolume,buyordervolume,buyorderprice,prices,hourstosold,marketable,tradable,markettradablerestriction,steamurl,minfloat,maxfloat,paintindex",
     )
-    resp.raise_for_status()
-
-    data = resp.json()
     if not isinstance(data, list):
         return {"error": "formato inesperado de Steam API"}
 
@@ -171,13 +160,12 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
 async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     """Busca skins por nombre y devuelve resultados relevantes."""
     from stores import _search_cache, SEARCH_CACHE_TTL
+    from steam.clients import steamwebapi
     from steam.services import (
-        STEAM_WEB_API,
         _enrich_market_prices,
         _cache_images,
         _fetch_static_images,
         _enrich_images_from_cache,
-        steam_auth_headers,
     )
     from steam.mappers import _map_item
 
@@ -193,22 +181,12 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     if cached and now - cached[1] < SEARCH_CACHE_TTL:
         return _para_llm(cached[0])
 
-    resp = await client.get(
-        f"{STEAM_WEB_API}/items",
-        headers=steam_auth_headers(),
-        params={
-            "game": "cs2",
-            "search": q,
-            "max": 10,
-            "select": "id,marketname,markethashname,slug,image,pricelatestsell,pricereal,pricereal24h,pricereal7d,pricereal30d,color,bordercolor,rarity,quality,isstattrak,issouvenir,isstar,itemtype,itemname,tag5,sold24h",
-            "format": "json",
-            "production": "1",
-        },
-        timeout=15.0,
+    data = await steamwebapi.items(
+        client,
+        search=q,
+        max=10,
+        select="id,marketname,markethashname,slug,image,pricelatestsell,pricereal,pricereal24h,pricereal7d,pricereal30d,color,bordercolor,rarity,quality,isstattrak,issouvenir,isstar,itemtype,itemname,tag5,sold24h",
     )
-    resp.raise_for_status()
-
-    data = resp.json()
     if not isinstance(data, list):
         return []
 

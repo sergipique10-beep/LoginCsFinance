@@ -17,9 +17,9 @@ from ..cap_history_repo import insert_snapshot, fetch_range
 from ..rankings_repo import trending_repo, movers_repo
 from ..mappers import _map_item, _map_topmovers_item, _map_market_index_point
 from ..market_rows import _to_row, _row_to_item
+from ..clients import steamwebapi
+from ..errors import QuotaExhausted, SourceTimeout, SourceUnavailable, UpstreamError
 from ..services import (
-    STEAM_WEB_API,
-    STEAM_MARKET_API,
     UPSTREAM_QUOTA_DETAIL,
     _MOVERS_LIMIT,
     _enrich_prices,
@@ -31,7 +31,6 @@ from ..services import (
     _fetch_static_images,
     _rarity_from_cache,
     _build_movers_from_topmovers,
-    steam_auth_headers,
 )
 from steam.price_capture import capture as price_capture_run
 
@@ -200,26 +199,17 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
 
     # ── Primary source: /items (paid plan) ───────────────────────────────────
     try:
-        resp = await client.get(
-            f"{STEAM_WEB_API}/items",
-            headers=steam_auth_headers(),
-            params={
-                "game": "cs2",
-                "sort_by": "soldZa",
-                "max": _ITEMS_FETCH_MAX,
-                "select": _MOVERS_SELECT,
-                "format": "json",
-                "production": "1",
-            },
-            timeout=15.0,
+        data = await steamwebapi.items(
+            client, sort_by="soldZa", max=_ITEMS_FETCH_MAX, select=_MOVERS_SELECT,
         )
-        items_ok = resp.status_code == 200
-    except (httpx.TimeoutException, httpx.RequestError):
+        items_ok = True
+    except (SourceTimeout, SourceUnavailable):
         items_ok = False
-        resp = None
+    except UpstreamError as exc:
+        items_ok = False
+        logger.warning("[market-movers] /items returned %s — falling back to market-index topmovers", exc.status)
 
-    if items_ok and resp is not None:
-        data = resp.json()
+    if items_ok:
         if isinstance(data, list):
             _cache_images(data)
             mapped = []
@@ -264,34 +254,26 @@ async def _compute_movers(client: httpx.AsyncClient) -> dict:
             await _enrich_market_prices(client, result["cold"])
             return result
         logger.warning("[market-movers] /items returned unexpected type: %s", type(data).__name__)
-    else:
-        if resp is not None:
-            logger.warning("[market-movers] /items returned %s — falling back to market-index topmovers", resp.status_code)
 
     # ── Fallback: market-index topmovers (free plan) ─────────────────────────
     raw_topmovers = _topmovers_raw_cache.get("latest")
     if not raw_topmovers:
         # topmovers cache is cold — fetch market-index now to populate it
         try:
-            mi_resp = await client.get(
-                f"{STEAM_WEB_API}/market-index/cs2",
-                headers=steam_auth_headers(),
-                params={"format": "json"},
-                timeout=15.0,
-            )
-            if mi_resp.status_code == 200:
-                mi_data = mi_resp.json()
-                if isinstance(mi_data, dict):
-                    tm = mi_data.get("topmovers", {})
-                    gainers = tm.get("gainers", [])
-                    losers  = tm.get("losers", [])
-                    if gainers:
-                        logger.info("[market-movers] topmovers gainer keys: %s", list(gainers[0].keys()))
-                        logger.info("[market-movers] topmovers gainer sample: %s", gainers[0])
-                    _topmovers_raw_cache["latest"] = (gainers, losers, now)
-                    raw_topmovers = _topmovers_raw_cache["latest"]
+            mi_data = await steamwebapi.market_index(client, timeout=15.0)
+            if isinstance(mi_data, dict):
+                tm = mi_data.get("topmovers", {})
+                gainers = tm.get("gainers", [])
+                losers  = tm.get("losers", [])
+                if gainers:
+                    logger.info("[market-movers] topmovers gainer keys: %s", list(gainers[0].keys()))
+                    logger.info("[market-movers] topmovers gainer sample: %s", gainers[0])
+                _topmovers_raw_cache["latest"] = (gainers, losers, now)
+                raw_topmovers = _topmovers_raw_cache["latest"]
         except Exception as exc:
-            logger.warning("[market-movers] could not fetch market-index for topmovers: %s", exc)
+            # Un status distinto de 200 se salta en silencio, como antes del cliente.
+            if not (isinstance(exc, UpstreamError) and exc.status is not None):
+                logger.warning("[market-movers] could not fetch market-index for topmovers: %s", exc)
 
     if raw_topmovers:
         gainers, losers, _ = raw_topmovers
@@ -334,28 +316,16 @@ async def get_market_items(
         return cached[0]
 
     try:
-        resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/items",
-            headers=steam_auth_headers(),
-            params={
-                "game": "cs2",
-                "search": query,
-                "max": _SEARCH_LIMIT,
-                "select": _MOVERS_SELECT,
-                "format": "json",
-                "production": "1",
-            },
-            timeout=15.0,
+        data = await steamwebapi.items(
+            request.app.state.http_client, search=query, max=_SEARCH_LIMIT, select=_MOVERS_SELECT,
         )
-    except (httpx.TimeoutException, httpx.RequestError) as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
-
-    if resp.status_code == 402:
+    except (SourceTimeout, SourceUnavailable) as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
+    except QuotaExhausted:
         return _quota_exhausted(cached)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+    except UpstreamError as exc:
+        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    data = resp.json()
     if not isinstance(data, list):
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
@@ -399,28 +369,16 @@ async def get_market_price(
         return cached[0]
 
     try:
-        resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/items",
-            headers=steam_auth_headers(),
-            params={
-                "game": "cs2",
-                "search": query,
-                "max": _SEARCH_LIMIT,
-                "select": _MOVERS_SELECT,
-                "format": "json",
-                "production": "1",
-            },
-            timeout=15.0,
+        data = await steamwebapi.items(
+            request.app.state.http_client, search=query, max=_SEARCH_LIMIT, select=_MOVERS_SELECT,
         )
-    except (httpx.TimeoutException, httpx.RequestError) as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
-
-    if resp.status_code == 402:
+    except (SourceTimeout, SourceUnavailable) as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
+    except QuotaExhausted:
         return _quota_exhausted(cached)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+    except UpstreamError as exc:
+        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    data = resp.json()
     if not isinstance(data, list):
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
@@ -456,26 +414,17 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
 
     # ── Primary source: /items (paid plan) ───────────────────────────────────
     try:
-        resp = await client.get(
-            f"{STEAM_WEB_API}/items",
-            headers=steam_auth_headers(),
-            params={
-                "game": "cs2",
-                "sort_by": "soldZa",
-                "max": _ITEMS_FETCH_MAX,
-                "select": _MOVERS_SELECT,
-                "format": "json",
-                "production": "1",
-            },
-            timeout=15.0,
+        data = await steamwebapi.items(
+            client, sort_by="soldZa", max=_ITEMS_FETCH_MAX, select=_MOVERS_SELECT,
         )
-        items_ok = resp.status_code == 200
-    except (httpx.TimeoutException, httpx.RequestError):
+        items_ok = True
+    except (SourceTimeout, SourceUnavailable):
         items_ok = False
-        resp = None
+    except UpstreamError as exc:
+        items_ok = False
+        logger.warning("[market-trending] /items returned %s — falling back to topmovers", exc.status)
 
-    if items_ok and resp is not None:
-        data = resp.json()
+    if items_ok:
         if isinstance(data, list):
             _cache_images(data)
             result = []
@@ -507,30 +456,22 @@ async def _compute_trending(client: httpx.AsyncClient) -> list[dict]:
             _enrich_images_from_cache(result)
             return result
         logger.warning("[market-trending] /items returned unexpected type: %s", type(data).__name__)
-    else:
-        if resp is not None:
-            logger.warning("[market-trending] /items returned %s — falling back to topmovers", resp.status_code)
 
     # ── Fallback: topmovers from cache (free plan) ────────────────────────────
     raw_topmovers = _topmovers_raw_cache.get("latest")
     if not raw_topmovers:
         try:
-            mi_resp = await client.get(
-                f"{STEAM_WEB_API}/market-index/cs2",
-                headers=steam_auth_headers(),
-                params={"format": "json"},
-                timeout=15.0,
-            )
-            if mi_resp.status_code == 200:
-                mi_data = mi_resp.json()
-                if isinstance(mi_data, dict):
-                    tm = mi_data.get("topmovers", {})
-                    gainers = tm.get("gainers", [])
-                    losers  = tm.get("losers", [])
-                    _topmovers_raw_cache["latest"] = (gainers, losers, now)
-                    raw_topmovers = _topmovers_raw_cache["latest"]
+            mi_data = await steamwebapi.market_index(client, timeout=15.0)
+            if isinstance(mi_data, dict):
+                tm = mi_data.get("topmovers", {})
+                gainers = tm.get("gainers", [])
+                losers  = tm.get("losers", [])
+                _topmovers_raw_cache["latest"] = (gainers, losers, now)
+                raw_topmovers = _topmovers_raw_cache["latest"]
         except Exception as exc:
-            logger.warning("[market-trending] could not fetch market-index for topmovers: %s", exc)
+            # Un status distinto de 200 se salta en silencio, como antes del cliente.
+            if not (isinstance(exc, UpstreamError) and exc.status is not None):
+                logger.warning("[market-trending] could not fetch market-index for topmovers: %s", exc)
 
     if raw_topmovers:
         gainers, losers, _ = raw_topmovers
@@ -570,24 +511,18 @@ async def get_market_index(
         return cached[0]
 
     try:
-        resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/market-index/cs2",
-            headers=steam_auth_headers(),
-            params={"format": "json"},
-        )
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Market index request timed out")
-    except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
-
-    if resp.status_code == 402:
+        data = await steamwebapi.market_index(request.app.state.http_client)
+    except SourceTimeout:
+        raise HTTPException(status_code=504, detail="Market index request timed out") from None
+    except SourceUnavailable as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
+    except QuotaExhausted:
         logger.warning("[market-index] daily limit reached (402)")
         return _quota_exhausted(cached)
-    if resp.status_code != 200:
-        logger.error("[market-index] steamwebapi returned %s | body: %s", resp.status_code, resp.text[:500])
-        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+    except UpstreamError as exc:
+        logger.error("[market-index] steamwebapi returned %s | body: %s", exc.status, exc.body_excerpt[:500])
+        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    data = resp.json()
 
     if isinstance(data, list):
         raw_points = data
@@ -720,20 +655,13 @@ async def cap_tick(
         raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
 
     try:
-        resp = await request.app.state.http_client.get(
-            f"{STEAM_WEB_API}/market-index/cs2",
-            headers=steam_auth_headers(),
-            params={"format": "json"},
-            timeout=15.0,
-        )
-    except (httpx.TimeoutException, httpx.RequestError) as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
+        data = await steamwebapi.market_index(request.app.state.http_client, timeout=15.0)
+    except (SourceTimeout, SourceUnavailable) as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
+    except UpstreamError as exc:
+        logger.warning("[cap-tick] market-index returned %s", exc.status)
+        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    if resp.status_code != 200:
-        logger.warning("[cap-tick] market-index returned %s", resp.status_code)
-        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
-
-    data = resp.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=502, detail="Unexpected response format from Steam API")
 
@@ -943,25 +871,18 @@ async def get_market_prices(
         params["currency"] = currency
 
     try:
-        resp = await request.app.state.http_client.get(
-            f"{STEAM_MARKET_API}/{market}/prices",
-            headers=steam_auth_headers(),
-            params=params,
-            timeout=15.0,
-        )
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Market prices request timed out")
-    except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
-
-    if resp.status_code == 402:
+        data = await steamwebapi.market_prices(request.app.state.http_client, market, params, timeout=15.0)
+    except SourceTimeout:
+        raise HTTPException(status_code=504, detail="Market prices request timed out") from None
+    except SourceUnavailable as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
+    except QuotaExhausted:
         return _quota_exhausted(cached)
-    if resp.status_code == 404:
-        raise HTTPException(status_code=404, detail=f"Market '{market}' not found or no prices available")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Steam returned {resp.status_code}")
+    except UpstreamError as exc:
+        if exc.status == 404:
+            raise HTTPException(status_code=404, detail=f"Market '{market}' not found or no prices available") from exc
+        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
 
-    data = resp.json()
     _market_prices_cache[cache_key] = (data, now)
     logger.info("[market-prices] market=%r name=%r → %s items", market, name, len(data) if isinstance(data, list) else "object")
     return data

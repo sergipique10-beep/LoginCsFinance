@@ -252,7 +252,7 @@ async def test_create_untracked_unknown_skin_is_rejected(monkeypatch):
 
 from datetime import datetime, timedelta, timezone
 
-from steam.price_capture import QuotaExhausted
+from steam.errors import QuotaExhausted
 
 
 def _iso(delta: timedelta) -> str:

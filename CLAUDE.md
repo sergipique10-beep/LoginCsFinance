@@ -84,6 +84,16 @@ LoginCsFinance/
                     #            /auth/dev-token, /auth/refresh, /auth/logout
                     # Note: /auth/dev-token gated by settings.DEV_TOKEN_ENABLED (DEBUG and ENV != production)
   steam/
+    errors.py       # Errores tipados de las fuentes (CLEAN-06): UpstreamError (status,
+                    #   body_excerpt, retry_after) y sus hijas QuotaExhausted (402),
+                    #   RateLimited (429), SourceTimeout (→504), SourceUnavailable (→502);
+                    #   InvalidPayload (200 ilegible, NO hereda de UpstreamError); HistoryBusy
+    clients/
+      steamwebapi.py  # Cliente único de steamwebapi (CLEAN-06): STEAM_WEB_API/STEAM_MARKET_API,
+                    #   steam_auth_headers, _history_limiter, y una función por endpoint
+                    #   (items, item, inventory, profile, market_index, market_prices,
+                    #   market_history, legacy_history, info_markets). Devuelve el JSON del
+                    #   200 tal cual o lanza el error tipado; no parsea nada
     mappers.py      # Pure data transformers: _map_item, _map_market_index_point,
                     #   _map_news_item, _fetch_og_image, _clean_news_content,
                     #   _delta_from_history, _best_price_from_markets, _safe_delta
@@ -94,7 +104,7 @@ LoginCsFinance/
                     #   _register_skin, _register_flat (ByMykel static data registration)
                     #   _fetch_static_images (lazy loader for ByMykel/CSGO-API)
                     #   _build_movers_from_topmovers (hot/cold builder from market-index)
-                    #   Constants: STEAM_WEB_API, _STATIC_*_URL, _WEAR_NAMES, _MOVERS_LIMIT
+                    #   Constants: _STATIC_*_URL, _WEAR_NAMES, _MOVERS_LIMIT
     cap_history_repo.py  # Supabase data layer for the CS2 price-index history:
                     #   get_supabase (module-cached client, service_role),
                     #   insert_snapshot (upsert by ts), fetch_range (rows since cutoff).
@@ -125,13 +135,15 @@ LoginCsFinance/
 **Dependency order** (no circular imports):
 
 ```
-settings.py, stores.py, middleware.py, steam/liquidity.py  ← nothing internal
+settings.py, stores.py, middleware.py, steam/liquidity.py, steam/errors.py  ← nothing internal
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
+steam/clients/steamwebapi.py ← steam/errors, settings
 steam/mappers.py        ← steam/liquidity
-steam/services.py       ← steam/mappers, stores, settings
+steam/services.py       ← steam/clients, steam/errors, steam/mappers, stores
 steam/cap_history_repo.py ← settings (+ supabase)
-steam/routes/*          ← steam/services, steam/mappers, steam/cap_history_repo, stores,
+steam/routes/*          ← steam/clients, steam/errors, steam/services, steam/mappers,
+                          steam/cap_history_repo, stores,
                           settings, auth/service (require_jwt only)
 main.py                 ← middleware, auth/router, steam/routes, settings
 ```
@@ -193,7 +205,7 @@ steamwebapi.com responses are transformed in `steam/mappers.py` before being ret
 
 **History-derived enrichment** (`_enrich_prices` in `steam/services.py`): fires one concurrent `csfloat/history` call per item and overwrites the deltas with history-derived values. Cached per item in `_item_history_cache`. Used by `/market/*` (trending, movers) only — **not** by `/inventory`, which would need one API call per item and blow the 18/60s limiter. Inventory therefore relies entirely on `_inline_delta`.
 
-**Rate limiting** (`_history_limiter`, `steam/services.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched **in one pass** must fit one window — de ahí `_MOVERS_LIMIT` ≤18 y `_ENRICH_BATCH = 18`.
+**Rate limiting** (`_history_limiter`, `steam/clients/steamwebapi.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched **in one pass** must fit one window — de ahí `_MOVERS_LIMIT` ≤18 y `_ENRICH_BATCH = 18`.
 
 **Cuáles son los costes de verdad** — solo una llamada escala con el número de items:
 
@@ -227,7 +239,7 @@ Tablas `tracked_skins` (qué seguimos) y `precios_historicos` (la serie) — SQL
 - **Lo gastado hoy se cuenta en la BD** (`count_captured_on(hoy)`: skins con `last_captured = hoy`, intentadas con éxito o sin él). Sin estado en memoria: el tope aguanta varios lotes y reinicios de Render.
 - **Si la población no cabe, entra por prioridad** (vista `price_tick_queue`): 0 alerta activa, 1 vista en un inventario en 30 días, 2 el resto (trending, seed). Dentro de cada prioridad, LRU por `last_captured`. Lo que no cabe sale en la respuesta como `fuera_de_presupuesto` y el workflow deja un `::warning::`.
 - **Poda blanda, nunca DELETE.** Una skin que nadie registra en 30 días (y sin alerta) sale de la vista, pero su fila y su serie siguen: un DELETE dispararía el `CASCADE` de abajo. `register_tracked` refresca `last_seen` (y `inventory_seen_at` si viene de `/inventory`) en cada registro; `source` guarda solo el **primer** origen y no sirve para priorizar.
-- **Techo sin tocar código:** 42 lotes de `PRICE_LOOKUP_CAP` en 350 min de job ≈ 6 300 skins/día, que es también lo que da el limiter de 18 req/min. Por encima hay que tocar el limiter (`steam/services.py`) y el workflow.
+- **Techo sin tocar código:** 42 lotes de `PRICE_LOOKUP_CAP` en 350 min de job ≈ 6 300 skins/día, que es también lo que da el limiter de 18 req/min. Por encima hay que tocar el limiter (`steam/clients/steamwebapi.py`) y el workflow.
 - Los precios de los rankings **no** sirven como fuente gratis para la serie: `market_trending.price_latest` se desvía una mediana del 18 % del precio canónico de `/item` (medido el 30-09).
 
 **Es la única relación declarada del esquema**: `precios_historicos.market_hash_name` → `tracked_skins.market_hash_name`, `ON DELETE CASCADE`. Formaliza lo que el código ya hacía — `capture()` inserta solo nombres que acaba de leer de `tracked_skins` — y cubre la ventana entre esa lectura y el upsert, que dura minutos por el `_history_limiter`. ⚠️ **Con `CASCADE`, cualquier limpieza que se añada a `tracked_skins` se lleva su serie histórica por delante.** Por eso la poda de PERF-11 es **blanda** (la vista `price_tick_queue` deja fuera a las skins sin actividad, sin borrarlas): una serie histórica no se recupera, y la skin puede volver a aparecer en un inventario.
@@ -420,7 +432,7 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `BASE_URL` | `http://localhost:8000` | Must be reachable by Steam for the OpenID callback (use ngrok in local dev) |
 | `FRONTEND_URL` | `http://localhost:4200` | CORS origin and post-login redirect target |
 | `JWT_SECRET` | `change-this-secret` | Signs all tokens. Startup warns if default or < 32 chars. Use `secrets.token_urlsafe(48)` to generate. |
-| `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. Viaja en la cabecera `X-Api-Key` vía `steam_auth_headers()` (`steam/services.py`), **nunca** en la query (SEC-13): una URL con la clave acaba en los logs. Solo en llamadas a steamwebapi, nunca como cabecera por defecto del cliente compartido. |
+| `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. Viaja en la cabecera `X-Api-Key` vía `steam_auth_headers()` (`steam/clients/steamwebapi.py`), **nunca** en la query (SEC-13): una URL con la clave acaba en los logs. Solo en llamadas a steamwebapi, nunca como cabecera por defecto del cliente compartido. |
 | `LEETIFY_API_KEY` | *(empty)* | Clave de la API pública de Leetify (SEC-09). Sin ella `/me/stats*` da 503. También en Render. |
 | `STEAM_GAME` | `cs2` | Game ID passed to the steamwebapi.com inventory endpoint |
 | `INVENTORY_429_MAX_RETRIES` / `_BACKOFF_BASE` / `_BACKOFF_CAP` | `4` / `5` s / `120` s | Reintento en segundo plano del inventario tras un 429 (PERF-14) |

@@ -8,6 +8,8 @@ import httpx
 import pytest
 
 from steam import price_capture, services
+from steam.clients import steamwebapi
+from steam.errors import UpstreamError
 from stores import _item_history_cache, _lookup_failed_at, _market_lookup_cache, _market_providers_cache
 
 FAKE_KEY = "test-sentinel-not-a-real-key-0001"
@@ -16,15 +18,15 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture(autouse=True)
 def _setup(monkeypatch):
-    monkeypatch.setattr(services, "STEAM_API_KEY", FAKE_KEY)
+    monkeypatch.setattr(steamwebapi, "STEAM_API_KEY", FAKE_KEY)
     stores = (_item_history_cache, _lookup_failed_at, _market_lookup_cache, _market_providers_cache)
     for s in stores:
         s.clear()
-    services._history_limiter._calls = []
+    steamwebapi._history_limiter._calls = []
     yield
     for s in stores:
         s.clear()
-    services._history_limiter._calls = []
+    steamwebapi._history_limiter._calls = []
 
 
 def _client(seen: list, status: int = 200) -> httpx.AsyncClient:
@@ -52,10 +54,10 @@ async def test_key_goes_in_header_and_never_reaches_logs(caplog):
 
 
 async def test_http_error_with_url_does_not_leak_key(caplog):
-    # raise_for_status() mete la URL completa en el mensaje de la excepción.
+    # El error de un status no 200 se registra entero en los logs (price_capture, alertas).
     caplog.set_level(logging.DEBUG)
     async with _client([], status=500) as client:
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        with pytest.raises(UpstreamError) as exc_info:
             await price_capture._lookup_item(client, "X")
     logging.getLogger("uvicorn.error").warning("[test] %s", exc_info.value)
     assert FAKE_KEY not in caplog.text
@@ -68,6 +70,21 @@ def test_no_steamwebapi_call_puts_key_in_query():
         str(p.relative_to(ROOT))
         for p in ROOT.rglob("*.py")
         if not {"venv", "tests", ".git"} & set(p.relative_to(ROOT).parts)
+        and pattern.search(p.read_text(encoding="utf-8"))
+    ]
+    assert offenders == []
+
+
+def test_solo_el_cliente_conoce_las_urls_de_steamwebapi():
+    # CLEAN-06: toda llamada a steamwebapi pasa por steam/clients/steamwebapi.py, que es
+    # el único sitio que pone la clave. Una URL fuera de él sería una llamada sin cliente.
+    pattern = re.compile(r"STEAM_WEB_API|STEAM_MARKET_API|steamwebapi\.com")
+    own = ROOT / "steam" / "clients" / "steamwebapi.py"
+    offenders = [
+        str(p.relative_to(ROOT))
+        for p in ROOT.rglob("*.py")
+        if p != own
+        and not {"venv", "tests", ".git"} & set(p.relative_to(ROOT).parts)
         and pattern.search(p.read_text(encoding="utf-8"))
     ]
     assert offenders == []

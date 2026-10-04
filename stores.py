@@ -35,7 +35,7 @@ _rate_store: dict[str, list[float]] = defaultdict(list)
 
 # ── Cache constants ────────────────────────────────────────────────────────────
 
-# steamwebapi.com Starter plan: 20 req/60s per endpoint, 2k/day — cache 23 h to stay well under the daily budget
+# steamwebapi Starter plan: 20 req/60s per endpoint, 2k/day — cache 23 h to stay well under the daily budget
 PROFILE_CACHE_TTL = 82800
 INVENTORY_CACHE_TTL = 82800
 MARKET_INDEX_CACHE_TTL = 82800
