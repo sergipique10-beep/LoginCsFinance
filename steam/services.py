@@ -269,19 +269,37 @@ def _rarity_from_cache(name: str) -> tuple[str, str] | None:
 _IMAGE_EMPTY_TTL = 300  # 5 min de backoff si fallan todas las fuentes, como _HISTORY_EMPTY_TTL
 
 
-async def _fetch_static_images(client: httpx.AsyncClient) -> None:
-    now = time.monotonic()
+# PERF-18: una sola recarga a la vez. Sin él, N peticiones con la caché caducada
+# descargaban N veces los siete JSON (estampida tras despertar Render).
+_image_cache_lock = asyncio.Lock()
+
+
+def _image_cache_fresh(now: float) -> bool:
     # time.monotonic() arranca en el uptime del sistema, no en 0. Usar 0.0 como
     # "nunca cargado" hacía que `now - 0.0 < TTL` fuese True en cualquier equipo
     # con <23h de uptime → retornaba sin poblar el cache. Centinela None explícito.
     last_ts = _image_cache_meta.get("ts")
     if last_ts is not None and now - last_ts < IMAGE_CACHE_TTL:
-        return
+        return True
     # CAL-08: tras un fallo total, backoff corto en vez de reintentar en cada petición.
     failed_ts = _image_cache_meta.get("failed_ts")
-    if failed_ts is not None and now - failed_ts < _IMAGE_EMPTY_TTL:
-        return
+    return failed_ts is not None and now - failed_ts < _IMAGE_EMPTY_TTL
 
+
+async def _fetch_static_images(client: httpx.AsyncClient) -> None:
+    if _image_cache_fresh(time.monotonic()):
+        return
+    async with _image_cache_lock:
+        # Doble comprobación: quien tenía el lock pudo recargar mientras esperábamos.
+        # Una cancelación a media descarga suelta el lock (async with) y no deja
+        # `ts` ni `failed_ts`, que solo se escriben al final: el siguiente reintenta.
+        now = time.monotonic()
+        if _image_cache_fresh(now):
+            return
+        await _load_static_images(client, now)
+
+
+async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
     sources_with_wears = [
         ("skins",  _STATIC_SKINS_URL),
         ("knives", _STATIC_KNIVES_URL),
