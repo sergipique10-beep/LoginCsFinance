@@ -108,3 +108,24 @@ def client(monkeypatch):
         yield test_client
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def steam_api(client, monkeypatch):
+    """CAL-09: steamwebapi, ByMykel, frankfurter y Steam News simulados por HTTP, con
+    todas las cachés en memoria vacías y el `_history_limiter` sin esperas."""
+    import stores
+    from steam import services
+    from tests.steam_fake import FakeUpstream
+
+    def _clear_caches():
+        for name, value in vars(stores).items():
+            if name.startswith("_") and not name.startswith("__") and isinstance(value, dict):
+                value.clear()
+
+    fake = FakeUpstream()
+    _clear_caches()
+    monkeypatch.setattr(app.state, "http_client", fake.client())
+    monkeypatch.setattr(services._history_limiter, "acquire", AsyncMock())
+    yield fake
+    _clear_caches()

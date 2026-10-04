@@ -38,6 +38,13 @@ devuelve cada endpoint: es el contrato con el front (CS-FINANCE-ionic), que no e
 este repo. Durante el refactor son el árbitro: si un issue tiene que tocar uno de esos
 tests para pasar, ha cambiado el contrato y hay que parar.
 
+- Simulan las APIs externas **por HTTP** con la fixture `steam_api` (`tests/conftest.py` +
+  `tests/steam_fake.py`): responde por sufijo de `host + path` sobre
+  `app.state.http_client`, vacía las cachés de `stores.py` y quita la espera del
+  `_history_limiter`. Así no dependen de en qué módulo viva cada función.
+- Los bugs del mapa de abajo (CAL-11 a CAL-14) llevan un `xfail(strict=True)` que
+  afirma el comportamiento **correcto**: el día que se arreglen, hay que quitar la marca.
+
 ## Mapa de degradaciones
 
 Qué hace cada flujo cuando una fuente falla. **Decisión**: *conservar* (degradación

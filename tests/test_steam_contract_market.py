@@ -4,6 +4,7 @@ Status y conjunto EXACTO de claves de cada endpoint: es lo que consume el front
 (CS-FINANCE-ionic, fuera de este repo). Durante STEAM-REFACTOR estos tests no se tocan;
 si uno tiene que cambiar para que el refactor pase, el refactor ha cambiado el contrato.
 """
+import time
 from unittest.mock import AsyncMock
 
 import httpx
@@ -137,3 +138,63 @@ def test_movers_y_trending_sirven_snapshots(api, monkeypatch):
 
     trending = api.get("/market/trending").json()
     assert set(trending[0]) == ROW_ITEM_KEYS
+
+
+# ── /market/index: formatos y errores (fixture `steam_api` de conftest) ─────────
+
+INDEX_POINT_KEYS = {"date", "price", "change", "volume"}
+POINT = {"createdat": "2026-10-01T00:00:00", "priceindex": 1.2, "change": 0.1, "sold": 5}
+
+
+@pytest.mark.parametrize("body", [
+    [POINT],                                                     # lista suelta
+    {"history": [POINT], "topmovers": {}},                       # history lista
+    {"history": {"priceindex": [POINT]}, "turnover24h": "3.5"},  # history dict
+])
+def test_index_formatos(steam_api, client, body):
+    steam_api.on("market-index/cs2", json=body)
+    resp = client.get("/market/index?tf=7d")
+    assert resp.status_code == 200
+    out = resp.json()
+    assert set(out) == {"history", "hottestItem", "sold24h", "turnover24h"}
+    assert all(set(p) == INDEX_POINT_KEYS for p in out["history"])
+    assert out["hottestItem"] == {"name": "—", "change24h": 0.0, "price": None,
+                                  "rarity": None, "rarityColor": None}
+
+
+@pytest.mark.parametrize("route, status", [
+    ({"exc": httpx.ReadTimeout("t")}, 504),
+    ({"exc": httpx.ConnectError("down")}, 502),
+    ({"status": 500}, 502),
+    ({"json": "texto"}, 502),
+    ({"json": {"history": "texto"}}, 502),
+    ({"json": {"history": {"priceindex": "texto"}}}, 502),
+])
+def test_index_errores(steam_api, client, route, status):
+    steam_api.on("market-index/cs2", **route)
+    assert client.get("/market/index").status_code == status
+
+
+def test_index_402_sirve_cache_caducada_o_503(steam_api, client, monkeypatch):
+    steam_api.on("market-index/cs2", status=402)
+    resp = client.get("/market/index")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "upstream_quota"
+
+    steam_api.on("market-index/cs2", json=[POINT])
+    real = time.monotonic
+    with monkeypatch.context() as m:
+        m.setattr(time, "monotonic", lambda: real() - 2 * 86400)
+        bueno = client.get("/market/index").json()   # cacheado hace dos días
+    steam_api.on("market-index/cs2", status=402)
+    resp = client.get("/market/index")
+    assert resp.status_code == 200
+    assert resp.json() == bueno
+
+
+@pytest.mark.xfail(strict=True, reason="CAL-14")
+def test_index_gainer_sin_nombre_no_es_500(steam_api, client):
+    steam_api.on("market-index/cs2", json={"history": [], "topmovers": {"gainers": [{"price": 1}]}})
+    resp = client.get("/market/index")
+    assert resp.status_code == 200
+    assert resp.json()["hottestItem"]["name"] == "—"
