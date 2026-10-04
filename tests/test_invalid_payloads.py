@@ -130,6 +130,8 @@ def test_market_index_formas_alternativas():
     assert steam_adapter.adapt_market_index([{"ts": "t", "value": 1}]).history[0].value == 1.0
     mi = steam_adapter.adapt_market_index({"history": {"priceindex": [{"ts": "t"}]}, "priceindex": 99})
     assert mi.history[0].value is None and mi.price_index == 99.0 and mi.gainers == ()
+    # `priceindex` en la raíz puede ser la serie (lista): no es el escalar del índice.
+    assert steam_adapter.adapt_market_index({"priceindex": [], "history": []}).price_index is None
 
 
 def test_market_index_gainer_sin_nombre_se_descarta_no_keyerror():

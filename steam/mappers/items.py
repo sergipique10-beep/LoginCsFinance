@@ -3,7 +3,7 @@ deltas de precio. Puro: sin HTTP, sin caché, sin fallback silencioso."""
 from datetime import date, timedelta
 
 from steam.domain.catalog import weapon_category
-from steam.domain.models import SkinCard
+from steam.domain.models import SkinCard, SteamItem
 from steam.domain.validators import plausible_ratio
 from steam.liquidity import compute_liquidity
 
@@ -54,16 +54,14 @@ def _safe_delta(new: float | None, old: float | None) -> float | None:
     return round((new - old) / old * 100, 2)
 
 
-def _resolve_phase(item: dict) -> str | None:
-    paint_index = item.get("paintindex")
-    variants = item.get("variants", [])
-    if paint_index is None or not variants:
+def _resolve_phase(item: SteamItem) -> str | None:
+    if item.paint_index is None or not item.variants:
         return None
-    match = next((v for v in variants if v.get("paintindex") == paint_index), None)
-    return match.get("phase") if match else None
+    match = next((v for v in item.variants if v.paint_index == item.paint_index), None)
+    return match.phase if match else None
 
 
-def _inline_delta(current: float | None, raw_old) -> float | None:
+def _inline_delta(current: float | None, raw_old: float | None) -> float | None:
     """Compute % delta between the current price and a historical one.
 
     Both must come from the same `pricereal*` family: `pricelatestsell24h/7d/30d`
@@ -72,8 +70,8 @@ def _inline_delta(current: float | None, raw_old) -> float | None:
     Returns None when either value is missing/zero (no sales data → "N/A") or when
     the historical value is implausibly far from the current one (API garbage).
     """
-    new = float(current or 0) or None
-    old = float(raw_old or 0) or None
+    new = current or None
+    old = raw_old or None
     if not new or not old:
         return None
     if not plausible_ratio(new, old):
@@ -81,81 +79,70 @@ def _inline_delta(current: float | None, raw_old) -> float | None:
     return _safe_delta(new, old)
 
 
-def _map_item(item: dict) -> SkinCard:
-    # /float/assets?with_items=1 nests market data under "item"; /inventory is flat
-    d = item.get("item") or item
-
-    latest = (
-        d.get("pricelatestsell") or
-        d.get("price") or
-        d.get("lowestprice") or
-        d.get("priceusd") or
-        0
-    )
-    real = d.get("pricereal")
-    float_data = item.get("float") or d.get("float") or {}
-
-    # Sobre `d` crudo, no sobre el dict mapeado: abajo `sold24h` y compañía colapsan
-    # None a 0, y eso borraría la diferencia entre "no hay datos" y "cero ventas".
-    liquidity_score, liquidity_breakdown = compute_liquidity(d)
+def _map_item(item: SteamItem) -> SkinCard:
+    """`SteamItem` → tarjeta. La tarjeta es presentación y contrato con el front: los
+    volúmenes ausentes salen como `0` y los flags ausentes como su valor por defecto
+    (`tests/test_steam_contract_rows.py`). La distinción None/0 vive en `SteamItem`,
+    que es lo que recibe `compute_liquidity`."""
+    liquidity_score, liquidity_breakdown = compute_liquidity(item)
+    real = item.price_real
 
     return {
-        "id":             item.get("assetid") or item.get("id", ""),
+        "id":             item.asset_id or item.id or "",
         # markethashname es el nombre canónico de Steam, SIEMPRE en inglés e
         # independiente del locale. marketname es el nombre localizado del Market y
         # steamwebapi lo tiene mal guardado para algunos ítems (p.ej. "Solidão
         # (Testada em Campo)" en portugués en vez de "Solitude (Field-Tested)").
-        "name":           d.get("markethashname") or d.get("marketname", ""),
-        "slug":           d.get("slug", ""),
-        "weaponType":     d.get("weapontype") or weapon_category(d.get("itemtype")),
-        "itemName":       d.get("itemname"),
-        "itemType":       d.get("itemtype"),
-        "image":          _normalize_image(d.get("image", "")),
-        "rarity":         d.get("rarity", "Base Grade"),
-        "rarityColor":    d.get("color", "b0c3d9"),
-        "borderColor":    d.get("bordercolor", "b0c3d9"),
-        "quality":        d.get("quality", "Normal"),
-        "isStatTrak":     bool(d.get("isstattrak", False)),
-        "isSouvenir":     bool(d.get("issouvenir", False)),
-        "isStar":         bool(d.get("isstar", False)),
-        "exterior":       d.get("tag5") or d.get("exterior"),
-        "floatValue":     float_data.get("floatvalue") if isinstance(float_data, dict) else None,
-        "floatMin":       d.get("minfloat"),
-        "floatMax":       d.get("maxfloat"),
-        "paintIndex":     d.get("paintindex"),
-        "phase":          _resolve_phase(d),
-        "priceLatest":    latest,
+        "name":           item.name,
+        "slug":           item.slug or "",
+        "weaponType":     item.weapon_type or weapon_category(item.item_type),
+        "itemName":       item.item_name,
+        "itemType":       item.item_type,
+        "image":          _normalize_image(item.image or ""),
+        "rarity":         item.rarity if item.rarity is not None else "Base Grade",
+        "rarityColor":    item.color if item.color is not None else "b0c3d9",
+        "borderColor":    item.border_color if item.border_color is not None else "b0c3d9",
+        "quality":        item.quality if item.quality is not None else "Normal",
+        "isStatTrak":     bool(item.is_stattrak),
+        "isSouvenir":     bool(item.is_souvenir),
+        "isStar":         bool(item.is_star),
+        "exterior":       item.exterior,
+        "floatValue":     item.float_value,
+        "floatMin":       item.float_min,
+        "floatMax":       item.float_max,
+        "paintIndex":     item.paint_index,
+        "phase":          _resolve_phase(item),
+        "priceLatest":    item.latest_price or 0,
         "csfloatPrice":   None,
         "buffPrice":      None,
-        "priceSafe":      d.get("pricesafe") or 0,
-        "priceMin":       d.get("pricemin") or 0,
-        "priceMax":       d.get("pricemax") or 0,
+        "priceSafe":      item.price_safe or 0,
+        "priceMin":       item.price_min or 0,
+        "priceMax":       item.price_max or 0,
         # Deltas contra la familia pricereal, la única cuyos campos por timeframe
         # traen valores históricos de verdad. pricelatestsell24h/7d/30d vienen
         # siempre iguales a pricelatestsell, así que daban None → "N/A" en todo.
         # pricing.enrich_prices puede sobrescribirlos con valores derivados del histórico
         # de csfloat en los endpoints que la llaman (market, trending, movers).
-        "priceDelta24h":  _inline_delta(real, d.get("pricereal24h")),
-        "priceDelta7d":   _inline_delta(real, d.get("pricereal7d")),
-        "priceDelta30d":  _inline_delta(real, d.get("pricereal30d")),
+        "priceDelta24h":  _inline_delta(real, item.price_real_24h),
+        "priceDelta7d":   _inline_delta(real, item.price_real_7d),
+        "priceDelta30d":  _inline_delta(real, item.price_real_30d),
         "priceReal":      real,
         "externalPrices": [
-            {"market": p.get("market"), "price": p.get("price"), "quantity": p.get("quantity")}
-            for p in d.get("prices", [])
-            if p.get("market")
+            {"market": q.market, "price": q.price, "quantity": q.quantity}
+            for q in item.prices if q.market
         ],
-        "sold24h":        d.get("sold24h") or 0,
-        "sold7d":         d.get("sold7d") or 0,
-        "sold30d":        d.get("sold30d") or 0,
-        "soldTotal":      d.get("soldtotal") or 0,
-        "offerVolume":    d.get("offervolume") or 0,
-        "buyOrderVolume": d.get("buyordervolume") or 0,
-        "buyOrderPrice":  d.get("buyorderprice") or 0,
-        "hoursToSold":    d.get("hourstosold") or 0,
+        "sold24h":        item.sold_24h or 0,
+        "sold7d":         item.sold_7d or 0,
+        "sold30d":        item.sold_30d or 0,
+        "soldTotal":      item.sold_total or 0,
+        "offerVolume":    item.offer_volume or 0,
+        "buyOrderVolume": item.buy_order_volume or 0,
+        "buyOrderPrice":  item.buy_order_price or 0,
+        "hoursToSold":    item.hours_to_sold or 0,
         "liquidityScore":     liquidity_score,
         "liquidityBreakdown": liquidity_breakdown,
-        "marketable":     bool(d.get("marketable", True)),
-        "tradable":       bool(d.get("tradable", True)),
-        "tradeLockDays":  d.get("markettradablerestriction"),
-        "steamUrl":       d.get("steamurl"),
+        "marketable":     True if item.marketable is None else item.marketable,
+        "tradable":       True if item.tradable is None else item.tradable,
+        "tradeLockDays":  item.trade_lock_days,
+        "steamUrl":       item.steam_url,
     }

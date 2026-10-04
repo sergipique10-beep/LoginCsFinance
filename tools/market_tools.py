@@ -101,6 +101,7 @@ def _para_llm(items: Sequence[Mapping[str, Any]], limite: int = _TOP_ITEMS_LLM) 
 async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncClient) -> dict:
     """Devuelve precio detallado de una skin por nombre exacto."""
     from stores import _item_price_cache
+    from steam.adapters.steam_adapter import adapt_items
     from steam.mappers.items import _map_item
     from steam.services import catalog, pricing
     from steam.services.market import search_items
@@ -126,10 +127,7 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
     if not isinstance(data, list):
         return {"error": "formato inesperado de Steam API"}
 
-    raw = next(
-        (r for r in data if (r.get("markethashname") or r.get("marketname") or "").lower() == cache_key),
-        None,
-    )
+    raw = next((i for i in adapt_items(data) if i.name.lower() == cache_key), None)
     if raw is None:
         return {"error": f"skin '{query}' no encontrada"}
 
@@ -158,6 +156,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     """Busca skins por nombre y devuelve resultados relevantes."""
     from stores import _search_cache
     from steam.domain.names import is_sticker_slab
+    from steam.adapters.steam_adapter import adapt_items
     from steam.mappers.items import _map_item
     from steam.services import catalog, pricing
     from steam.services.market import search_items
@@ -183,11 +182,12 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     if not isinstance(data, list):
         return []
 
-    catalog.cache_images(data)
+    items = adapt_items(data)
+    catalog.cache_images(items)
     result = [
-        _map_item(raw) for raw in data
-        if float(raw.get("pricelatestsell") or 0) > 0
-        and not is_sticker_slab(raw.get("marketname") or raw.get("market_hash_name") or "")
+        _map_item(item) for item in items
+        if (item.price_latest_sell or 0) > 0
+        and not is_sticker_slab(item.market_name or item.market_hash_name or "")
     ][:10]
 
     await catalog.fetch_static_images(client)

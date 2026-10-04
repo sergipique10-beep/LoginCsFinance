@@ -12,6 +12,8 @@ Ver docs/superpowers/specs/2026-07-14-liquidity-score-design.md.
 """
 import math
 
+from steam.domain.models import SteamItem
+
 # Anclas de saturación. La justificación de cada número está en el spec.
 _VELOCITY_SATURATION = 500.0   # ventas/día: más volumen que esto ya no acelera la venta
 _HOURS_FLOOR = 720.0           # 30 días: tardar un mes es liquidez cero a efectos prácticos
@@ -60,25 +62,25 @@ def _log_ratio(value: float, saturation: float) -> float:
     return _clamp(math.log1p(value) / math.log1p(saturation))
 
 
-def _velocity(raw: dict) -> float | None:
-    sold24h = _num(raw.get("sold24h"))
-    sold7d = _num(raw.get("sold7d"))
+def _velocity(item: SteamItem) -> float | None:
+    sold24h = _num(item.sold_24h)
+    sold7d = _num(item.sold_7d)
     if sold24h is None and sold7d is None:
         return None
     v = ((sold24h or 0.0) + (sold7d or 0.0) / 7.0) / 2.0
     return _log_ratio(v, _VELOCITY_SATURATION)
 
 
-def _time_to_sell(raw: dict) -> float | None:
+def _time_to_sell(item: SteamItem) -> float | None:
     """Horas hasta vender. Usa la estimación del proveedor; si viene en 0, deriva la cola.
 
     La cola = cuántas horas tarda en agotarse el stock listado delante tuyo al ritmo
     de ventas actual. Es una magnitud con significado físico, no una proxy.
     """
-    hours = _num(raw.get("hourstosold"))
+    hours = _num(item.hours_to_sold)
     if not hours:
-        listings = _num(raw.get("offervolume"))
-        sold24h = _num(raw.get("sold24h"))
+        listings = _num(item.offer_volume)
+        sold24h = _num(item.sold_24h)
         if listings is None or sold24h is None:
             return None
         if sold24h <= 0:
@@ -87,7 +89,7 @@ def _time_to_sell(raw: dict) -> float | None:
     return _clamp(1.0 - math.log1p(hours) / math.log1p(_HOURS_FLOOR))
 
 
-def _haircut(raw: dict) -> float | None:
+def _haircut(item: SteamItem) -> float | None:
     """Cuánto perdés si querés salir ya: la distancia entre el mejor bid y la vitrina.
 
     Un bid de 0 NO es un dato faltante: es "nadie te compra esto a ningún precio", la
@@ -95,16 +97,11 @@ def _haircut(raw: dict) -> float | None:
     repartía su 0.25 entre los demás, con lo que un ítem sin ningún comprador puntuaba
     MÁS ALTO que uno con un bid malo pero real. Un 0 real cae solo hasta haircut 0.0.
 
-    La cadena de precio replica la de `_map_item`: si un ítem se valora por `lowestprice`,
-    el score tiene que ver el mismo precio que el usuario ve en pantalla.
+    La cadena de precio es la de `_map_item` (`SteamItem.latest_price`): si un ítem se
+    valora por `lowestprice`, el score tiene que ver el mismo precio que el usuario.
     """
-    price = (
-        _num(raw.get("pricelatestsell")) or
-        _num(raw.get("price")) or
-        _num(raw.get("lowestprice")) or
-        _num(raw.get("priceusd"))
-    )
-    bid = _num(raw.get("buyorderprice"))
+    price = item.latest_price
+    bid = _num(item.buy_order_price)
     if price is None or price <= 0:
         return None   # sin precio de referencia no hay ratio que calcular
     if bid is None:
@@ -114,31 +111,33 @@ def _haircut(raw: dict) -> float | None:
     return _clamp(1.0 - ((price - bid) / price) / _MAX_HAIRCUT)
 
 
-def _demand(raw: dict) -> float | None:
+def _demand(item: SteamItem) -> float | None:
     """Buy orders = compradores haciendo fila con la plata en la mano. Suma, no resta."""
-    buy_orders = _num(raw.get("buyordervolume"))
+    buy_orders = _num(item.buy_order_volume)
     if buy_orders is None:
         return None
     return _log_ratio(buy_orders, _BUYORDER_SATURATION)
 
 
-def _consistency(raw: dict) -> float | None:
+def _consistency(item: SteamItem) -> float | None:
     """Si los mercados divergen, tu 'precio' depende de dónde vendas."""
-    prices = [_num(p.get("price")) for p in (raw.get("prices") or [])]
-    prices = [p for p in prices if p and p > 0]
+    prices = [q.price for q in item.prices if q.price and q.price > 0]
     if len(prices) < 2:
         return None
     return _clamp(min(prices) / max(prices))
 
 
-def compute_liquidity(raw: dict) -> tuple[float | None, dict | None]:
-    """Score 0-100 + desglose. (None, None) cuando no hay datos suficientes."""
+def compute_liquidity(item: SteamItem) -> tuple[float | None, dict | None]:
+    """Score 0-100 + desglose. (None, None) cuando no hay datos suficientes.
+
+    Recibe el modelo interno, no la tarjeta: `_map_item` colapsa `None` a `0` en la
+    salida, y eso borraría la diferencia entre «no hay datos» y «cero ventas»."""
     components = {
-        "velocity":    _velocity(raw),
-        "timeToSell":  _time_to_sell(raw),
-        "haircut":     _haircut(raw),
-        "demand":      _demand(raw),
-        "consistency": _consistency(raw),
+        "velocity":    _velocity(item),
+        "timeToSell":  _time_to_sell(item),
+        "haircut":     _haircut(item),
+        "demand":      _demand(item),
+        "consistency": _consistency(item),
     }
     available = {k: v for k, v in components.items() if v is not None}
     total_weight = sum(_WEIGHTS[k] for k in available)

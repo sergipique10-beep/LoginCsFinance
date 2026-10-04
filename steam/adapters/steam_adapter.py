@@ -168,7 +168,10 @@ def adapt_market_index(raw: Any) -> MarketIndexData:
         history=points, gainers=gainers, losers=losers,
         turnover_24h=f(d.get("turnover24h"), field="turnover24h"),
         sold_24h=as_int(d.get("sold24h"), field="sold24h", source=SOURCE, op=op),
-        price_index=f(d.get("priceindex"), field="priceindex"),
+        # steamwebapi usa `priceindex` para dos cosas: el escalar del índice actual (lo que
+        # guarda el cap-tick) y, en algunas respuestas, la serie (una lista, también bajo
+        # `history.priceindex`). Una lista en la raíz no es el escalar: no hay índice.
+        price_index=None if isinstance(d.get("priceindex"), (list, dict)) else f(d.get("priceindex"), field="priceindex"),
         real_price_index=f(d.get("realpriceindex"), field="realpriceindex"),
         buy_order_price_index=f(d.get("buyorderpriceindex"), field="buyorderpriceindex"),
         dropped_movers=dropped_g + dropped_l,

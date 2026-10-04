@@ -3,11 +3,14 @@ código, reunidas con nombre y test; ninguna es nueva. Endurecerlas (p. ej. trat
 precio implausible como inválido) cambia lo que ve el usuario: es UX-46.
 """
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import TypeIs
 
 from steam.errors import InvalidField
+
+if TYPE_CHECKING:
+    from steam.domain.models import SteamItem
 
 # ── Validadores de valor (CLEAN-14) ───────────────────────────────────────────
 # Sustituyen a `float(x or 0)` / `int(x or 0)` en los adapters. La regla: un campo
@@ -80,12 +83,9 @@ def plausible_fx_rate(rate: Any) -> TypeIs[float]:
     return isinstance(rate, (int, float)) and FX_MIN < rate < FX_MAX
 
 
-def ranking_eligible(raw: Mapping[str, Any], min_sold: int) -> bool:
-    """Precio y ventas mínimos de un item crudo de /items para entrar en un ranking.
-    Pasa a recibir `SteamItem` cuando los services usen el adapter (siguiente commit)."""
-    latest = as_float(raw.get("pricelatestsell"), field="pricelatestsell", source="steamwebapi", op="items") or 0
-    volume = as_int(raw.get("sold24h"), field="sold24h", source="steamwebapi", op="items") or 0
-    return latest >= MIN_RANKING_PRICE and volume >= min_sold
+def ranking_eligible(item: "SteamItem", min_sold: int) -> bool:
+    """Precio y ventas mínimos de un item de /items para entrar en un ranking."""
+    return (item.price_latest_sell or 0) >= MIN_RANKING_PRICE and (item.sold_24h or 0) >= min_sold
 
 
 def canonical_price(item: Mapping[str, Any]) -> float | None:

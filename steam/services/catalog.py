@@ -5,12 +5,14 @@ el registro de claves, el lock de PERF-18 y el backoff de CAL-08.
 import asyncio
 import logging
 import time
+from collections.abc import Sequence
 
 import httpx
 
 from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
 from steam.api import static_catalog_client
 from steam.errors.handling import log_degraded
+from steam.domain.models import SteamItem
 from steam.domain.names import catalog_keys_for_skin, image_lookup_candidates, without_souvenir
 from steam.errors import InvalidPayload, UpstreamError
 
@@ -25,14 +27,14 @@ _STATIC_AGENTS_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main
 _STATIC_PATCHES_URL   = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/patches.json"
 
 
-def cache_images(raw_items: list) -> None:
-    for raw in raw_items:
-        img = raw.get("image", "")
-        if not img:
+def cache_images(items: Sequence[SteamItem]) -> None:
+    """Guarda la imagen que trae steamwebapi bajo ambos nombres del item."""
+    for item in items:
+        if not item.image:
             continue
-        for key in (raw.get("markethashname"), raw.get("marketname")):
+        for key in (item.market_hash_name, item.market_name):
             if key:
-                _item_image_cache[key] = img
+                _item_image_cache[key] = item.image
 
 
 def enrich_images_from_cache(items: list) -> list:

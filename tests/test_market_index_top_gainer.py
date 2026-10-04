@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from steam.routes import market
+from steam.adapters.steam_adapter import adapt_market_index
 from steam.mappers.movers import _build_movers_from_topmovers
 from steam.services.catalog import _register_flat, _register_skin, rarity_from_cache as _rarity_from_cache
 from stores import (
@@ -116,6 +117,7 @@ def test_change24h_es_un_porcentaje_no_un_importe():
         assert -100 <= loser["change24h"] < 0
     assert any(abs(l["change24h"]) > l["price"] for l in TOPMOVERS["losers"])
 
-    movers = _build_movers_from_topmovers(TOPMOVERS["gainers"], TOPMOVERS["losers"])
+    mi = adapt_market_index({"history": [], "topmovers": TOPMOVERS})
+    movers = _build_movers_from_topmovers(mi.gainers, mi.losers)
     assert movers["hot"][0]["name"] == "Sticker | Run Boost Lift Kits"
     assert movers["cold"][0]["name"] == "Souvenir Charm | Cologne 2026 Highlight | MATYS ACE"

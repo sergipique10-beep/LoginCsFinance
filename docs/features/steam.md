@@ -120,7 +120,7 @@ por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
 | Búsqueda | caché compartida con el chat | hasta 10 items sin liquidez | invisible | CAL-11 | — |
 | `/market/index` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_index` · `quota` (solo stale) |
 | `/market/prices` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_prices` · `quota` (solo stale) |
-| `/market/index` | top sin `markethashname`/`change24h` | `KeyError` → 500 | 500 | CAL-14 | — |
+| `/market/index` | gainer sin `markethashname` / sin `change24h` | se descarta / `0.0` | invisible | resuelto (CLEAN-14) | `market_index` · `invalid_field` (solo al descartar) |
 | Catálogo de imágenes | todas las fuentes caídas | backoff 5 min, `image: ""` | invisible | conservar (CAL-08) | `catalog` · `all_sources_failed` |
 | Noticias | JSON que no es dict | 500 | 500 | CAL-14 | — |
 | Noticias | og:image falla o la página no lo trae | `imageUrl: ""` | invisible | conservar | `news_image` · `reason_of(exc)` o `no_og_tag` (solo con URL) |

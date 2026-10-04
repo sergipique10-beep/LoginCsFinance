@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import httpx
 import pytest
 
+from steam.adapters.steam_adapter import adapt_inventory, adapt_item, adapt_items, adapt_market_index
 from steam.api.news_client import fetch_og_image
 from steam.domain.catalog import WEAPON_CATEGORY, weapon_category
 from steam.errors import SourceUnavailable, UpstreamError
@@ -55,7 +56,7 @@ def test_safe_delta(new, old, expected):
     ({"paintindex": 418, "variants": [{"paintindex": 419, "phase": "Phase 2"}]}, None),
 ])
 def test_resolve_phase(item, expected):
-    assert _resolve_phase(item) == expected
+    assert _resolve_phase(adapt_item(item)) == expected
 
 
 def test_weapon_category_exact_and_fallbacks():
@@ -70,10 +71,11 @@ def test_weapon_category_exact_and_fallbacks():
 
 
 def test_market_index_point_normal_e_incompleto():
-    assert _map_market_index_point({"ts": "2026-10-01", "value": "3.5", "change": 1, "volume": "7"}) == {
+    mi = adapt_market_index([{"ts": "2026-10-01", "value": "3.5", "change": 1, "volume": "7"}, {}])
+    assert _map_market_index_point(mi.history[0]) == {
         "date": "2026-10-01", "price": 3.5, "change": 1.0, "volume": 7,
     }
-    assert _map_market_index_point({}) == {"date": "", "price": 0.0, "change": 0.0, "volume": 0}
+    assert _map_market_index_point(mi.history[1]) == {"date": "", "price": 0.0, "change": 0.0, "volume": 0}
 
 
 @pytest.mark.parametrize("title, expected", [
@@ -138,12 +140,12 @@ async def test_fetch_og_image_lanza_el_error_tipado(status, exc, error):
 def test_fixture_items_produce_tarjetas_completas(payload):
     from steam.mappers.items import _map_item
     from tests.test_steam_contract_market import SKIN_CARD_KEYS
-    for raw in payload("steamwebapi/items"):
-        assert set(_map_item(raw)) == SKIN_CARD_KEYS
+    for item in adapt_items(payload("steamwebapi/items")):
+        assert set(_map_item(item)) == SKIN_CARD_KEYS
 
 
 def test_fixture_inventory_anidado_y_plano(payload):
     from steam.mappers.items import _map_item
-    nested, flat = payload("steamwebapi/inventory")
+    nested, flat = adapt_inventory(payload("steamwebapi/inventory"))
     assert _map_item(nested)["floatValue"] == 0.2345
     assert _map_item(flat)["name"] == "Solitude (Field-Tested)"   # markethashname gana a marketname

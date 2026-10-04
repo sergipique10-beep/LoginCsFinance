@@ -3,8 +3,9 @@ como tipo. Sus claves tienen que ser exactamente las que fijan los tests de cont
 de CAL-09: si alguien añade una clave al mapper sin tocar el modelo (o al revés), mypy
 deja de proteger el JSON y este test lo dice.
 """
+from steam.adapters.steam_adapter import adapt_item
 from steam.domain.models import (
-    HistoryPoint, MarketIndexPoint, MarketProvider, MoverItem, NewsItem, RankedCard, RankingRow,
+    HistoryPoint, IndexPoint, TopMover, MarketIndexPoint, MarketProvider, MoverItem, NewsItem, RankedCard, RankingRow,
     SkinCard,
 )
 from steam.mappers.items import _map_item
@@ -33,9 +34,9 @@ def test_modelos_y_contrato_tienen_las_mismas_claves():
 
 
 def test_cada_mapper_emite_las_claves_de_su_modelo():
-    assert set(_map_item({"markethashname": "x"})) == _keys(SkinCard)
-    assert set(_map_topmovers_item({"markethashname": "x"})) == _keys(MoverItem)
-    assert set(_map_market_index_point({})) == _keys(MarketIndexPoint)
+    assert set(_map_item(adapt_item({"markethashname": "x"}))) == _keys(SkinCard)
+    assert set(_map_topmovers_item(TopMover(adapt_item({"markethashname": "x"}), 1.0))) == _keys(MoverItem)
+    assert set(_map_market_index_point(IndexPoint("", None, None, None))) == _keys(MarketIndexPoint)
     assert set(_map_news_item({}, 0)) == _keys(NewsItem)
     assert set(_row_to_item(_to_row(SAMPLE, 0))) == _keys(RankedCard)
     assert set(_to_row(SAMPLE, 0, "hot")) == _keys(RankingRow)
