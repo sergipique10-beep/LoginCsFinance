@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from steam.domain.models import Fetched
 from steam.rankings_repo import trending_repo
 from steam.routes import market as market_routes
 from steam.services import market as market_service
@@ -31,7 +32,7 @@ def tick(client, monkeypatch):
     monkeypatch.setattr("steam.price_history_repo.register_tracked", reg)
 
     def _run(items):
-        monkeypatch.setattr(market_service, "compute_trending", AsyncMock(return_value=items))
+        monkeypatch.setattr(market_service, "compute_trending", AsyncMock(return_value=Fetched(items)))
         return client.post("/internal/trending-tick", headers={"X-Cap-Token": "secret123"})
 
     return _run, reg
@@ -74,7 +75,7 @@ def test_un_fallo_al_registrar_no_tumba_la_captura(client, monkeypatch):
     """La captura del ranking es lo que sirve la pantalla: tiene prioridad."""
     monkeypatch.setattr(market_routes, "CAP_TICK_TOKEN", "secret123")
     monkeypatch.setattr(market_service, "compute_trending",
-                        AsyncMock(return_value=[_item("Skin0")]))
+                        AsyncMock(return_value=Fetched([_item("Skin0")])))
     monkeypatch.setattr(trending_repo, "upsert_rows", AsyncMock())
     monkeypatch.setattr(trending_repo, "purge_stale", AsyncMock(return_value=0))
     monkeypatch.setattr("steam.price_history_repo.register_tracked",

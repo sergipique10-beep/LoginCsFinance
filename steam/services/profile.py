@@ -5,6 +5,7 @@ import httpx
 
 from stores import _profile_cache
 from steam.clients import steamwebapi
+from steam.degraded import log_degraded
 
 
 async def get_profile(client: httpx.AsyncClient, steam_id: str) -> dict:
@@ -16,6 +17,9 @@ async def get_profile(client: httpx.AsyncClient, steam_id: str) -> dict:
     data = await steamwebapi.profile(client, steam_id)
     if isinstance(data, list):
         data = data[0] if data else {}
+    if not data:
+        # 200 sin perfil: se sirven campos vacíos y se cachean 23 h, como antes.
+        log_degraded("profile", "empty_body", "empty")
 
     profile = {
         "userName":       data.get("personaname", ""),

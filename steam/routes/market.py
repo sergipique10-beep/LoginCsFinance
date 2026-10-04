@@ -50,7 +50,7 @@ async def get_market_items(
     if not query:
         raise HTTPException(status_code=400, detail="q is required")
     try:
-        return await market_service.search_market(request.app.state.http_client, query)
+        return (await market_service.search_market(request.app.state.http_client, query)).data
     except (UpstreamError, UnexpectedPayload) as exc:
         raise _search_error(exc) from exc
 
@@ -72,7 +72,7 @@ async def get_market_price(
     if not query:
         raise HTTPException(status_code=400, detail="name is required")
     try:
-        item = await market_service.get_item_full(request.app.state.http_client, query)
+        item = (await market_service.get_item_full(request.app.state.http_client, query)).data
     except (UpstreamError, UnexpectedPayload) as exc:
         raise _search_error(exc) from exc
     if item is None:
@@ -92,7 +92,7 @@ async def get_market_index(
     user: dict = Depends(require_jwt),
 ):
     try:
-        return await market_service.get_market_index(request.app.state.http_client, tf)
+        return (await market_service.get_market_index(request.app.state.http_client, tf)).data
     except SourceTimeout:
         raise HTTPException(status_code=504, detail="Market index request timed out") from None
     except SourceUnavailable as exc:
@@ -170,16 +170,16 @@ async def get_fx_rate(request: Request, user: dict = Depends(require_jwt)):
     """Sirve el USD/EUR. El backend NO convierte precios: la conversion es
     presentacion y vive en el cliente (UX-08). `stale=true` significa que la fuente
     no respondio y se esta reutilizando el ultimo valor conocido."""
-    rate, fresh = await fx_service.fetch_fx_rate(request.app.state.http_client)
-    if rate is None:
+    fx = await fx_service.fetch_fx_rate(request.app.state.http_client)
+    if fx.data is None:
         # Sin tasa el cliente se queda en USD; no es un error del servidor.
         return {"base": "USD", "rates": {}, "stale": True}
-    return {"base": "USD", "rates": {"EUR": rate}, "stale": not fresh}
+    return {"base": "USD", "rates": {"EUR": fx.data}, "stale": fx.status != "ok"}
 
 
 @router.get("/market/providers", dependencies=[Depends(market_rate_limit)], summary="Lista de markets soportados como price providers")
 async def get_market_providers(request: Request, user: dict = Depends(require_jwt)):
-    return await providers_service.fetch_market_providers(request.app.state.http_client)
+    return (await providers_service.fetch_market_providers(request.app.state.http_client)).data
 
 
 @router.get("/market/prices", dependencies=[Depends(market_rate_limit)], summary="Precios en tiempo real de un item por mercado")
@@ -197,7 +197,8 @@ async def get_market_prices(
             detail=f"Unknown market '{market}'. Valid: {', '.join(sorted(VALID_MARKETS))}",
         )
     try:
-        return await market_service.get_market_prices(request.app.state.http_client, market, name, currency)
+        return (await market_service.get_market_prices(
+            request.app.state.http_client, market, name, currency)).data
     except SourceTimeout:
         raise HTTPException(status_code=504, detail="Market prices request timed out") from None
     except SourceUnavailable as exc:

@@ -17,24 +17,13 @@ import httpx
 from settings import PRICE_LOOKUP_CAP, PRICE_DAILY_BUDGET
 from steam.clients import steamwebapi
 from steam.clients.steamwebapi import _history_limiter
+from steam.domain.validators import canonical_price
 from steam.errors import QuotaExhausted
 from steam import price_history_repo as repo
 
 logger = logging.getLogger("uvicorn.error")
 
 _SEED_PATH = Path(__file__).parent / "data" / "tracked_seed.json"
-
-
-def _canonical_price(item: dict) -> float | None:
-    """Precio canónico: pricelatestsell → pricelatest → pricemedian (primero > 0)."""
-    for key in ("pricelatestsell", "pricelatest", "pricemedian"):
-        try:
-            v = float(item.get(key) or 0)
-        except (TypeError, ValueError):
-            v = 0
-        if v > 0:
-            return v
-    return None
 
 
 def _load_seed() -> list[str]:
@@ -113,7 +102,7 @@ async def capture(client: httpx.AsyncClient) -> dict:
             logger.warning("[price] lookup falló para %r: %s", name, exc)
             continue
 
-        price = _canonical_price(item)
+        price = canonical_price(item)
         if price is None:
             skipped += 1
             continue

@@ -6,6 +6,7 @@ import httpx
 
 from stores import _news_cache
 from steam.clients import steam_news
+from steam.degraded import log_degraded
 from steam.domain.models import NewsItem
 from steam.mappers.news import _map_news_item, is_readable_news
 
@@ -40,6 +41,10 @@ async def get_cs2_news(client: httpx.AsyncClient, count: int) -> list[NewsItem]:
         steam_news.fetch_og_image(client, item.get("url", ""))
         for item in newsitems
     ])
+    for item, image in zip(newsitems, images, strict=True):
+        # Una noticia sin URL no tiene página de la que sacar la imagen: no es degradación.
+        if item.get("url") and not image:
+            log_degraded("news_image", "og_image", "empty")
     items = [_map_news_item(item, i, images[i]) for i, item in enumerate(newsitems)]
     _news_cache.put(count, items, now)
     return items

@@ -45,7 +45,7 @@ _TOP_ITEMS_LLM = 8
 # Tick mínimo del mercado de Steam: los precios se mueven de centavo en centavo.
 _TICK_USD = 0.01
 # Suelo de precio (USD; ~10 EUR) para que un item llegue al modelo. Alineado con
-# _PRECIO_MIN_RANKING de steam/routes/market.py: los rankings ya se capturan
+# MIN_RANKING_PRICE de steam/domain/validators.py: los rankings ya se capturan
 # filtrados, esto es la segunda barrera para lo que venga de otras fuentes
 # (búsqueda, inventario) y para los snapshots capturados antes del cambio.
 _PRECIO_MIN_LLM = 10.80
