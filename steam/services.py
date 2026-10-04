@@ -266,6 +266,9 @@ def _rarity_from_cache(name: str) -> tuple[str, str] | None:
     return found
 
 
+_IMAGE_EMPTY_TTL = 300  # 5 min de backoff si fallan todas las fuentes, como _HISTORY_EMPTY_TTL
+
+
 async def _fetch_static_images(client: httpx.AsyncClient) -> None:
     now = time.monotonic()
     # time.monotonic() arranca en el uptime del sistema, no en 0. Usar 0.0 como
@@ -273,6 +276,10 @@ async def _fetch_static_images(client: httpx.AsyncClient) -> None:
     # con <23h de uptime → retornaba sin poblar el cache. Centinela None explícito.
     last_ts = _image_cache_meta.get("ts")
     if last_ts is not None and now - last_ts < IMAGE_CACHE_TTL:
+        return
+    # CAL-08: tras un fallo total, backoff corto en vez de reintentar en cada petición.
+    failed_ts = _image_cache_meta.get("failed_ts")
+    if failed_ts is not None and now - failed_ts < _IMAGE_EMPTY_TTL:
         return
 
     sources_with_wears = [
@@ -322,7 +329,15 @@ async def _fetch_static_images(client: httpx.AsyncClient) -> None:
         except Exception as exc:
             logger.warning("[image-cache] could not fetch %s: %s", label, exc)
 
+    # CAL-08: `ts` significa "última carga buena" (stores.py). Si no cargó ninguna
+    # fuente (GitHub caído en el arranque de Render), no se estampa: se reintenta
+    # pasado _IMAGE_EMPTY_TTL en vez de pasar 23 h con `image: ""`.
+    if not fetched:
+        _image_cache_meta["failed_ts"] = now
+        logger.warning("[image-cache] all sources failed; retry in %ds", _IMAGE_EMPTY_TTL)
+        return
     _image_cache_meta["ts"] = now
+    _image_cache_meta.pop("failed_ts", None)
     logger.info(
         "[image-cache] loaded %d total entries (%+d new) — sources: %s",
         len(_item_image_cache),
