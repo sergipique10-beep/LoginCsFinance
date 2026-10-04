@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 from steam.routes import market
-from steam.services import _build_movers_from_topmovers, _register_flat, _register_skin, _rarity_from_cache
+from steam.mappers.movers import _build_movers_from_topmovers
+from steam.services import _register_flat, _register_skin, _rarity_from_cache
 from stores import _image_cache_meta, _item_image_cache, _item_rarity_cache
 
 TOPMOVERS = {

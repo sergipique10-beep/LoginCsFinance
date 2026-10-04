@@ -6,7 +6,7 @@ número en los cuatro campos). Comparar el precio consigo mismo daba delta=None 
 badge "N/A" en todas las skins del inventario. Los campos `pricereal*` sí son
 valores históricos reales y coinciden con lo que muestran otros trackers.
 """
-from steam.mappers import _map_item
+from steam.mappers.items import _map_item
 from steam.routes.market import _MOVERS_SELECT
 
 

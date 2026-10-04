@@ -103,13 +103,17 @@ async def test_og_image_timeout_y_redirecciones():
 # ── Mappers sin HTTP ──────────────────────────────────────────────────────────
 
 def test_mappers_no_importa_httpx():
-    tree = ast.parse((ROOT / "steam" / "mappers.py").read_text(encoding="utf-8"))
-    imported = {
-        alias.name.split(".")[0]
-        for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
-        for alias in node.names
-    } | {
-        node.module.split(".")[0]
-        for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
-    }
-    assert "httpx" not in imported
+    # CLEAN-08 partió steam/mappers.py en el paquete steam/mappers/: la guardia lo cubre entero.
+    files = sorted((ROOT / "steam" / "mappers").glob("*.py"))
+    assert files
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported = {
+            alias.name.split(".")[0]
+            for node in ast.walk(tree) if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            node.module.split(".")[0]
+            for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
+        }
+        assert "httpx" not in imported, path.name

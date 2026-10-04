@@ -4,7 +4,7 @@ La Steam News API (appid 730) no admite filtro de idioma: devuelve lo que public
 cada partner. `feedlabel` identifica la fuente, no el idioma, así que el filtro
 mira el propio titular.
 """
-from steam.mappers import is_readable_news
+from steam.mappers.news import is_readable_news
 
 
 def n(title: str) -> dict:

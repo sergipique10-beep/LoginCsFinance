@@ -1,8 +1,7 @@
-"""CAL-09 (Fase 0): flujos de los mappers puros de steam/mappers.py.
+"""CAL-09 (Fase 0): flujos de los mappers puros de steam/mappers/.
 
 Fijan el comportamiento ACTUAL ante payload normal, incompleto e implausible, para que el
-refactor (CLEAN-08) pueda partir el módulo sin cambiar nada. `_best_price_from_markets` y
-`_category_rank` no se cubren a propósito: son código muerto y CLEAN-08 decide su destino.
+refactor (CLEAN-08) pudiera partir el módulo sin cambiar nada.
 """
 from datetime import date, timedelta
 
@@ -10,11 +9,12 @@ import httpx
 import pytest
 
 from steam.clients.steam_news import fetch_og_image
-from steam.mappers import (
-    _STEAM_CDN, _WEAPON_CATEGORY, _delta_from_history,
-    _map_market_index_point, _map_news_item, _normalize_image, _resolve_phase,
-    _safe_delta, _weapon_category, is_readable_news,
+from steam.mappers.items import (
+    _STEAM_CDN, _WEAPON_CATEGORY, _delta_from_history, _normalize_image, _resolve_phase,
+    _safe_delta, _weapon_category,
 )
+from steam.mappers.market_index import _map_market_index_point
+from steam.mappers.news import _map_news_item, is_readable_news
 
 
 def _d(days_ago: int) -> str:

@@ -8,11 +8,17 @@ files:
   - steam/clients/static_catalog.py
   - steam/clients/steam_news.py
   - steam/clients/steamwebapi.py
+  - steam/domain/__init__.py
+  - steam/domain/models.py
   - steam/errors.py
   - steam/inventory_snapshot_repo.py
   - steam/liquidity.py
-  - steam/mappers.py
-  - steam/market_rows.py
+  - steam/mappers/__init__.py
+  - steam/mappers/items.py
+  - steam/mappers/market_index.py
+  - steam/mappers/movers.py
+  - steam/mappers/news.py
+  - steam/mappers/rows.py
   - steam/price_capture.py
   - steam/price_history_repo.py
   - steam/rankings_repo.py

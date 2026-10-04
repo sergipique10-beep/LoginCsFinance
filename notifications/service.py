@@ -11,7 +11,7 @@ import firebase_admin
 from firebase_admin import credentials, exceptions as fb_exceptions, messaging
 
 from settings import FIREBASE_SERVICE_ACCOUNT_JSON
-from steam.mappers import _clean_news_content
+from steam.mappers.news import _clean_news_content
 from . import repo
 
 logger = logging.getLogger("uvicorn.error")

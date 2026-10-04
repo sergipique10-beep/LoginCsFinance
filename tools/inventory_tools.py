@@ -77,7 +77,7 @@ async def _ver_inventario(
         _enrich_market_prices,
         _enrich_images_from_cache,
     )
-    from steam.mappers import _map_item
+    from steam.mappers.items import _map_item
 
     import time
 

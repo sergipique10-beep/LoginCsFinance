@@ -1,8 +1,8 @@
-import asyncio
-import html
-import re
-from datetime import date, datetime, timedelta, timezone
+"""Mapper de items de steamwebapi (/items, /inventory, /item) a `SkinCard`, y los
+deltas de precio. Puro: sin HTTP, sin caché, sin fallback silencioso."""
+from datetime import date, timedelta
 
+from steam.domain.models import SkinCard
 from steam.liquidity import compute_liquidity
 
 _STEAM_CDN = "https://community.akamai.steamstatic.com"
@@ -44,18 +44,6 @@ def _delta_from_history(pts: list, days: int, latest: float) -> float | None:
     if not ref:
         return None
     return round((latest - ref) / ref * 100, 2)
-
-
-def _best_price_from_markets(prices: list) -> float:
-    """Returns the best available price from the external prices array (Steam market preferred)."""
-    if not prices:
-        return 0.0
-    for p in prices:
-        if "steam" in str(p.get("market") or "").lower():
-            v = float(p.get("price") or p.get("value") or 0)
-            if v:
-                return v
-    return float(prices[0].get("price") or prices[0].get("value") or 0)
 
 
 def _safe_delta(new: float | None, old: float | None) -> float | None:
@@ -101,19 +89,6 @@ _WEAPON_CATEGORY: dict[str, str] = {
     "paracord knife": "Knife", "survival knife": "Knife", "nomad knife": "Knife",
     "skeleton knife": "Knife", "kukri knife": "Knife",
 }
-
-
-_CATEGORY_PRIORITY: list[str] = [
-    "Rifle", "Sniper Rifle", "Pistol", "SMG", "Heavy", "Knife", "Gloves",
-    "Case", "Capsule", "Sticker", "Agent", "Patch", "Graffiti", "Music Kit",
-]
-
-
-def _category_rank(weapon_type: str | None) -> int:
-    """Índice de orden de una categoría; las no listadas van al final."""
-    if weapon_type in _CATEGORY_PRIORITY:
-        return _CATEGORY_PRIORITY.index(weapon_type)
-    return len(_CATEGORY_PRIORITY)
 
 
 def _weapon_category(itemtype: str | None) -> str | None:
@@ -167,7 +142,7 @@ def _inline_delta(current: float | None, raw_old) -> float | None:
     return _safe_delta(new, old)
 
 
-def _map_item(item: dict) -> dict:
+def _map_item(item: dict) -> SkinCard:
     # /float/assets?with_items=1 nests market data under "item"; /inventory is flat
     d = item.get("item") or item
 
@@ -244,177 +219,4 @@ def _map_item(item: dict) -> dict:
         "tradable":       bool(d.get("tradable", True)),
         "tradeLockDays":  d.get("markettradablerestriction"),
         "steamUrl":       d.get("steamurl"),
-    }
-
-
-# ── Market index topmovers mapper ────────────────────────────────────────────
-
-def _map_topmovers_item(raw: dict) -> dict:
-    """Maps a topmovers gainer/loser object from /market-index/cs2 to ISkinCard shape.
-
-    The topmovers payload only contains {markethashname, price, change24h}.
-    change24h is the 24h price change as a PERCENTAGE (UX-35, checked against a
-    real response on 2026-10-02: a 0.17 $ sticker with change24h=450, losers
-    between -52 and -37). This docstring used to say it was an absolute amount.
-    The price deltas of the card are still 0.0 (nothing reads them from here);
-    _change24h is kept as an internal sort key for _build_movers_from_topmovers.
-    """
-    latest = float(raw.get("price") or 0)
-    change = float(raw.get("change24h") or 0)
-    return {
-        "id":             raw.get("id", "") or raw.get("markethashname", ""),
-        # markethashname siempre en inglés; marketname viene localizado y a veces
-        # mal (ver nota en _map_item).
-        "name":           raw.get("markethashname") or raw.get("marketname", ""),
-        "slug":           raw.get("slug", ""),
-        "weaponType":     raw.get("weapontype") or _weapon_category(raw.get("itemtype")),
-        "itemName":       raw.get("itemname"),
-        "itemType":       raw.get("itemtype"),
-        "image":          _normalize_image(raw.get("image", "")),
-        "rarity":         raw.get("rarity", "Base Grade"),
-        "rarityColor":    raw.get("color", "b0c3d9"),
-        "borderColor":    raw.get("bordercolor", "b0c3d9"),
-        "quality":        raw.get("quality", "Normal"),
-        "isStatTrak":     bool(raw.get("isstattrak", False)),
-        "isSouvenir":     bool(raw.get("issouvenir", False)),
-        "isStar":         bool(raw.get("isstar", False)),
-        "exterior":       raw.get("tag5") or raw.get("exterior"),
-        "floatValue":     None,
-        "floatMin":       raw.get("minfloat"),
-        "floatMax":       raw.get("maxfloat"),
-        "paintIndex":     raw.get("paintindex"),
-        "phase":          None,
-        "priceLatest":    latest,
-        "csfloatPrice":   None,
-        "buffPrice":      None,
-        "priceSafe":      0,
-        "priceMin":       0,
-        "priceMax":       0,
-        "priceDelta24h":  0.0,
-        "priceDelta7d":   0.0,
-        "priceDelta30d":  0.0,
-        "priceReal":      None,
-        "externalPrices": [],
-        "sold24h":        int(raw.get("sold24h") or 0),
-        "sold7d":         int(raw.get("sold7d") or 0),
-        "sold30d":        int(raw.get("sold30d") or 0),
-        "soldTotal":      int(raw.get("soldtotal") or 0),
-        "offerVolume":    0,
-        "buyOrderVolume": 0,
-        "buyOrderPrice":  0,
-        "hoursToSold":    0,
-        # El payload de topmovers no trae offervolume/buyordervolume/hourstosold.
-        # Un score calculado sobre ceros diría "ilíquido" en vez de "no hay datos".
-        "liquidityScore":     None,
-        "liquidityBreakdown": None,
-        "marketable":     True,
-        "tradable":       True,
-        "tradeLockDays":  None,
-        "steamUrl":       None,
-        "_change24h":     change,
-    }
-
-
-# ── Market index mappers ──────────────────────────────────────────────────────
-
-def _first_not_none(d: dict, *keys):
-    """Returns the first non-None value found among the given keys."""
-    for k in keys:
-        v = d.get(k)
-        if v is not None:
-            return v
-    return None
-
-
-def _map_market_index_point(point: dict) -> dict:
-    return {
-        "date":   str(point.get("ts", "")),
-        "price":  float(point.get("value") or 0),
-        "change": float(point.get("change") or 0),
-        "volume": int(point.get("volume") or 0),
-    }
-
-
-# ── News mappers ──────────────────────────────────────────────────────────────
-
-def _clean_news_content(raw: str, max_chars: int = 220) -> str:
-    text = re.sub(r"<[^>]+>", " ", raw)           # HTML tags
-    text = re.sub(r"\[[^\]]*\]", " ", text)        # BBCode [b], [url=...], [img]
-    text = re.sub(r"\{[^}]*\}", " ", text)         # {STEAM_CLAN_IMAGE}, {h2}, etc.
-    text = html.unescape(text)                     # &amp; &nbsp; &#39; etc.
-    text = re.sub(r"https?://\S+", "", text)       # full URLs
-    text = re.sub(r"(?<!\w)/\S+", "", text)        # /path or //cdn tokens
-    text = re.sub(r"\s*\\\s*", " ", text)          # backslash separators
-    text = " ".join(text.split())
-    if len(text) > max_chars:
-        text = text[:max_chars].rsplit(" ", 1)[0]
-    return text
-
-
-# UX-05: la Steam News API (appid 730) no admite filtro de idioma — devuelve lo
-# que publica cada partner, y los medios rusos y chinos publican en su idioma.
-# `feedlabel` identifica la fuente, no el idioma, así que no sirve para filtrar.
-# Se mira el texto: si una fracción apreciable del titular es cirílico o CJK, la
-# noticia es ilegible para el usuario objetivo y se descarta.
-_NON_LATIN_RE = re.compile(
-    r"[Ѐ-ӿ"      # cirílico
-    r"一-鿿"       # han (chino / kanji)
-    r"぀-ヿ"       # kana japonés
-    r"가-힯]"      # hangul coreano
-)
-
-# Fracción de caracteres no latinos por encima de la cual se descarta. 0.2 deja
-# pasar un titular en inglés con una palabra o un nombre propio en otro alfabeto,
-# y descarta el que está escrito entero en él.
-_NON_LATIN_THRESHOLD = 0.2
-
-
-def is_readable_news(item: dict) -> bool:
-    """False si el titular está mayoritariamente en un alfabeto no latino.
-
-    Se mira solo el titular: es lo que el usuario lee en la lista, y el cuerpo
-    puede traer markup y nombres propios que ensucian la proporción.
-    """
-    title = (item.get("title") or "").strip()
-    if not title:
-        return True  # sin titular no hay nada que juzgar; que decida el resto
-
-    letters = [c for c in title if c.isalpha()]
-    if not letters:
-        return True  # solo números o símbolos: no es un idioma
-
-    non_latin = sum(1 for c in letters if _NON_LATIN_RE.match(c))
-    return (non_latin / len(letters)) <= _NON_LATIN_THRESHOLD
-
-
-def _map_news_item(item: dict, index: int, image_url: str = "") -> dict:
-    feedname  = item.get("feedname", "").lower()
-    feedlabel = item.get("feedlabel", "NEWS")
-
-    if "blog" in feedname or "valve" in feedname:
-        category_color = "4a9eff"
-    elif any(x in feedname for x in ("hltv", "liquipedia", "esport")):
-        category_color = "8847ff"
-    else:
-        category_color = "f0c040"
-
-    try:
-        date_str = datetime.fromtimestamp(item["date"], tz=timezone.utc).strftime("%Y-%m-%d")
-    except (KeyError, ValueError, OSError):
-        date_str = ""
-
-    author = item.get("author", "").strip()
-    excerpt = _clean_news_content(item.get("contents", ""))
-
-    return {
-        "id":            str(item.get("gid", index)),
-        "category":      feedlabel.upper(),
-        "categoryColor": category_color,
-        "title":         item.get("title", ""),
-        "source":        author if author else feedlabel,
-        "date":          date_str,
-        "imageUrl":      image_url,
-        "featured":      index == 0,
-        "url":           item.get("url", ""),
-        "content":       excerpt,
     }
