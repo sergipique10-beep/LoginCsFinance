@@ -117,7 +117,7 @@ por campo y tick, UX-46).
 
 | Flujo | Disparador | Qué devuelve | ¿Lo ve el cliente? | Decisión | Log (`flow` · `reason`) |
 |---|---|---|---|---|---|
-| Inventario | 429 / 402 con snapshot | snapshot | `X-Inventory-Stale` | conservar (PERF-14) | — |
+| Inventario | 429 / 402 con snapshot | snapshot | `X-Inventory-Stale` | conservar (PERF-14) | `inventory` · `rate_limit`/`quota`, `served=stale` (CLEAN-18; además la línea `[inventory-429]`) |
 | Inventario | 402 sin snapshot | 503 | `code: upstream_quota` | conservar (SEC-16) | — |
 | Inventario | 429 sin snapshot | 429, `detail` de texto | sin `code` | CAL-14 | — |
 | Inventario | 410 / 411 | snapshot con `X-Inventory-Stale` si lo hay, si no `[]`; **ni la caché ni el snapshot se pisan** | cabecera (con snapshot) | resuelto (CLEAN-15) | `inventory` · `http_410`/`http_411`, `served=stale` o `empty` |

@@ -220,7 +220,10 @@ LoginCsFinance/
                     #   _ENRICH_BATCH, _TRENDING_STALE_DAYS, _ITEMS_FETCH_MAX
       cap_history_service.py # capture_cap_snapshot (/internal/cap-tick, línea [steam-cache]),
                     #   get_cap_history + _downsample, _CAP_TF_MAP, _CAP_BUCKET_MAP, _CAP_FIELDS
-      inventory_service.py #   fetch_fresh_inventory(track=): la ruta registra en tracked_skins, el chat no
+      inventory_service.py #   fetch_fresh_inventory(track=): la ruta registra en tracked_skins, el chat no;
+                    #   get_inventory(client, steam_id, force=, origin=) → Fetched[Inventory] con la
+                    #   degradación 429/402/410 (PERF-14, CAL-13): caché, snapshot, _retry_inventory
+                    #   y _backoff viven aquí desde CLEAN-18; la ruta pone cabeceras y status
       profile_service.py #   get_profile (/me)
       news_service.py #   get_cs2_news (/news/cs2, og:image, filtro UX-05)
     cap_history_repo.py  # Supabase data layer for the CS2 price-index history:
@@ -233,7 +236,8 @@ LoginCsFinance/
     routes/         # APIRouters finos (registered in routes/__init__.py): auth, rate limit,
                     #   llamar al service y traducir errores a HTTP. No importan steam.api
                     #   (guardia en tests/test_steam_layers.py)
-      items.py      #   /me, /inventory (+ degradación ante 429/402, PERF-14), /item/history
+      items.py      #   /me, /inventory y /inventory/refresh (cabeceras X-Inventory-* según el
+                    #   Fetched de inventory_service), /item/history
       market.py     #   /market/movers, /market/items, /market/trending, /market/index,
                     #   /market/cap-history, /market/providers, /market/prices, /market/fx,
                     #   /internal/cap-tick, /internal/trending-tick,
@@ -659,7 +663,7 @@ Dos errores distintos, dos tratamientos — no confundirlos:
 | **429** | Límite por minuto (20/60 s en Starter): transitorio | Sirve el snapshot + **reintenta en segundo plano** |
 | **402** | Cuota mensual agotada (PERF-09): dura hasta el día 10 | Sirve el snapshot si lo hay, **nunca reintenta** (sin snapshot: 503 `upstream_quota`, SEC-16) |
 
-- **Snapshot durable**: tabla Supabase `inventory_snapshots` (`steam_id` PK, `items` jsonb, `captured_at`), DDL en **`docs/sql/inventory_snapshots.sql` — hay que ejecutarlo a mano en Supabase antes de desplegar** (sin la tabla el guardado falla en silencio y un 429 vuelve a dar error). Una fila por usuario, sobrescrita en cada lectura 200 (`_store` en `steam/routes/items.py`). No sirve `_inventory_cache`: se vacía cuando Render duerme y solo guarda un `monotonic()`. Es dato personal: RLS sin políticas y se borra con la cuenta.
+- **Snapshot durable**: tabla Supabase `inventory_snapshots` (`steam_id` PK, `items` jsonb, `captured_at`), DDL en **`docs/sql/inventory_snapshots.sql` — hay que ejecutarlo a mano en Supabase antes de desplegar** (sin la tabla el guardado falla en silencio y un 429 vuelve a dar error). Una fila por usuario, sobrescrita en cada lectura 200 (`_store` en `steam/services/inventory_service.py`). No sirve `_inventory_cache`: se vacía cuando Render duerme y solo guarda un `monotonic()`. Es dato personal: RLS sin políticas y se borra con la cuenta.
 - **Reintento**: `_retry_inventory`, una tarea `asyncio` por usuario (`_retry_tasks`), backoff exponencial con jitter (`_backoff`: mitad fija + mitad aleatoria, nunca menos que `Retry-After`). Mientras haya uno en curso, `GET /inventory` sirve el snapshot **sin llamar a steamwebapi** (cada llamada extra sería otro 429). Si recupera, rellena `_inventory_cache` y el snapshot. **Ceiling:** vive en el proceso: si Render duerme se pierde y el siguiente GET reintenta por su cuenta.
 - **Sin snapshot** (usuario que nunca tuvo una lectura buena) el 429 sigue siendo un 429: no hay nada que enseñar. El reintento se programa igualmente para calentar la caché.
 - **Detectar recurrencia** (criterio para subir de plan): una línea por 429, `[inventory-429] user= origin= retry_after= served= last_hour=`. `last_hour` es el conteo de los últimos 60 min en ese proceso; `grep inventory-429` en los logs de Render. CORS expone las dos cabeceras (`expose_headers` en `main.py`): sin eso el WebView no las lee.
