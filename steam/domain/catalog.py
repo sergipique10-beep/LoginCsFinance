@@ -48,6 +48,22 @@ WEAPON_CATEGORY: Mapping[str, WeaponCategory] = MappingProxyType({
 })
 
 
+# Respaldo por substring para familias que no se pueden enumerar (los guantes y
+# cuchillos tienen variantes abiertas; agentes y pegatinas vienen con itemtypes
+# compuestos). Se recorre en orden y gana la primera marca que aparezca en el
+# itemtype. Solo se consulta cuando la tabla exacta no lo tiene.
+WEAPON_CATEGORY_FALLBACK: tuple[tuple[str, WeaponCategory], ...] = (
+    ("glove", WeaponCategory.GLOVES),
+    ("knife", WeaponCategory.KNIFE),
+    ("bayonet", WeaponCategory.KNIFE),
+    ("daggers", WeaponCategory.KNIFE),
+    ("karambit", WeaponCategory.KNIFE),
+    ("sticker", WeaponCategory.STICKER),
+    ("agent", WeaponCategory.AGENT),
+    ("operator", WeaponCategory.AGENT),
+)
+
+
 def weapon_category(itemtype: str | None) -> str | None:
     """Deriva la categoría de alto nivel ('Rifle', 'Knife'...) desde el itemtype crudo.
 
@@ -62,15 +78,9 @@ def weapon_category(itemtype: str | None) -> str | None:
     key = itemtype.strip().lower()
     if key in WEAPON_CATEGORY:
         return WEAPON_CATEGORY[key].value
-    # Fallbacks por substring para familias no enumerables exhaustivamente.
-    if "glove" in key:
-        return WeaponCategory.GLOVES.value
-    if "knife" in key or "bayonet" in key or "daggers" in key or "karambit" in key:
-        return WeaponCategory.KNIFE.value
-    if "sticker" in key:
-        return WeaponCategory.STICKER.value
-    if "agent" in key or "operator" in key:
-        return WeaponCategory.AGENT.value
+    for mark, category in WEAPON_CATEGORY_FALLBACK:
+        if mark in key:
+            return category.value
     # Último recurso: itemtype capitalizado (ej. "music kit" → "Music Kit"),
     # para que el item permanezca filtrable y no se pierda.
     return key.title()

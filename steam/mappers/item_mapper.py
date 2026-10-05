@@ -3,29 +3,10 @@ deltas de precio. Puro: sin HTTP, sin caché, sin fallback silencioso."""
 from datetime import date, timedelta
 
 from steam.domain.catalog import weapon_category
+from steam.domain.liquidity import compute_liquidity
 from steam.domain.models import SkinCard, SteamItem
-from steam.domain.validators import plausible_ratio
-from steam.liquidity import compute_liquidity
-
-_STEAM_CDN = "https://community.akamai.steamstatic.com"
-
-
-def _normalize_image(raw: str) -> str:
-    """Normalize steamwebapi image values to a full Steam CDN URL.
-
-    /items and /inventory return a full URL (community.akamai.steamstatic.com) — pass through.
-    Defensive branches handle edge cases (relative path, bare hash) that could appear
-    in less-documented endpoints like topmovers from /market-index.
-    Empty string is returned as-is so the template @if(imageUrl()) shows no broken image.
-    """
-    if not raw:
-        return ""
-    if raw.startswith("http"):
-        return raw
-    if raw.startswith("/economy/image/"):
-        return _STEAM_CDN + raw
-    # bare hash — defensive, not observed in /items but possible in other endpoints
-    return f"{_STEAM_CDN}/economy/image/{raw}"
+from steam.domain.normalizers import normalize_image_url
+from steam.domain.rules import plausible_ratio
 
 
 # ── Inventory mappers ─────────────────────────────────────────────────────────
@@ -98,7 +79,7 @@ def _map_item(item: SteamItem) -> SkinCard:
         "weaponType":     item.weapon_type or weapon_category(item.item_type),
         "itemName":       item.item_name,
         "itemType":       item.item_type,
-        "image":          _normalize_image(item.image or ""),
+        "image":          normalize_image_url(item.image),
         "rarity":         item.rarity if item.rarity is not None else "Base Grade",
         "rarityColor":    item.color if item.color is not None else "b0c3d9",
         "borderColor":    item.border_color if item.border_color is not None else "b0c3d9",

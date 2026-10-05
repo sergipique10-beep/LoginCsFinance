@@ -5,7 +5,7 @@ cada partner. `feedlabel` identifica la fuente, no el idioma, así que el filtro
 mira el propio titular.
 """
 from steam.adapters.news_adapter import adapt_news_entry
-from steam.mappers.news_mapper import is_readable_news
+from steam.domain.rules import is_readable_news
 
 
 def n(title: str):

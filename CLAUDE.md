@@ -130,15 +130,28 @@ LoginCsFinance/
       provider_adapter.py # adapt_markets (la cadena de alias del logo vive aquí)
       fx_adapter.py   #   adapt_rates (estricto: una tasa como string es anomalía)
     domain/
-      names.py        # Reglas de nombres (CLEAN-10): image_lookup_candidates, catalog_keys_for_skin,
-                    #   without_souvenir, is_sticker_slab, skin_base. Los prefijos «StatTrak™ »,
-                    #   «★ », «Souvenir » y la marca de slab solo aparecen aquí (guardia en
-                    #   tests/test_domain_names.py)
+      normalizers.py  # ex names.py (CLEAN-17). Normalizadores puros de nombres e imágenes:
+                    #   image_lookup_candidates, catalog_keys_for_skin, without_souvenir,
+                    #   has_slab_mark, skin_base, name_key / names_match (match exacto de
+                    #   /market/price), normalize_image_url (ex item_mapper._normalize_image,
+                    #   sobre utils/urls). Los prefijos «StatTrak™ », «★ », «Souvenir », la
+                    #   marca de slab y "glove"/"knife"/"bayonet" solo aparecen en domain/
+                    #   (guardia en tests/test_domain_normalizers.py)
+      rules.py        # Reglas de negocio (CLEAN-17), puras sobre el modelo interno o la tarjeta:
+                    #   plausible_ratio / plausible_fx_rate (ex validators), ranking_eligible +
+                    #   MIN_RANKING_PRICE / MIN_SOLD_*, turnover y diversificar (ex
+                    #   services/market, con MAX_POR_CATEGORIA / MAX_POR_SKIN),
+                    #   is_sticker_slab(item) (por item_type y luego por nombre; también en
+                    #   compute_trending, CAL-14), is_readable_news (ex news_mapper, UX-05),
+                    #   news_category(feedname, feedlabel) → NewsCategory (tabla NEWS_CATEGORY_MARKS)
+      liquidity.py    # ex steam/liquidity.py (CLEAN-17). Liquidity Score (0-100):
+                    #   compute_liquidity(SteamItem). Puro
       enums.py        # FetchStatus (ok|partial|stale|error) y Served (stale|empty|fallback|error),
                     #   como Literal (CLEAN-15). `str, Enum` (CLEAN-17): Market (steam|csfloat|
                     #   buff), WeaponCategory, Wear (los 5 desgastes), NewsCategory (con `.color`).
                     #   Fuera de domain/ se usan los `.value`: en 3.11 f"{Market.BUFF}" no es "buff"
-      catalog.py      # Constantes inmutables: WEAR_NAMES, WEAPON_CATEGORY + weapon_category,
+      catalog.py      # Constantes inmutables: WEAR_NAMES, WEAPON_CATEGORY + weapon_category (con
+                    #   WEAPON_CATEGORY_FALLBACK, la tabla ordenada de los 8 substrings de respaldo),
                     #   TRACKED_MARKETS / VALID_MARKETS (= HISTORY_MARKETS | PASSTHROUGH_MARKETS)
                     #   / HISTORY_MARKETS, todos derivados de los enums como `.value`; proveedores
                     #   (KNOWN_LOGOS, PROVIDER_IDS, fallback_providers() devuelve copia)
@@ -152,21 +165,21 @@ LoginCsFinance/
                     #   MarketIndexData, ProfileData, NewsEntry, CatalogEntry, ProviderInfo,
                     #   PriceRow, FxRates. None = «no vino / no convertible»; 0 = cero
       validators.py   # Validadores de valor (CLEAN-14): as_float/as_int/as_bool/as_str (None si
-                    #   falta; InvalidField si el tipo es imposible). Reglas de plausibilidad
-                    #   (CLEAN-12): plausible_ratio (10×), plausible_fx_rate (0,5–2,0),
-                    #   ranking_eligible(SteamItem, MIN_SOLD_*), canonical_price (dict de /item,
-                    #   hasta la Fase 5), has_price
+                    #   falta; InvalidField si el tipo es imposible), canonical_price (dict de
+                    #   /item, hasta la Fase 5), has_price. Las reglas de plausibilidad y de
+                    #   rankings viven en rules.py desde CLEAN-17
     mappers/        # Mappers puros: modelo interno → TypedDict de salida (sin HTTP, caché, fallback):
       item_mapper.py  #   _map_item(SteamItem), _inline_delta, _safe_delta, _delta_from_history,
-                    #   _resolve_phase, _normalize_image
+                    #   _resolve_phase (la imagen la normaliza domain/normalizers)
       movers_mapper.py #  _map_topmovers_item(TopMover), _build_movers_from_topmovers, _MOVERS_LIMIT
       market_index_mapper.py # _map_market_index_point(IndexPoint)
-      news_mapper.py  #   _map_news_item(NewsEntry), _clean_news_content (lo importan rag/ y
-                    #   notifications/), is_readable_news(NewsEntry)
+      news_mapper.py  #   _map_news_item(NewsEntry) (color vía rules.news_category),
+                    #   _clean_news_content (lo importan rag/ y notifications/; a utils/ en la Fase 6)
       profile_mapper.py #  _map_profile(ProfileData | None, steam_id)
       provider_mapper.py # _build_providers(list[ProviderInfo]) → steam, csfloat, buff
       row_mapper.py   #   _row_to_item, _to_row (filas de market_trending / market_movers)
-    liquidity.py    # Liquidity Score (0-100): compute_liquidity(SteamItem). Puro.
+    utils/          # Sin dependencias internas (CLEAN-17 abre el paquete; la Fase 6 trae strings y dates)
+      urls.py         # STEAM_CDN, is_http_url, steam_cdn_url
     cache/          # Caché con política explícita (CLEAN-16). No importa nada de steam/ salvo
                     #   errors. stores.py reexporta las instancias por compatibilidad (Fase 6)
       base_cache.py   # TtlCache (ex stores.py) + CacheState + lookup(key, now) → (estado, valor),
@@ -196,7 +209,8 @@ LoginCsFinance/
                     #   enrich_market_prices (CSFloat/Buff), get_item_history (/item/history)
       providers.py    #   fetch_market_providers (+ respaldo estático)
       fx.py           #   fetch_fx_rate (USD→EUR, stale si cae frankfurter)
-      market.py       #   compute_movers / compute_trending (/items + fallback de topmovers),
+      market.py       #   compute_movers / compute_trending (/items + fallback de topmovers;
+                    #   orden y reparto con rules.turnover / rules.diversificar),
                     #   search_items (la búsqueda de /items para rutas y chat), search_market,
                     #   get_item_full, get_market_index, get_market_prices, get_cap_history,
                     #   ticks (capture_cap_snapshot, capture_trending, enrich_trending,
@@ -238,17 +252,19 @@ LoginCsFinance/
 
 ```
 settings.py, stores.py, middleware.py, steam/errors/domain_errors.py  ← nothing internal
+steam/utils/*           ← nothing internal (guardia AST en tests/test_steam_layers.py)
 steam/domain/enums.py   ← nothing internal
 steam/domain/models.py  ← steam/domain/enums
 steam/errors/handling.py ← steam/errors/domain_errors, steam/domain/{enums,models} (+ fastapi)
-steam/domain/*          ← steam/domain, steam/errors (catalog → models, names → catalog)
-steam/liquidity.py      ← steam/domain/models
+steam/domain/*          ← steam/domain, steam/errors, steam/utils (catalog → enums, models;
+                          normalizers → catalog, utils/urls; rules → enums, models, normalizers;
+                          liquidity → models)
 steam/cache/*           ← nothing internal (stores.py importa de aquí, nunca al revés)
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
 steam/api/*             ← steam/errors, settings (solo steam_client)
 steam/adapters/*        ← steam/domain, steam/errors (nunca api, mappers, services, stores)
-steam/mappers/*         ← steam/domain, steam/liquidity (nunca adapters, services, stores)
+steam/mappers/*         ← steam/domain (nunca adapters, services, stores)
 steam/services/*        ← steam/api, steam/adapters, steam/domain, steam/errors, steam/mappers,
                           stores, repos de Supabase (rankings, cap_history, price_history)
                           (reglas comprobadas por AST en tests/test_steam_layers.py)
@@ -327,7 +343,7 @@ steamwebapi responses are transformed in `steam/mappers/` before being returned:
 
 Por eso el trending está partido en dos ticks: **captura** (`/internal/trending-tick`, horario, ~500 items por 1 req) y **enriquecimiento** (`/internal/enrich-tick`, cada 15 min, 18 items). Los items aún sin enriquecer conservan los deltas de `_inline_delta`, que ya vienen gratis en el payload de `/items` — ninguna tarjeta se queda sin badge, solo con un delta algo menos preciso hasta que le toque la rueda.
 
-**Liquidity Score** (`steam/liquidity.py`): `liquidityScore` (0-100) responde "si listo este ítem hoy, ¿en cuánto se vende y a qué precio real?". Cinco componentes ponderados: velocidad de ventas (0.30), tiempo de venta (0.25), haircut contra el mejor bid (0.25), buy orders en espera (0.10), consistencia entre mercados (0.10).
+**Liquidity Score** (`steam/domain/liquidity.py`): `liquidityScore` (0-100) responde "si listo este ítem hoy, ¿en cuánto se vende y a qué precio real?". Cinco componentes ponderados: velocidad de ventas (0.30), tiempo de venta (0.25), haircut contra el mejor bid (0.25), buy orders en espera (0.10), consistencia entre mercados (0.10).
 
 ## Predicción de precios (`predict/`)
 

@@ -13,11 +13,14 @@ from steam.adapters.steam_adapter import adapt_inventory, adapt_item, adapt_item
 from steam.api.news_client import fetch_og_image
 from steam.domain.catalog import WEAPON_CATEGORY, weapon_category
 from steam.errors import SourceUnavailable, UpstreamError
+from steam.domain.normalizers import normalize_image_url as _normalize_image
+from steam.domain.rules import is_readable_news
 from steam.mappers.item_mapper import (
-    _STEAM_CDN, _delta_from_history, _normalize_image, _resolve_phase, _safe_delta,
+    _delta_from_history, _resolve_phase, _safe_delta,
 )
 from steam.mappers.market_index_mapper import _map_market_index_point
-from steam.mappers.news_mapper import _map_news_item, is_readable_news
+from steam.mappers.news_mapper import _map_news_item
+from steam.utils.urls import STEAM_CDN as _STEAM_CDN
 
 
 def _d(days_ago: int) -> str:

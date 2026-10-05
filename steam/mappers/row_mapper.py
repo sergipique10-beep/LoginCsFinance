@@ -102,7 +102,7 @@ def _to_row(item: Mapping[str, Any], rank: int, bucket: str | None = None) -> Ra
         "hours_to_sold": item.get("hoursToSold"),
         "steam_url": item.get("steamUrl"),
         # Precalculado para poder ordenar en SQL sin recomputar. Es el mismo
-        # criterio que _turnover en routes/market.py.
+        # criterio que rules.turnover.
         "turnover": (item.get("priceLatest") or 0) * (item.get("sold24h") or 0),
     }
     if bucket is not None:

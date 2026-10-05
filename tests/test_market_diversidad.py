@@ -1,12 +1,14 @@
-"""Diversificación de los rankings (steam/services/market.py:_diversificar).
+"""Diversificación de los rankings (steam/domain/rules.py:diversificar, ex services/market).
 
 `_category_rank` ordenaba por prioridad de categoría, lo que AGOTA la primera
 antes de pasar a la siguiente: con "Rifle" en cabeza los 18 huecos del trending
 salían todos rifles, incluidas 4 variantes de desgaste de la misma skin.
 """
 
-from steam.domain.names import skin_base as _skin_base
-from steam.services.market import _MAX_POR_CATEGORIA, _MAX_POR_SKIN, _diversificar
+from steam.domain.normalizers import skin_base as _skin_base
+from steam.domain.rules import MAX_POR_CATEGORIA as _MAX_POR_CATEGORIA
+from steam.domain.rules import MAX_POR_SKIN as _MAX_POR_SKIN
+from steam.domain.rules import diversificar as _diversificar
 
 
 def _item(nombre: str, categoria: str) -> dict:

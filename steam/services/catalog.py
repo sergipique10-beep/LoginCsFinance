@@ -14,7 +14,7 @@ from steam.adapters.static_catalog_adapter import adapt_catalog_source
 from steam.api import static_catalog_client
 from steam.errors.handling import DEGRADABLE, log_degraded, reason_of
 from steam.domain.models import CatalogEntry, SteamItem
-from steam.domain.names import catalog_keys_for_skin, image_lookup_candidates, without_souvenir
+from steam.domain.normalizers import catalog_keys_for_skin, image_lookup_candidates, without_souvenir
 
 logger = logging.getLogger("uvicorn.error")
 
