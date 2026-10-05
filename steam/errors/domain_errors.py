@@ -70,6 +70,13 @@ class InvalidPayload(Exception):
         self.body_excerpt = body_excerpt
 
 
+class StorageError(Exception):
+    """Supabase no respondió o rechazó la operación (CLEAN-15). Lo lanza `storage_call`
+    (`steam/cap_history_repo.py`) traduciendo los errores de postgrest, de red y la
+    configuración ausente; los llamadores best-effort (snapshot del inventario,
+    `register_tracked`) capturan esto y nada más: un `KeyError` en un repo es un bug."""
+
+
 class HistoryBusy(Exception):
     """El limiter del histórico está lleno y el llamador no puede esperar (PERF-03).
 

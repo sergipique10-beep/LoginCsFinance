@@ -13,7 +13,7 @@ STALE = -1e9   # timestamp monotónico muy antiguo: la entrada existe pero ha ca
 
 # (url, caché, clave) de cada ruta que llama a steamwebapi y puede recibir un 402.
 ROUTES = [
-    ("/market/items?q=AK", _search_cache, "ak", []),
+    ("/market/items?q=AK", _search_cache, "market:ak", []),   # CAL-11: namespace
     ("/market/price?name=AK", _item_price_cache, "ak", {"name": "AK"}),
     ("/market/index?tf=24h", _market_index_cache, "24h", {"points": []}),
     ("/market/prices?market=buff&name=AK", _market_prices_cache, "buff:ak:usd", {"price": 1}),

@@ -19,12 +19,13 @@ from stores import (
 from steam.cap_history_repo import fetch_range, insert_snapshot
 from steam.adapters.steam_adapter import adapt_items, adapt_market_index
 from steam.api import steam_client
-from steam.errors.handling import log_degraded, reason_of
+from steam.errors.handling import degraded, log_degraded, reason_of
 from steam.domain.models import Fetched, RankedCard, SkinCard, SteamItem, TopMover
 from steam.domain.names import is_sticker_slab, skin_base
 from steam.domain.validators import MIN_SOLD_MOVERS, MIN_SOLD_TRENDING, ranking_eligible
 from steam.errors import (
-    QuotaExhausted, SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
+    InvalidPayload, QuotaExhausted, SourceTimeout, SourceUnavailable, StorageError, UnexpectedPayload,
+    UpstreamError,
 )
 from steam.mappers.item_mapper import _map_item
 from steam.mappers.market_index_mapper import _map_market_index_point
@@ -171,16 +172,25 @@ async def search_items(client: httpx.AsyncClient, query: str, *, max: int, selec
     return await steam_client.items(client, search=query, max=max, select=select)
 
 
+def search_cache_key(namespace: str, query: str) -> str:
+    """Clave de `_search_cache` (CAL-11). La búsqueda web (`market`) y la del chat
+    (`chat`) piden `select` distintos: el del chat no trae los campos del Liquidity
+    Score, así que compartir clave dejaba a /market/items sirviendo hasta 10 items sin
+    liquidez durante 5 min."""
+    return f"{namespace}:{query.lower()}"
+
+
 async def _ranking_items(client: httpx.AsyncClient, tag: str,
                          fallback_label: str) -> tuple[list[SteamItem] | None, str | None]:
     """Fuente principal de movers y trending: /items por unidades vendidas. Devuelve
-    (items, None), o (None, motivo) si no responde o no es una lista; entonces se cae
-    a topmovers."""
+    (items, None), o (None, motivo) si no responde, no es JSON (CAL-14: antes 500) o no
+    es una lista; entonces se cae a topmovers."""
     try:
         data = await steam_client.items(
             client, sort_by="soldZa", max=_ITEMS_FETCH_MAX, select=_MOVERS_SELECT,
         )
-    except (SourceTimeout, SourceUnavailable) as exc:
+    except (SourceTimeout, SourceUnavailable, InvalidPayload) as exc:
+        logger.warning("[%s] /items failed (%s) — falling back to %s", tag, reason_of(exc), fallback_label)
         return None, reason_of(exc)
     except UpstreamError as exc:
         logger.warning("[%s] /items returned %s — falling back to %s", tag, exc.status, fallback_label)
@@ -192,21 +202,27 @@ async def _ranking_items(client: httpx.AsyncClient, tag: str,
         return None, "unexpected_format"
 
 
-async def _topmovers(client: httpx.AsyncClient, tag: str, now: float, *,
-                     log_sample: bool) -> tuple[tuple[TopMover, ...], tuple[TopMover, ...]] | None:
-    """Respaldo: topmovers de market-index. Se usa lo último cacheado, tenga la edad que
-    tenga (CAL-12); si no hay nada, se pide market-index ahora para llenarlo."""
-    raw_topmovers = _topmovers_raw_cache.stale("latest")
-    if not raw_topmovers:
-        try:
-            mi = adapt_market_index(await steam_client.market_index(client, timeout=15.0))
-            _topmovers_raw_cache.put("latest", (mi.gainers, mi.losers), now)
-            raw_topmovers = (mi.gainers, mi.losers)
-        except Exception as exc:
-            # Un status distinto de 200 se salta en silencio, como antes del cliente.
-            if not (isinstance(exc, UpstreamError) and exc.status is not None):
-                logger.warning("[%s] could not fetch market-index for topmovers: %s", tag, exc)
-    return raw_topmovers
+async def _topmovers(client: httpx.AsyncClient, tag: str,
+                     now: float) -> tuple[tuple[tuple[TopMover, ...], tuple[TopMover, ...]] | None, str | None]:
+    """Respaldo: topmovers de market-index. Devuelve (gainers+losers, None), o (None,
+    motivo) si no hay nada que servir.
+
+    Solo vale lo cacheado dentro de `TOPMOVERS_RAW_TTL` (CAL-12: antes se usaba lo último
+    que hubiera, tuviera la edad que tuviera); si caducó o no hay, se pide market-index
+    ahora. Si eso falla y lo que había estaba caducado, el motivo es `topmovers_stale`.
+    """
+    cached = _topmovers_raw_cache.fresh("latest", now)
+    if cached:
+        return cached, None
+    try:
+        mi = adapt_market_index(await steam_client.market_index(client, timeout=15.0))
+    except (UpstreamError, InvalidPayload, UnexpectedPayload) as exc:
+        logger.warning("[%s] could not fetch market-index for topmovers: %s", tag, reason_of(exc))
+        log_degraded("topmovers", reason_of(exc), "empty")
+        expired = _topmovers_raw_cache.stale("latest")
+        return None, "topmovers_stale" if expired else None
+    _topmovers_raw_cache.put("latest", (mi.gainers, mi.losers), now)
+    return (mi.gainers, mi.losers), None
 
 
 async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
@@ -263,7 +279,8 @@ async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
         return Fetched(result)
 
     # ── Fallback: market-index topmovers (free plan) ─────────────────────────
-    raw_topmovers = await _topmovers(client, "market-movers", now, log_sample=True)
+    raw_topmovers, topmovers_reason = await _topmovers(client, "market-movers", now)
+    reason = topmovers_reason or reason
     if raw_topmovers:
         gainers, losers = raw_topmovers
         fallback = _build_movers_from_topmovers(gainers, losers)
@@ -274,12 +291,10 @@ async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
             await pricing.enrich_market_prices(client, fallback["hot"])
             await pricing.enrich_market_prices(client, fallback["cold"])
             logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(fallback["hot"]), len(fallback["cold"]))
-            log_degraded("movers", reason or "unknown", "fallback")
-            return Fetched(fallback, "partial", reason)
+            return degraded("movers", reason or "unknown", "fallback", fallback)
 
     logger.warning("[market-movers] no data available from any source")
-    log_degraded("movers", reason or "unknown", "error")
-    return Fetched({"hot": [], "cold": []}, "error", reason)
+    return degraded("movers", reason or "unknown", "error", {"hot": [], "cold": []})
 
 
 async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]:
@@ -320,7 +335,8 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
         return Fetched(result)
 
     # ── Fallback: topmovers from cache (free plan) ────────────────────────────
-    raw_topmovers = await _topmovers(client, "market-trending", now, log_sample=False)
+    raw_topmovers, topmovers_reason = await _topmovers(client, "market-trending", now)
+    reason = topmovers_reason or reason
     if raw_topmovers:
         gainers, losers = raw_topmovers
         combined = (*gainers, *losers)
@@ -331,12 +347,10 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_FALLBACK_LIMIT]
             result = await pricing.enrich_market_prices(client, result)
             logger.info("[market-trending] serving from topmovers (%d items)", len(result))
-            log_degraded("trending", reason or "unknown", "fallback")
-            return Fetched(result, "partial", reason)
+            return degraded("trending", reason or "unknown", "fallback", result)
 
     logger.warning("[market-trending] no data available from any source")
-    log_degraded("trending", reason or "unknown", "error")
-    return Fetched([], "error", reason)
+    return degraded("trending", reason or "unknown", "error", [])
 
 
 # ── Lecturas de /market ───────────────────────────────────────────────────────
@@ -360,14 +374,13 @@ def _stale_or_raise(flow: str, stale: _T | None, exc: QuotaExhausted) -> Fetched
     """SEC-16 — 402 de steamwebapi: mejor un dato caducado que un error, porque la
     cuota no vuelve hasta el día 10. Sin caché, el 402 sube y la ruta da 503."""
     if stale is not None:
-        log_degraded(flow, "quota", "stale")
-        return Fetched(stale, "stale", "quota")
+        return degraded(flow, "quota", "stale", stale)
     raise exc
 
 
 async def search_market(client: httpx.AsyncClient, query: str) -> Fetched[list[SkinCard]]:
     """GET /market/items: búsqueda por nombre con el shape completo y caché de 5 min."""
-    cache_key = query.lower()
+    cache_key = search_cache_key("market", query)
     now = time.monotonic()
     hit = _search_cache.fresh(cache_key, now)
     if hit is not None:
@@ -635,8 +648,9 @@ async def capture_trending(client: httpx.AsyncClient) -> dict:
         if nombres:
             await register_tracked(nombres, "trending")
             tracked = len(nombres)
-    except Exception as exc:  # noqa: BLE001
+    except StorageError as exc:
         logger.warning("[trending-tick] register_tracked falló: %s", exc)
+        log_degraded("tracked_register", "storage", "empty")
 
     logger.info("[trending-tick] upserted=%d purged=%d tracked=%d",
                 len(rows), purged, tracked)

@@ -17,11 +17,9 @@ from stores import (
 )
 from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
-from ..errors.handling import log_degraded, reason_of
-from ..errors import (
-    UPSTREAM_QUOTA_DETAIL, UPSTREAM_RATE_LIMIT_DETAIL, HistoryBusy, QuotaExhausted, RateLimited,
-    SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
-)
+from ..domain.models import Fetched
+from ..errors.handling import SOURCE_ERRORS, http_error_for, log_degraded
+from ..errors import UPSTREAM_QUOTA_DETAIL, QuotaExhausted, RateLimited, StorageError, UpstreamError
 from ..services import inventory as inventory_service
 from ..services import pricing
 from ..services import profile as profile_service
@@ -40,40 +38,29 @@ router = APIRouter()
 async def get_me(request: Request, user: dict = Depends(require_jwt)):
     steam_id: str = user["sub"]
     try:
-        return await profile_service.get_profile(request.app.state.http_client, steam_id)
-    except SourceTimeout:
-        raise HTTPException(status_code=504, detail="Steam profile request timed out") from None
-    except SourceUnavailable as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
-    except UpstreamError as exc:
-        logger.error("[me] steamwebapi returned %s | body: %s", exc.status, exc.body_excerpt[:300])
-        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
+        return (await profile_service.get_profile(request.app.state.http_client, steam_id)).data
+    except SOURCE_ERRORS as exc:
+        raise http_error_for(exc, timeout_status=504) from exc
 
 
-async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
+async def _fetch_fresh_inventory(request: Request, steam_id: str) -> Fetched[list]:
     """El inventario recién leído, con los errores de steamwebapi traducidos a HTTP.
-    429 y 402 suben tal cual: los degrada quien llama (PERF-14)."""
+    429 y 402 suben tal cual: los degrada quien llama (PERF-14). Un 410/411 llega como
+    `Fetched` con `status="error"` y lo resuelve `_no_inventory` (CAL-13)."""
     try:
         return await inventory_service.fetch_fresh_inventory(
             request.app.state.http_client, steam_id, track=True,
         )
-    except SourceTimeout:
-        raise HTTPException(status_code=504, detail="Steam inventory request timed out") from None
-    except SourceUnavailable as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
     except (QuotaExhausted, RateLimited):
         raise
     except UpstreamError as exc:
         if exc.status == 403:
             raise HTTPException(status_code=403, detail="Inventory is private") from exc
-        if exc.status in (410, 411):
-            # CAL-13: se sirve y se guarda como inventario vacío (CLEAN-12: con su línea).
-            log_degraded("inventory", reason_of(exc), "empty")
-            return []
-        logger.error("steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
-        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
-    except UnexpectedPayload as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if exc.status is not None:
+            logger.error("steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
+        raise http_error_for(exc, timeout_status=504) from exc
+    except SOURCE_ERRORS as exc:
+        raise http_error_for(exc, timeout_status=504) from exc
 
 
 # ── PERF-14: degradación elegante ante 429 ────────────────────────────────────
@@ -99,8 +86,9 @@ async def _store(steam_id: str, items: list, now: float) -> None:
     _inventory_cache.put(steam_id, items, now)
     try:
         await inventory_snapshot_repo.save(steam_id, items)
-    except Exception as exc:  # noqa: BLE001 — best-effort: nunca romper /inventory
+    except StorageError as exc:   # best-effort: nunca romper /inventory
         logger.warning("[inventory] no se pudo guardar el snapshot: %s", exc)
+        log_degraded("inventory_snapshot", "storage", "empty")
 
 
 async def _snapshot_response(steam_id: str) -> JSONResponse | None:
@@ -108,8 +96,9 @@ async def _snapshot_response(steam_id: str) -> JSONResponse | None:
     siendo la lista de siempre: el aviso de dato viejo va en cabeceras."""
     try:
         snap = await inventory_snapshot_repo.load(steam_id)
-    except Exception as exc:  # noqa: BLE001
+    except StorageError as exc:
         logger.warning("[inventory] no se pudo leer el snapshot: %s", exc)
+        log_degraded("inventory_snapshot", "storage", "empty")
         return None
     if snap is None:
         return None
@@ -118,6 +107,15 @@ async def _snapshot_response(steam_id: str) -> JSONResponse | None:
         "X-Inventory-Stale": "1",
         "X-Inventory-Captured-At": captured_at,
     })
+
+
+async def _no_inventory(steam_id: str, reason: str) -> JSONResponse | list:
+    """410/411 de steamwebapi (CAL-13): el snapshot con `X-Inventory-Stale` si lo hay,
+    si no `[]`. Ni la caché ni el snapshot se pisan con el vacío: un inventario que
+    hoy no se puede leer no borra el último que sí se leyó."""
+    snap = await _snapshot_response(steam_id)
+    log_degraded("inventory", reason, "stale" if snap is not None else "empty")
+    return snap if snap is not None else []
 
 
 def _backoff(attempt: int, retry_after: float | None) -> float:
@@ -134,7 +132,7 @@ async def _retry_inventory(request: Request, steam_id: str, retry_after: float |
         for attempt in range(INVENTORY_429_MAX_RETRIES):
             await asyncio.sleep(_backoff(attempt, retry_after))
             try:
-                items = await _fetch_fresh_inventory(request, steam_id)
+                fetched = await _fetch_fresh_inventory(request, steam_id)
             except RateLimited as exc:
                 retry_after = exc.retry_after
                 _log_429(steam_id, f"retry-{attempt + 1}", retry_after, "none")
@@ -142,10 +140,13 @@ async def _retry_inventory(request: Request, steam_id: str, retry_after: float |
             except QuotaExhausted:
                 logger.warning("[inventory-402] user=%s cuota agotada en el reintento; se aborta", steam_id)
                 return
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[inventory] reintento de %s abortado: %r", steam_id, exc)
+            except HTTPException as exc:   # lo que _fetch_fresh_inventory ya tradujo (403, 502...)
+                logger.warning("[inventory] reintento de %s abortado: %s", steam_id, exc.detail)
                 return
-            await _store(steam_id, items, time.monotonic())
+            if fetched.status == "error":
+                logger.warning("[inventory] reintento de %s: %s, no se guarda nada", steam_id, fetched.reason)
+                return
+            await _store(steam_id, fetched.data, time.monotonic())
             logger.info("[inventory-429] user=%s recuperado en el reintento %d", steam_id, attempt + 1)
             return
         logger.warning("[inventory-429] user=%s sin recuperar tras %d reintentos",
@@ -191,11 +192,13 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
         return snap
 
     try:
-        items = await _fetch_fresh_inventory(request, steam_id)
+        fetched = await _fetch_fresh_inventory(request, steam_id)
     except (RateLimited, QuotaExhausted) as exc:
         return await _degraded_inventory(request, steam_id, exc, "get")
-    await _store(steam_id, items, now)
-    return items
+    if fetched.status == "error":
+        return await _no_inventory(steam_id, fetched.reason or "unknown")
+    await _store(steam_id, fetched.data, now)
+    return fetched.data
 
 
 @router.post("/inventory/refresh", summary="Fuerza un refresh del inventario ignorando el caché de 23h")
@@ -212,12 +215,14 @@ async def refresh_inventory(request: Request, user: dict = Depends(require_jwt))
         return snap
 
     try:
-        items = await _fetch_fresh_inventory(request, steam_id)
+        fetched = await _fetch_fresh_inventory(request, steam_id)
     except (RateLimited, QuotaExhausted) as exc:
         return await _degraded_inventory(request, steam_id, exc, "refresh")
-    await _store(steam_id, items, now)
+    if fetched.status == "error":
+        return await _no_inventory(steam_id, fetched.reason or "unknown")
+    await _store(steam_id, fetched.data, now)
     _inventory_refresh_cooldown[steam_id] = now
-    return items
+    return fetched.data
 
 
 @router.get("/item/history", dependencies=[Depends(item_history_rate_limit)], summary="Historial de precios de un item CS2")
@@ -234,14 +239,7 @@ async def get_item_history(
             request.app.state.http_client, name, interval, market, days,
             limiter_timeout=ITEM_HISTORY_LIMITER_TIMEOUT,
         )
-    except SourceTimeout:
-        raise HTTPException(status_code=504, detail="Steam history request timed out") from None
-    except SourceUnavailable as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
-    except (HistoryBusy, RateLimited):
-        # Ventana de steamwebapi llena y sin caché caducada que servir.
-        raise HTTPException(status_code=503, detail=UPSTREAM_RATE_LIMIT_DETAIL,
-                            headers={"Retry-After": "60"}) from None
-    except UpstreamError as exc:
-        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
+    except SOURCE_ERRORS as exc:
+        # Ventana llena / 429 sin caché caducada → 503 + Retry-After; 402 → 503 upstream_quota.
+        raise http_error_for(exc, timeout_status=504) from exc
     return fetched.data

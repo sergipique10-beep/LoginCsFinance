@@ -8,9 +8,8 @@ from stores import _fx_cache
 from steam.adapters.fx_adapter import adapt_rates
 from steam.api import fx_client
 from steam.domain.validators import plausible_fx_rate
-from steam.errors.handling import reason_of
+from steam.errors.handling import DEGRADABLE, reason_of
 from steam.domain.models import Fetched
-from steam.errors import SourceTimeout, SourceUnavailable, UpstreamError
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -35,22 +34,15 @@ async def fetch_fx_rate(client: httpx.AsyncClient) -> Fetched[float | None]:
     if hit is not None:
         return Fetched(hit)
     try:
-        try:
-            data = await fx_client.latest_usd_eur(client)
-        except (SourceTimeout, SourceUnavailable):
-            raise   # red: lo registra el except genérico de abajo, como antes
-        except UpstreamError as exc:
-            logger.warning("[fx] frankfurter returned %s", exc.status)
-            return _fx_stale(reason_of(exc))
-        rate = adapt_rates(data).eur   # forma rara → UnexpectedPayload, lo recoge el except de abajo
-        # Un tipo USD/EUR fuera de este rango es un error de la fuente, no un
-        # movimiento de mercado: mejor servir el ultimo bueno que corromper precios.
-        if not plausible_fx_rate(rate):
-            logger.warning("[fx] tasa implausible: %r", rate)
-            return _fx_stale("implausible_rate")
-        _fx_cache.put("usdeur", float(rate), now)
-        logger.info("[fx] USD/EUR = %s", rate)
-        return Fetched(float(rate))
-    except Exception as exc:
-        logger.warning("[fx] failed: %s", exc)
+        rate = adapt_rates(await fx_client.latest_usd_eur(client)).eur   # forma rara → UnexpectedPayload
+    except DEGRADABLE as exc:
+        logger.warning("[fx] frankfurter failed: %s", reason_of(exc))
         return _fx_stale(reason_of(exc))
+    # Un tipo USD/EUR fuera de este rango es un error de la fuente, no un
+    # movimiento de mercado: mejor servir el ultimo bueno que corromper precios.
+    if not plausible_fx_rate(rate):
+        logger.warning("[fx] tasa implausible: %r", rate)
+        return _fx_stale("implausible_rate")
+    _fx_cache.put("usdeur", float(rate), now)
+    logger.info("[fx] USD/EUR = %s", rate)
+    return Fetched(float(rate))

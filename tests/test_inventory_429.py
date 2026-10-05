@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from steam.errors import QuotaExhausted
+from steam.domain.models import Fetched
+from steam.errors import QuotaExhausted, StorageError
 from steam.routes import items as items_routes
 from steam.errors import RateLimited
 from stores import _inventory_cache
@@ -89,7 +90,7 @@ def test_429_without_snapshot_keeps_the_error_but_still_schedules_retry(client, 
 
 
 def test_fresh_read_stores_snapshot(client, monkeypatch):
-    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", AsyncMock(return_value=FRESH))
+    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", AsyncMock(return_value=Fetched(FRESH)))
 
     resp = client.get("/inventory")
 
@@ -99,9 +100,9 @@ def test_fresh_read_stores_snapshot(client, monkeypatch):
 
 
 def test_snapshot_failure_never_breaks_a_good_read(client, monkeypatch):
-    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", AsyncMock(return_value=FRESH))
+    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", AsyncMock(return_value=Fetched(FRESH)))
     monkeypatch.setattr(items_routes.inventory_snapshot_repo, "save",
-                        AsyncMock(side_effect=RuntimeError("supabase caído")))
+                        AsyncMock(side_effect=StorageError("supabase caído")))
 
     assert client.get("/inventory").json() == FRESH
 
@@ -109,7 +110,7 @@ def test_snapshot_failure_never_breaks_a_good_read(client, monkeypatch):
 def test_no_new_steam_call_while_a_retry_is_in_flight(client, monkeypatch):
     """Cada GET extra mientras hay límite sería otro 429: se sirve el snapshot sin llamar."""
     SNAPSHOT_DB[STEAM_ID] = (SNAP_ITEMS, SNAP_AT)
-    fetch = AsyncMock(return_value=FRESH)
+    fetch = AsyncMock(return_value=Fetched(FRESH))
     monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", fetch)
     items_routes._retry_tasks[STEAM_ID] = MagicMock()
 
@@ -198,7 +199,7 @@ def _run_retry(monkeypatch, side_effects, retries=4):
 
 
 def test_retry_recovers_after_a_second_429_and_refreshes_cache_and_snapshot(monkeypatch):
-    fetch, sleeps = _run_retry(monkeypatch, [RateLimited(1.0), FRESH])
+    fetch, sleeps = _run_retry(monkeypatch, [RateLimited(1.0), Fetched(FRESH)])
 
     assert fetch.await_count == 2
     assert sleeps[0] >= 2.0                                 # Retry-After inicial respetado

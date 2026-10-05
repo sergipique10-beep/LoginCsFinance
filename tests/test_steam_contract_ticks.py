@@ -161,7 +161,6 @@ def test_movers_tick_fallback_reutiliza_topmovers_de_market_index(steam_api, rep
     assert client.post("/internal/movers-tick", headers=TOKEN).json() == {"ok": True, "count": 4}
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-12")
 def test_movers_tick_no_usa_un_topmovers_de_hace_dias(steam_api, repos, client, monkeypatch):
     steam_api.on("market-index/cs2", json={**TOPMOVERS, "history": []})
     real = time.monotonic
@@ -173,7 +172,6 @@ def test_movers_tick_no_usa_un_topmovers_de_hace_dias(steam_api, repos, client, 
     assert client.post("/internal/movers-tick", headers=TOKEN).json()["ok"] is False
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 def test_movers_tick_items_con_json_invalido_no_es_500(steam_api, repos, client):
     steam_api.on("api/items", content=b"<html>")
     steam_api.on("market-index/cs2", json=TOPMOVERS)
@@ -219,7 +217,6 @@ def test_trending_tick_sin_fuentes_no_inserta_pero_purga(steam_api, repos, clien
     repos["register_tracked"].assert_not_awaited()
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 def test_trending_tick_items_con_json_invalido_no_es_500(steam_api, repos, client):
     steam_api.on("api/items", content=b"<html>")
     steam_api.on("market-index/cs2", json=TOPMOVERS)

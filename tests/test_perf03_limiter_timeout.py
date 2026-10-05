@@ -48,7 +48,7 @@ async def test_cron_path_keeps_waiting_without_timeout():
 
     pts = await pricing.fetch_history_for_item(client, "Y")
 
-    assert pts == []
+    assert pts.data == []
     assert time.monotonic() - t0 >= 0.2                       # esperó, no falló
     client.get.assert_awaited_once()
 

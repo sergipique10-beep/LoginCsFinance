@@ -54,7 +54,6 @@ async def test_consultar_precio_skin_sin_resultado(steam_api, api, body, error):
     assert await _consultar_precio_skin(market_hash_name="Otra", client=api) == {"error": error}
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 async def test_consultar_precio_skin_402_explica_la_cuota(steam_api, api):
     steam_api.on("api/items", status=402)
     assert "error" in await _consultar_precio_skin(market_hash_name=NAME, client=api)
@@ -78,7 +77,6 @@ async def test_buscar_skin_vacio(steam_api, api, query, body):
     assert await _buscar_skin(query=query, client=api) == []
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-11")
 async def test_buscar_skin_no_contamina_la_busqueda_de_market(steam_api, api, client):
     steam_api.on("api/items", json=[RAW])
     await _buscar_skin(query="redline", client=api)
@@ -133,7 +131,6 @@ async def test_ver_inventario(steam_api, api):
     assert len(steam_api.hits("api/inventory")) == 1   # la segunda sale de _inventory_cache
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 @pytest.mark.parametrize("route", [{"status": 403}, {"status": 429}, {"exc": RuntimeError("red")}])
 async def test_ver_inventario_explica_el_error(steam_api, api, route):
     steam_api.on("api/inventory", **route)

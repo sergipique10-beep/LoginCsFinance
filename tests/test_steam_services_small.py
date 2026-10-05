@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from steam.errors import UnexpectedPayload, UpstreamError
+from steam.domain.models import Fetched
+from steam.errors import UnexpectedPayload
 from steam.services import inventory as inventory_service
 from steam.services import news as news_service
 from steam.services import profile as profile_service
@@ -34,8 +35,8 @@ def register(monkeypatch):
 @pytest.mark.parametrize("track, registered", [(True, True), (False, False)])
 async def test_inventario_track_decide_si_se_registra(fake, http, register, track, registered):
     fake.on("api/inventory", json=[RAW])
-    items = await inventory_service.fetch_fresh_inventory(http, "1", track=track)
-    assert [i["name"] for i in items] == [NAME]
+    fetched = await inventory_service.fetch_fresh_inventory(http, "1", track=track)
+    assert fetched.status == "ok" and [i["name"] for i in fetched.data] == [NAME]
     assert register.await_count == int(registered)
     if registered:
         register.assert_awaited_once_with([NAME], "inventory")
@@ -47,22 +48,25 @@ async def test_inventario_que_no_es_lista(fake, http, register):
         await inventory_service.fetch_fresh_inventory(http, "1", track=True)
 
 
-async def test_inventario_410_lo_decide_quien_llama(fake, http, register):
-    # La ruta lo convierte en [] y el chat en un fallo (CAL-13): el service no se lo traga.
-    fake.on("api/inventory", status=410)
-    with pytest.raises(UpstreamError) as info:
-        await inventory_service.fetch_fresh_inventory(http, "1", track=True)
-    assert info.value.status == 410
+@pytest.mark.parametrize("status", [410, 411])
+async def test_inventario_410_es_error_sin_datos(fake, http, register, status):
+    # CAL-13: no hay inventario que leer. La ruta decide (snapshot o []) y nadie guarda el vacío.
+    fake.on("api/inventory", status=status)
+    fetched = await inventory_service.fetch_fresh_inventory(http, "1", track=True)
+    assert fetched == Fetched([], "error", f"http_{status}")
+    register.assert_not_awaited()
 
 
 # ── perfil ────────────────────────────────────────────────────────────────────
 
 async def test_perfil_lista_vacia_y_cache(fake, http):
     fake.on("api/profile", json=[])
-    profile = await profile_service.get_profile(http, "765")
+    fetched = await profile_service.get_profile(http, "765")
+    assert (fetched.status, fetched.reason) == ("error", "empty_body")
+    profile = fetched.data
     assert profile["steam64_id"] == "765" and profile["userName"] == "" and profile["isOnline"] is False
     # CAL-14 (CLEAN-14): un 200 sin perfil no se cachea, así que la segunda llamada vuelve a pedirlo.
-    assert await profile_service.get_profile(http, "765") == profile
+    assert await profile_service.get_profile(http, "765") == fetched
     assert len(fake.hits("api/profile")) == 2
 
 
@@ -77,12 +81,13 @@ def _news(*titles):
 async def test_noticias_piden_de_mas_y_filtran_alfabetos(fake, http):
     fake.on("GetNewsForApp/v2/", json=_news("Обновление", "Release Notes", "更新", "Patch"))
     out = await news_service.get_cs2_news(http, 2)
-    assert [n["title"] for n in out] == ["Release Notes", "Patch"]
+    assert out.status == "ok" and [n["title"] for n in out.data] == ["Release Notes", "Patch"]
     assert fake.hits("GetNewsForApp/v2/")[0].url.params["count"] == "6"   # 2 × NEWS_OVERFETCH
 
 
 async def test_noticias_tope_y_sin_legibles_se_quedan_las_originales(fake, http):
     fake.on("GetNewsForApp/v2/", json=_news("Обновление"))
     out = await news_service.get_cs2_news(http, 50)
-    assert [n["title"] for n in out] == ["Обновление"]
+    assert [n["title"] for n in out.data] == ["Обновление"]
+    assert (out.status, out.reason) == ("partial", "no_readable_news")
     assert fake.hits("GetNewsForApp/v2/")[0].url.params["count"] == str(news_service.NEWS_MAX_FETCH)

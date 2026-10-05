@@ -71,8 +71,7 @@ async def _ver_inventario(
     ``steam_id`` se inyecta desde el JWT en el router — no viene de Gemini.
     """
     from stores import _inventory_cache
-    from steam.errors.handling import log_degraded, reason_of
-    from steam.errors import InvalidPayload, UnexpectedPayload, UpstreamError
+    from steam.errors.handling import user_message
     from steam.services import inventory as inventory_service
 
     import time
@@ -85,19 +84,13 @@ async def _ver_inventario(
         # La misma descarga que GET /inventory, sin registrar en tracked_skins y sin
         # snapshot: así era la del chat antes de unificarlas (CLEAN-11).
         try:
-            items = await inventory_service.fetch_fresh_inventory(client, steam_id, track=False)
-        except InvalidPayload:
-            raise   # un 200 ilegible no se tragaba antes del cliente
-        except UnexpectedPayload as exc:
-            log_degraded("chat_inventory", reason_of(exc), "empty")
-            return []
-        except Exception as exc:
-            if isinstance(exc, UpstreamError) and exc.status is not None:
-                logger.warning("[tools] ver_inventario steamwebapi → %s", exc.status)
-            else:
-                logger.warning("[tools] ver_inventario falló: %s", exc)
-            log_degraded("chat_inventory", reason_of(exc), "empty")
-            return []
+            fetched = await inventory_service.fetch_fresh_inventory(client, steam_id, track=False)
+        except Exception as exc:  # noqa: BLE001 — borde del chat: cualquier fallo vuelve al modelo con su motivo (CAL-14), nunca como `[]`
+            logger.warning("[tools] ver_inventario falló: %r", exc)
+            return {"error": user_message(exc)}
+        if fetched.status == "error":   # 410/411 (CAL-13): no hay inventario que leer, y no se cachea
+            return {"error": "Steam no tiene inventario de CS2 para este usuario"}
+        items = fetched.data
         _inventory_cache.put(steam_id, items, now)
 
     return _resumen_inventario(items, buscar)

@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from steam.errors import HistoryBusy
+from steam.errors.handling import SOURCE_ERRORS, user_message
 
 # PERF-03: el _history_limiter (18 req/60 s) hace esperar a los crons, que es lo
 # correcto para batch; en el chat esa espera va dentro de la respuesta al usuario
@@ -118,12 +119,16 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
         return hit
 
     client_http: httpx.AsyncClient = client
-    data = await search_items(
-        client_http,
-        query,
-        max=30,
-        select="id,marketname,markethashname,slug,image,pricelatestsell,pricereal,pricereal24h,pricereal7d,pricereal30d,color,bordercolor,rarity,quality,isstattrak,issouvenir,isstar,itemtype,itemname,tag5,sold24h,sold7d,sold30d,soldtotal,pricesafe,pricemin,pricemax,offervolume,buyordervolume,buyorderprice,prices,hourstosold,marketable,tradable,markettradablerestriction,steamurl,minfloat,maxfloat,paintindex",
-    )
+    try:
+        data = await search_items(
+            client_http,
+            query,
+            max=30,
+            select="id,marketname,markethashname,slug,image,pricelatestsell,pricereal,pricereal24h,pricereal7d,pricereal30d,color,bordercolor,rarity,quality,isstattrak,issouvenir,isstar,itemtype,itemname,tag5,sold24h,sold7d,sold30d,soldtotal,pricesafe,pricemin,pricemax,offervolume,buyordervolume,buyorderprice,prices,hourstosold,marketable,tradable,markettradablerestriction,steamurl,minfloat,maxfloat,paintindex",
+        )
+    except SOURCE_ERRORS as exc:
+        # CAL-14: un 402/429/red vuelve al modelo con su motivo, no como «error al ejecutar».
+        return {"error": user_message(exc)}
     if not isinstance(data, list):
         return {"error": "formato inesperado de Steam API"}
 
@@ -152,14 +157,14 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
 
 # ── buscar_skin ───────────────────────────────────────────────────────────────
 
-async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
+async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict] | dict:
     """Busca skins por nombre y devuelve resultados relevantes."""
     from stores import _search_cache
     from steam.domain.names import is_sticker_slab
     from steam.adapters.steam_adapter import adapt_items
     from steam.mappers.item_mapper import _map_item
     from steam.services import catalog, pricing
-    from steam.services.market import search_items
+    from steam.services.market import search_cache_key, search_items
 
     import time
 
@@ -167,18 +172,21 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict]:
     if not q:
         return []
 
-    cache_key = q.lower()
+    cache_key = search_cache_key("chat", q)   # CAL-11: sin pisar la búsqueda de /market/items
     now = time.monotonic()
     hit = _search_cache.fresh(cache_key, now)
     if hit is not None:
         return _para_llm(hit)
 
-    data = await search_items(
-        client,
-        q,
-        max=10,
-        select="id,marketname,markethashname,slug,image,pricelatestsell,pricereal,pricereal24h,pricereal7d,pricereal30d,color,bordercolor,rarity,quality,isstattrak,issouvenir,isstar,itemtype,itemname,tag5,sold24h",
-    )
+    try:
+        data = await search_items(
+            client,
+            q,
+            max=10,
+            select="id,marketname,markethashname,slug,image,pricelatestsell,pricereal,pricereal24h,pricereal7d,pricereal30d,color,bordercolor,rarity,quality,isstattrak,issouvenir,isstar,itemtype,itemname,tag5,sold24h",
+        )
+    except SOURCE_ERRORS as exc:
+        return {"error": user_message(exc)}   # CAL-14: igual que consultar_precio_skin
     if not isinstance(data, list):
         return []
 
@@ -233,7 +241,8 @@ async def _historial_precio(
     from steam.services import pricing
 
     try:
-        return await pricing.fetch_history_for_item(client, market_hash_name, limiter_timeout=CHAT_LIMITER_TIMEOUT)
+        fetched = await pricing.fetch_history_for_item(client, market_hash_name, limiter_timeout=CHAT_LIMITER_TIMEOUT)
+        return [dict(p) for p in fetched.data]
     except HistoryBusy:
         # Vuelve al modelo como functionResponse: lo explica con sus palabras.
         return {"error": HISTORY_BUSY_MSG}

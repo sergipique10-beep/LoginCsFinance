@@ -39,7 +39,7 @@ async def _historico(client: httpx.AsyncClient, name: str) -> list[dict]:
         logger.warning("[predict] fetch_prices falló para %s: %s", name, exc)
 
     from steam.services import pricing
-    return await pricing.fetch_history_for_item(client, name)
+    return [dict(p) for p in (await pricing.fetch_history_for_item(client, name)).data]
 
 
 async def predecir_tendencia(

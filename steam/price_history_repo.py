@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from supabase import create_client, Client
 
 from settings import SUPABASE_URL, SUPABASE_SERVICE_KEY
+from steam.cap_history_repo import storage_call
 
 _TRACKED = "tracked_skins"
 _PRICES = "precios_historicos"
@@ -65,7 +66,8 @@ async def register_tracked(names: list[str], source: str) -> None:
                 .in_("market_hash_name", unicos[i:i + _IN_CHUNK])
                 .execute())
 
-    await asyncio.to_thread(_do)
+    # Best-effort en /inventory y trending-tick: un fallo sale como StorageError.
+    await storage_call(_do)
 
 
 async def fetch_tracked(limit: int, before: str | None = None) -> list[str]:

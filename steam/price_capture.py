@@ -19,6 +19,7 @@ from steam.api import steam_client
 from steam.api.steam_client import _history_limiter
 from steam.domain.validators import canonical_price
 from steam.errors import QuotaExhausted
+from steam.errors.handling import DEGRADABLE, log_degraded, reason_of
 from steam import price_history_repo as repo
 
 logger = logging.getLogger("uvicorn.error")
@@ -97,9 +98,12 @@ async def capture(client: httpx.AsyncClient) -> dict:
             quota_exhausted = True
             logger.error("[price] cuota de steamwebapi agotada, lote abortado: %s", exc)
             break
-        except Exception as exc:  # noqa: BLE001 — best-effort: un fallo no aborta el lote
+        except DEGRADABLE as exc:
+            # Best-effort: un fallo de la fuente en una skin no aborta el lote. Lo que no
+            # sea un fallo de la fuente es un bug y sube.
             errors += 1
             logger.warning("[price] lookup falló para %r: %s", name, exc)
+            log_degraded("price_capture", reason_of(exc), "empty")
             continue
 
         price = canonical_price(item)

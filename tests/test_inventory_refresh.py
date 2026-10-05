@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock
 
+from steam.domain.models import Fetched
 from stores import INVENTORY_REFRESH_COOLDOWN, _inventory_cache
 from steam.routes import items as items_routes
 from tests.conftest import STEAM_ID
@@ -8,7 +9,7 @@ FRESH_ITEMS = [{"name": "AK-47 | Redline"}]
 
 
 def _patch_fetch(monkeypatch, items=FRESH_ITEMS):
-    mock = AsyncMock(return_value=items)
+    mock = AsyncMock(return_value=Fetched(items))
     monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", mock)
     return mock
 

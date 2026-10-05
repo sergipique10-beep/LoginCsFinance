@@ -6,10 +6,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from settings import CAP_TICK_TOKEN, PRICE_TICK_TOKEN
 from auth.service import market_rate_limit, require_jwt, token_matches
 from ..domain.catalog import VALID_MARKETS
-from ..errors import (
-    UPSTREAM_QUOTA_DETAIL, QuotaExhausted, SourceTimeout, SourceUnavailable, UnexpectedPayload,
-    UpstreamError,
-)
+from ..errors import UpstreamError
+from ..errors.handling import SOURCE_ERRORS, http_error_for
 from ..services import fx as fx_service
 from ..services import market as market_service
 from ..services import providers as providers_service
@@ -21,18 +19,6 @@ router = APIRouter()
 def _require_cap_token(x_cap_token: str | None) -> None:
     if not token_matches(x_cap_token, CAP_TICK_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
-
-
-def _search_error(exc: Exception) -> HTTPException:
-    """Errores de la búsqueda en /items (/market/items y /market/price). Un timeout
-    da 502, no 504, como siempre en estas dos rutas."""
-    if isinstance(exc, QuotaExhausted):   # SEC-16: sin caché que servir
-        return HTTPException(status_code=503, detail=UPSTREAM_QUOTA_DETAIL)
-    if isinstance(exc, (SourceTimeout, SourceUnavailable)):
-        return HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}")
-    if isinstance(exc, UpstreamError):
-        return HTTPException(status_code=502, detail=f"Steam returned {exc.status}")
-    return HTTPException(status_code=502, detail=str(exc))   # UnexpectedPayload
 
 
 @router.get("/market/movers", dependencies=[Depends(market_rate_limit)], summary="Top movers del mercado CS2 (hot & cold 24 h)")
@@ -51,8 +37,9 @@ async def get_market_items(
         raise HTTPException(status_code=400, detail="q is required")
     try:
         return (await market_service.search_market(request.app.state.http_client, query)).data
-    except (UpstreamError, UnexpectedPayload) as exc:
-        raise _search_error(exc) from exc
+    except SOURCE_ERRORS as exc:
+        # Un timeout da 502, no 504, como siempre en las dos rutas de búsqueda.
+        raise http_error_for(exc, timeout_status=502) from exc
 
 
 @router.get("/market/price", dependencies=[Depends(market_rate_limit)], summary="Datos completos (con liquidez) de un item CS2 por nombre")
@@ -73,8 +60,8 @@ async def get_market_price(
         raise HTTPException(status_code=400, detail="name is required")
     try:
         item = (await market_service.get_item_full(request.app.state.http_client, query)).data
-    except (UpstreamError, UnexpectedPayload) as exc:
-        raise _search_error(exc) from exc
+    except SOURCE_ERRORS as exc:
+        raise http_error_for(exc, timeout_status=502) from exc
     if item is None:
         raise HTTPException(status_code=404, detail=f"Item '{query}' not found")
     return item
@@ -93,16 +80,8 @@ async def get_market_index(
 ):
     try:
         return (await market_service.get_market_index(request.app.state.http_client, tf)).data
-    except SourceTimeout:
-        raise HTTPException(status_code=504, detail="Market index request timed out") from None
-    except SourceUnavailable as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
-    except QuotaExhausted:
-        raise HTTPException(status_code=503, detail=UPSTREAM_QUOTA_DETAIL) from None
-    except UpstreamError as exc:
-        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
-    except UnexpectedPayload as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except SOURCE_ERRORS as exc:
+        raise http_error_for(exc, timeout_status=504) from exc
 
 
 @router.post("/internal/cap-tick", summary="Captura un snapshot del índice de precio CS2 (cron interno)")
@@ -113,12 +92,8 @@ async def cap_tick(
     _require_cap_token(x_cap_token)
     try:
         return await market_service.capture_cap_snapshot(request.app.state.http_client)
-    except (SourceTimeout, SourceUnavailable) as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
-    except UpstreamError as exc:
-        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
-    except UnexpectedPayload as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except SOURCE_ERRORS as exc:
+        raise http_error_for(exc, timeout_status=502) from exc
 
 
 @router.get("/market/cap-history", dependencies=[Depends(market_rate_limit)], summary="Historial del índice de precio CS2 (snapshots horarios)")
@@ -199,13 +174,7 @@ async def get_market_prices(
     try:
         return (await market_service.get_market_prices(
             request.app.state.http_client, market, name, currency)).data
-    except SourceTimeout:
-        raise HTTPException(status_code=504, detail="Market prices request timed out") from None
-    except SourceUnavailable as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
-    except QuotaExhausted:
-        raise HTTPException(status_code=503, detail=UPSTREAM_QUOTA_DETAIL) from None
-    except UpstreamError as exc:
-        if exc.status == 404:
+    except SOURCE_ERRORS as exc:
+        if isinstance(exc, UpstreamError) and exc.status == 404:
             raise HTTPException(status_code=404, detail=f"Market '{market}' not found or no prices available") from exc
-        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
+        raise http_error_for(exc, timeout_status=504) from exc

@@ -7,13 +7,14 @@ alerts/, tools/ y las rutas).
 """
 from steam.errors.domain_errors import (
     UNEXPECTED_FORMAT, UPSTREAM_QUOTA_DETAIL, UPSTREAM_RATE_LIMIT_DETAIL, HistoryBusy, InvalidField,
-    InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UnexpectedPayload,
-    UpstreamError,
+    InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, StorageError,
+    UnexpectedPayload, UpstreamError,
 )
-from steam.errors.handling import Served, log_degraded, reason_of
+from steam.errors.handling import Served, degraded, log_degraded, reason_of
 
 __all__ = [
     "UNEXPECTED_FORMAT", "UPSTREAM_QUOTA_DETAIL", "UPSTREAM_RATE_LIMIT_DETAIL", "HistoryBusy",
     "InvalidField", "InvalidPayload", "QuotaExhausted", "RateLimited", "SourceTimeout",
-    "SourceUnavailable", "UnexpectedPayload", "UpstreamError", "Served", "log_degraded", "reason_of",
+    "SourceUnavailable", "StorageError", "UnexpectedPayload", "UpstreamError", "Served", "degraded",
+    "log_degraded", "reason_of",
 ]

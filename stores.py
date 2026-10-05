@@ -50,6 +50,9 @@ MARKET_PROVIDERS_CACHE_TTL = 82800  # 23 h — market list is mostly static
 LEETIFY_CACHE_TTL = 300       # 5 min — misma frescura que tenía el staleTime del front (SEC-09)
 NEWS_CACHE_TTL = 1800        # 30 min — /news/cs2 llama a Steam + scrapea 5 og:image por petición (PERF-06)
 FX_CACHE_TTL = 86400         # 24 h — el BCE publica un tipo al día (UX-08)
+# CAL-12: el respaldo de topmovers caduca con el índice; antes se leía como stale sin
+# mirar la edad y un movers-tick podía servir un ranking de hace días como "fallback".
+TOPMOVERS_RAW_TTL = MARKET_INDEX_CACHE_TTL
 
 INVENTORY_REFRESH_COOLDOWN = 3600  # 1h — manual "force refresh" button, protects shared steamwebapi quota
 
@@ -134,8 +137,8 @@ _inventory_cache = TtlCache(INVENTORY_CACHE_TTL)    # steam_id → items
 _market_index_cache = TtlCache(MARKET_INDEX_CACHE_TTL)  # tf → índice
 # Compartida por /item/history y _fetch_history_for_item, con claves de forma distinta.
 _item_history_cache = TtlCache(ITEM_HISTORY_CACHE_TTL)
-# "latest" → (gainers, losers). Solo se lee como stale: darle TTL es CAL-12.
-_topmovers_raw_cache = TtlCache(MARKET_INDEX_CACHE_TTL)
+# "latest" → (gainers, losers): el respaldo de los rankings cuando /items falla (CAL-12).
+_topmovers_raw_cache = TtlCache(TOPMOVERS_RAW_TTL)
 # Las tres con clave del usuario llevan tope de entradas (Render free: 512 MB).
 _search_cache = TtlCache(SEARCH_CACHE_TTL, max_entries=200)        # query → ~30 items (~60 KB)
 _item_price_cache = TtlCache(ITEM_PRICE_CACHE_TTL, max_entries=500)  # markethashname.lower() → item

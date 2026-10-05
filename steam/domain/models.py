@@ -7,10 +7,11 @@ dicts: anotar no cambia el JSON. Las claves son exactamente las que fijan los te
 contrato de CAL-09 (`tests/test_steam_models.py` lo comprueba).
 """
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, NotRequired, TypeVar, TypedDict
+from typing import Any, Generic, NotRequired, TypeVar, TypedDict
+
+from steam.domain.enums import FetchStatus
 
 T = TypeVar("T")
-FetchStatus = Literal["ok", "partial", "stale", "error"]
 
 
 class RankedCard(TypedDict):

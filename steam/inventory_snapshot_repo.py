@@ -8,7 +8,7 @@ lectura con 200. Reutiliza el cliente Supabase cacheado de steam/cap_history_rep
 import asyncio
 from datetime import datetime, timezone
 
-from steam.cap_history_repo import get_supabase
+from steam.cap_history_repo import get_supabase, storage_call
 
 _TABLE = "inventory_snapshots"
 
@@ -22,7 +22,7 @@ async def save(steam_id: str, items: list) -> None:
         }
         get_supabase().table(_TABLE).upsert(fila, on_conflict="steam_id").execute()
 
-    await asyncio.to_thread(_do)
+    await storage_call(_do)   # falla con StorageError: la ruta lo captura, best-effort
 
 
 async def load(steam_id: str) -> tuple[list, str] | None:
@@ -36,7 +36,7 @@ async def load(steam_id: str) -> tuple[list, str] | None:
         fila = (resp.data or [None])[0]
         return (fila["items"], fila["captured_at"]) if fila else None
 
-    return await asyncio.to_thread(_do)
+    return await storage_call(_do)
 
 
 async def delete_for_user(steam_id: str) -> None:

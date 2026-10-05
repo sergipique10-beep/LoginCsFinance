@@ -7,6 +7,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from predict import service
+from steam.domain.models import Fetched
 from predict.service import _MIN_PUNTOS_PROPIOS
 
 
@@ -18,7 +19,7 @@ def test_usa_serie_propia_si_hay_suficientes_puntos(monkeypatch):
     propios = _pts(_MIN_PUNTOS_PROPIOS, precio=42.0)
     repo = MagicMock(fetch_prices=AsyncMock(return_value=propios))
     monkeypatch.setattr("steam.price_history_repo.fetch_prices", repo.fetch_prices)
-    csfloat = AsyncMock(return_value=_pts(50, precio=99.0))
+    csfloat = AsyncMock(return_value=Fetched(_pts(50, precio=99.0)))
     monkeypatch.setattr("steam.services.pricing.fetch_history_for_item", csfloat)
 
     out = asyncio.run(service._historico(MagicMock(), "AK"))
@@ -30,7 +31,7 @@ def test_usa_serie_propia_si_hay_suficientes_puntos(monkeypatch):
 def test_cae_a_csfloat_si_pocos_puntos_propios(monkeypatch):
     repo = MagicMock(fetch_prices=AsyncMock(return_value=_pts(_MIN_PUNTOS_PROPIOS - 1)))
     monkeypatch.setattr("steam.price_history_repo.fetch_prices", repo.fetch_prices)
-    csfloat = AsyncMock(return_value=_pts(50, precio=99.0))
+    csfloat = AsyncMock(return_value=Fetched(_pts(50, precio=99.0)))
     monkeypatch.setattr("steam.services.pricing.fetch_history_for_item", csfloat)
 
     out = asyncio.run(service._historico(MagicMock(), "AK"))
@@ -42,7 +43,7 @@ def test_cae_a_csfloat_si_pocos_puntos_propios(monkeypatch):
 def test_cae_a_csfloat_si_supabase_falla(monkeypatch):
     repo = MagicMock(fetch_prices=AsyncMock(side_effect=RuntimeError("sin credenciales")))
     monkeypatch.setattr("steam.price_history_repo.fetch_prices", repo.fetch_prices)
-    csfloat = AsyncMock(return_value=_pts(30, precio=77.0))
+    csfloat = AsyncMock(return_value=Fetched(_pts(30, precio=77.0)))
     monkeypatch.setattr("steam.services.pricing.fetch_history_for_item", csfloat)
 
     out = asyncio.run(service._historico(MagicMock(), "AK"))

@@ -164,7 +164,7 @@ class TestTroceado:
         """Si no, una skin rota deja `pendientes` clavado y el bucle no termina."""
         _, mark = self._preparar(
             monkeypatch, pendientes=10, lote=150,
-            lookup=AsyncMock(side_effect=RuntimeError("404")),
+            lookup=AsyncMock(side_effect=UpstreamError(404, "not found")),   # fallo de la fuente, tipado
         )
 
         out = await price_capture.capture(MagicMock())
@@ -192,7 +192,7 @@ async def test_capture_counts_errors(monkeypatch):
     monkeypatch.setattr(price_capture.repo, "upsert_prices", AsyncMock())
     monkeypatch.setattr(price_capture.repo, "mark_captured", AsyncMock())
     monkeypatch.setattr(price_capture, "_lookup_item",
-                        AsyncMock(side_effect=RuntimeError("boom")))
+                        AsyncMock(side_effect=SourceUnavailable("boom")))
 
     out = await price_capture.capture(MagicMock())
 
@@ -204,7 +204,7 @@ async def test_capture_counts_errors(monkeypatch):
 
 import httpx
 
-from steam.errors import QuotaExhausted
+from steam.errors import QuotaExhausted, SourceUnavailable, UpstreamError
 
 
 @pytest.mark.asyncio

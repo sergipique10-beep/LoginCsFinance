@@ -63,14 +63,15 @@ def test_perfil_vacio(steam_api, client, lines):
     assert lines("profile") == [("empty_body", "empty")]
 
 
-@pytest.mark.parametrize("route, reason", [
-    ({"status": 403}, "http_403"), ({"exc": httpx.ConnectError("x")}, "unavailable"),
-    ({"json": {"no": "lista"}}, "unexpected_format"),
+@pytest.mark.parametrize("route", [
+    {"status": 403}, {"exc": httpx.ConnectError("x")}, {"json": {"no": "lista"}},
 ])
-async def test_inventario_del_chat(steam_api, http, lines, route, reason):
+async def test_inventario_del_chat_no_deja_linea(steam_api, http, lines, route):
+    # CAL-14 (CLEAN-15): el fallo vuelve al modelo como `{"error": ...}`, así que el
+    # cliente lo ve y no hay degradación invisible que registrar.
     steam_api.on("api/inventory", **route)
-    assert await _ver_inventario(steam_id="1", client=http) == []
-    assert lines("chat_inventory") == [(reason, "empty")]
+    assert "error" in await _ver_inventario(steam_id="1", client=http)
+    assert lines("chat_inventory") == []
 
 
 # ── Histórico ─────────────────────────────────────────────────────────────────
@@ -79,16 +80,21 @@ async def test_inventario_del_chat(steam_api, http, lines, route, reason):
                                            ({"exc": httpx.ReadTimeout("t")}, "timeout")])
 async def test_historico_del_enriquecimiento(steam_api, http, lines, route, reason):
     steam_api.on("csfloat/history", **route)
-    assert await pricing.fetch_history_for_item(http, NAME) == []
+    fetched = await pricing.fetch_history_for_item(http, NAME)
+    assert (fetched.data, fetched.status, fetched.reason) == ([], "error", reason)
     assert lines("history") == [(reason, "empty")]
 
 
-def test_item_history_402_y_cuerpo_que_no_es_lista(steam_api, client, lines):
+def test_item_history_402_stale_y_cuerpo_que_no_es_lista(steam_api, client, lines):
+    # CAL-14 (CLEAN-15): el 402 sin caché ya es un 503 visible (sin línea); con caché
+    # caducada se sirve stale y se registra, igual que el 429.
+    _item_history_cache.put(f"{NAME}:10:steam:35", [{"date": "d", "price": 1.0, "volume": 1}], now=-1e9)
     steam_api.on("api/history", status=402)
-    assert client.get("/item/history", params={"name": NAME}).json() == []
+    assert client.get("/item/history", params={"name": NAME}).status_code == 200
+    assert client.get("/item/history", params={"name": "sin-cache"}).status_code == 503
     steam_api.on("api/history", json={"no": "lista"})
     assert client.get("/item/history", params={"name": "otra"}).json() == []
-    assert lines("item_history") == [("quota", "empty"), ("unexpected_format", "empty")]
+    assert lines("item_history") == [("quota", "stale"), ("unexpected_format", "empty")]
 
 
 def test_item_history_stale_por_429(steam_api, client, lines):
@@ -102,11 +108,11 @@ def test_item_history_stale_por_429(steam_api, client, lines):
 
 async def test_lookup_de_mercado_fallo_y_backoff(steam_api, http, lines):
     steam_api.on("csfloat/prices", status=500)
-    assert await pricing._fetch_market_price_lookup(http, "csfloat") == {}
-    assert await pricing._fetch_market_price_lookup(http, "csfloat") == {}    # en backoff
+    assert (await pricing._fetch_market_price_lookup(http, "csfloat")).data == {}
+    assert (await pricing._fetch_market_price_lookup(http, "csfloat")).data == {}    # en backoff
     _market_lookup_cache.put("buff", {"AK": 1.0}, now=-1e9)
     steam_api.on("buff/prices", exc=httpx.ConnectError("x"))
-    assert await pricing._fetch_market_price_lookup(http, "buff") == {"AK": 1.0}
+    assert (await pricing._fetch_market_price_lookup(http, "buff")).data == {"AK": 1.0}
     assert lines("market_lookup") == [("http_500", "empty"), ("backoff", "empty"), ("unavailable", "stale")]
 
 
@@ -121,7 +127,42 @@ async def test_catalogo_todas_las_fuentes_caidas(steam_api, http, lines, monkeyp
     monkeypatch.setattr(catalog, "_image_cache_lock", asyncio.Lock())
     steam_api.on(".json", status=500)
     await catalog.fetch_static_images(http)
-    assert lines("catalog") == [("all_sources_failed", "empty")]
+    # Una línea por fuente caída (7) y la del fallo total, que es la que dispara el backoff.
+    assert lines("catalog") == [("http_500", "empty")] * 7 + [("all_sources_failed", "empty")]
+
+
+async def test_catalogo_una_fuente_caida_carga_las_demas(steam_api, http, lines, monkeypatch):
+    import asyncio
+    from stores import _image_cache_meta
+    monkeypatch.setattr(catalog, "_image_cache_lock", asyncio.Lock())
+    steam_api.on("skins.json", content=b"<html>")   # las otras seis responden [] (fixture)
+    await catalog.fetch_static_images(http)
+    assert lines("catalog") == [("invalid_json", "empty")]
+    assert _image_cache_meta.fresh("catalog") is not None   # cargó: no entra en backoff
+
+
+async def test_registro_en_tracked_skins_best_effort(steam_api, http, lines, monkeypatch):
+    from unittest.mock import AsyncMock
+    from steam.errors import StorageError
+    monkeypatch.setattr("steam.price_history_repo.register_tracked", AsyncMock(side_effect=StorageError("caída")))
+    steam_api.on("api/inventory", json=[RAW])
+    from steam.services import inventory as inventory_service
+    assert (await inventory_service.fetch_fresh_inventory(http, "1", track=True)).status == "ok"
+    assert lines("tracked_register") == [("storage", "empty")]
+
+
+async def test_price_tick_lookup_caido_deja_linea(http, lines, monkeypatch):
+    from unittest.mock import AsyncMock
+    from steam import price_capture
+    from steam.errors import SourceUnavailable
+    monkeypatch.setattr(price_capture.repo, "count_captured_on", AsyncMock(return_value=0))
+    monkeypatch.setattr(price_capture.repo, "count_pending", AsyncMock(return_value=1))
+    monkeypatch.setattr(price_capture.repo, "fetch_tracked", AsyncMock(return_value=["AK"]))
+    monkeypatch.setattr(price_capture.repo, "upsert_prices", AsyncMock())
+    monkeypatch.setattr(price_capture.repo, "mark_captured", AsyncMock())
+    monkeypatch.setattr(price_capture, "_lookup_item", AsyncMock(side_effect=SourceUnavailable("down")))
+    assert (await price_capture.capture(http))["errors"] == 1
+    assert lines("price_capture") == [("unavailable", "empty")]
 
 
 # ── Rankings ──────────────────────────────────────────────────────────────────
@@ -144,12 +185,25 @@ async def test_rankings_sin_ninguna_fuente(steam_api, http, lines, compute, flow
     steam_api.on("market-index/cs2", status=500)
     await compute(http)
     assert lines(flow) == [("timeout", "error")]
+    assert lines("topmovers") == [("http_500", "empty")]   # el respaldo también deja su línea
+
+
+async def test_topmovers_caducado_no_se_sirve(steam_api, http, lines):
+    # CAL-12: un topmovers de hace días no vale como respaldo; sin fuente fresca, error.
+    from stores import _topmovers_raw_cache
+    _topmovers_raw_cache.put("latest", ((), ()), now=-1e9)
+    steam_api.on("api/items", status=500)
+    steam_api.on("market-index/cs2", exc=httpx.ConnectError("x"))
+    fetched = await market_service.compute_movers(http)
+    assert (fetched.status, fetched.reason) == ("error", "topmovers_stale")
+    assert lines("topmovers") == [("unavailable", "empty")]
+    assert lines("movers") == [("topmovers_stale", "error")]
 
 
 # ── Stale ante 402 (el cliente recibe un 200 normal) ──────────────────────────
 
 def test_busqueda_y_precio_stale_por_402(steam_api, client, lines):
-    _search_cache.put("redline", [{"name": NAME}], now=-1e9)
+    _search_cache.put("market:redline", [{"name": NAME}], now=-1e9)
     _item_price_cache.put(NAME.lower(), {"name": NAME}, now=-1e9)
     steam_api.on("api/items", status=402)
     assert client.get("/market/items?q=redline").json() == [{"name": NAME}]

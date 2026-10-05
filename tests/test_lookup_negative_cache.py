@@ -57,8 +57,9 @@ def _expire_backoff(key: str) -> None:
     _FakeClient(exc=httpx.ReadTimeout("timeout")),
 ])
 async def test_price_lookup_failure_is_cached_then_retried(client):
-    assert await pricing._fetch_market_price_lookup(client, "csfloat") == {}
-    assert await pricing._fetch_market_price_lookup(client, "csfloat") == {}
+    first = await pricing._fetch_market_price_lookup(client, "csfloat")
+    assert (first.data, first.status) == ({}, "error")
+    assert (await pricing._fetch_market_price_lookup(client, "csfloat")).reason == "backoff"
     assert client.calls == 1                                   # el fallo se apunta
 
     _expire_backoff("lookup:csfloat")
@@ -75,14 +76,15 @@ async def test_price_lookup_backoff_is_per_market():
 
 async def test_price_lookup_serves_last_good_during_backoff():
     good = _FakeClient(status=200, payload=[{"market_hash_name": "AK", "price": 10}])
-    assert await pricing._fetch_market_price_lookup(good, "csfloat") == {"AK": 10.0}
+    assert (await pricing._fetch_market_price_lookup(good, "csfloat")).data == {"AK": 10.0}
     # El dato bueno caduca y la fuente cae.
     lookup, _ = _market_lookup_cache["csfloat"]
     _market_lookup_cache["csfloat"] = (lookup, time.monotonic() - MARKET_LOOKUP_CACHE_TTL - 1)
 
     down = _FakeClient(status=500)
-    assert await pricing._fetch_market_price_lookup(down, "csfloat") == {"AK": 10.0}
-    assert await pricing._fetch_market_price_lookup(down, "csfloat") == {"AK": 10.0}
+    stale = await pricing._fetch_market_price_lookup(down, "csfloat")
+    assert (stale.data, stale.status, stale.reason) == ({"AK": 10.0}, "stale", "http_500")
+    assert (await pricing._fetch_market_price_lookup(down, "csfloat")).data == {"AK": 10.0}
     assert down.calls == 1
     assert _market_lookup_cache["csfloat"][0] == {"AK": 10.0}  # el negativo no pisa el bueno
 
