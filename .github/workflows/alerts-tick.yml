@@ -1,5 +1,8 @@
 name: alerts-tick
 
+# PUSH-10: desde 2026-10-05 el backend evalúa las alertas él mismo cada
+# ALERTS_TICK_INTERVAL s; este workflow queda de RESPALDO (el schedule de GitHub
+# se ejecuta cada 3–9 h, no cada hora).
 # Cron externo que evalúa las alertas de precio activas y manda push a sus
 # dueños. Minuto :50 para no coincidir con cap-tick (:05), news-tick (:15) ni
 # enrich/movers (:00/:15/:30/:45). Cada tick cuesta como mucho ALERTS_LOOKUP_CAP

@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -357,3 +358,44 @@ def test_fetch_active_selects_last_checked_at():
     tope de un /item al día por skin desaparece (visto en producción el 2026-09-26)."""
     from alerts import repo
     assert "last_checked_at" in repo._COLS
+
+
+# ── PUSH-10: tick interno ─────────────────────────────────────────────────────
+
+
+async def test_evaluate_alerts_never_overlaps(monkeypatch):
+    """El bucle interno y el POST del workflow comparten proceso: un tick a la vez."""
+    running = 0
+    peak = 0
+
+    async def slow(_client):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return {"evaluated": 0}
+
+    monkeypatch.setattr(service, "_evaluate_alerts", slow)
+    await asyncio.gather(service.evaluate_alerts(None), service.evaluate_alerts(None))
+    assert peak == 1
+
+
+async def test_tick_loop_survives_a_failure_and_keeps_ticking(monkeypatch):
+    calls = 0
+
+    async def flaky(_client):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("supabase caído")
+        return {"evaluated": 0}
+
+    monkeypatch.setattr(service, "evaluate_alerts", flaky)
+    task = asyncio.create_task(service.run_tick_loop(None, interval=0))
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if calls >= 2:
+            break
+    task.cancel()
+    assert calls >= 2

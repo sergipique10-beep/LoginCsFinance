@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -13,7 +14,7 @@ from settings import (
     REVIEW_USER, REVIEW_PASSWORD, REVIEW_STEAM_ID,
     FIREBASE_SERVICE_ACCOUNT_JSON, NEWS_TICK_TOKEN, BROADCAST_TOKEN,
     GEMINI_API_KEY, RAG_INGEST_TOKEN, PRICE_TICK_TOKEN, ALERTS_TICK_TOKEN,
-    COOKIE_SECURE, DEV_TOKEN_ENABLED, ENV,
+    COOKIE_SECURE, DEV_TOKEN_ENABLED, ENV, ALERTS_TICK_INTERVAL,
 )
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
@@ -21,6 +22,7 @@ from steam.routes import router as steam_router
 from steam.services.catalog import fetch_static_images
 from notifications.router import router as notifications_router
 from alerts.router import router as alerts_router
+from alerts.service import run_tick_loop
 from portfolio.router import router as portfolio_router
 from rag.router import router as rag_router
 from chat.router import router as chat_router
@@ -108,8 +110,16 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("[price] seed inicial falló: %s", exc)
 
+    # PUSH-10: tick interno de alertas; el workflow de GitHub queda de respaldo.
+    tick_task = None
+    if ALERTS_TICK_INTERVAL > 0:
+        tick_task = asyncio.create_task(run_tick_loop(app.state.http_client, ALERTS_TICK_INTERVAL))
+        logger.info("[alerts] tick interno cada %s s", ALERTS_TICK_INTERVAL)
+
     yield
 
+    if tick_task is not None:
+        tick_task.cancel()
     await app.state.http_client.aclose()
 
 
