@@ -35,7 +35,7 @@ async def fetch_history_for_item(
     """Histórico de 35 días de CSFloat para el enriquecimiento, la predicción y el chat.
 
     `ok` con los puntos; `error` con `[]` (y su motivo) si la fuente falló o el cuerpo
-    no era una lista: ese vacío se cachea `HISTORY_EMPTY_TTL` (5 min), no 23 h. Si el
+    no era una lista: ese vacío se cachea `ITEM_HISTORY.empty_ttl` (5 min), no 23 h. Si el
     limiter no da hueco en `limiter_timeout`, `HistoryBusy` sin cachear nada (PERF-03).
     """
     cache_key = f"{name}:csfloat:35d"
@@ -102,7 +102,7 @@ async def enrich_prices(
     return result
 
 
-# PERF-17: tras un fallo, no se reintenta durante LOOKUP_FAIL_TTL (5 min). Sin esto,
+# PERF-17: tras un fallo, no se reintenta durante `MARKET_LOOKUP.fail_ttl` (5 min). Sin esto,
 # cada inventario/movers/búsqueda con la fuente caída repetía dos lookups condenados
 # a fallar, gastando cuota y hasta 30 s de timeout. El backoff vive en la propia caché
 # (`mark_failed`), aparte del último dato bueno.

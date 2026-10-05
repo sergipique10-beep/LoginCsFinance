@@ -1,7 +1,8 @@
 from unittest.mock import AsyncMock
 
 from steam.domain.models import Fetched
-from stores import INVENTORY_REFRESH_COOLDOWN, _inventory_cache
+from steam.cache.policy import INVENTORY_REFRESH_COOLDOWN
+from steam.cache.user_cache import _inventory_cache
 from steam.services import inventory_service
 from tests.conftest import STEAM_ID
 
@@ -59,7 +60,7 @@ def test_refresh_allowed_again_after_cooldown_expires(client, monkeypatch):
     _patch_fetch(monkeypatch)
 
     first = client.post("/inventory/refresh")
-    fake_now[0] += INVENTORY_REFRESH_COOLDOWN + 1
+    fake_now[0] += INVENTORY_REFRESH_COOLDOWN.ttl + 1
     second = client.post("/inventory/refresh")
 
     assert first.status_code == 200

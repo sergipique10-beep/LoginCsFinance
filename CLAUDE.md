@@ -74,7 +74,8 @@ Both tokens are HS256. No separate `steam_id` claim — the SteamID is exclusive
 LoginCsFinance/
   main.py           # App factory: lifespan, CORS, middleware, router registration (~60 lines)
   settings.py       # Env vars loaded via python-dotenv
-  stores.py         # All in-memory stores and TTL constants (single point for Redis migration)
+  stores.py         # Stores de auth (_nonces, _auth_codes, _rate_store) y _leetify_cache. Las cachés
+                    #   de steam/ viven en steam/cache/
   middleware.py     # SecurityHeadersMiddleware
   data/             # (removed) formerly held market_cap_history.json — now in Supabase
   auth/
@@ -183,12 +184,12 @@ LoginCsFinance/
       strings.py      # clean_news_content (news_mapper lo reexporta como _clean_news_content para
                     #   rag/ y notifications/), lower_key (claves de caché)
       dates.py        # today() (inyectable en tests), iso_day(timestamp), hour_floor(dt)
-    cache/          # Caché con política explícita (CLEAN-16). No importa nada de steam/ salvo
-                    #   errors. stores.py reexporta las instancias por compatibilidad (Fase 6)
-      base_cache.py   # TtlCache (ex stores.py) + CacheState + lookup(key, now) → (estado, valor),
+    cache/          # Caché con política explícita. No importa nada de steam/ salvo errors.
+                    #   Única casa de las cachés de steam/: nada se reexporta desde stores.py
+      base_cache.py   # TtlCache + CacheState + lookup(key, now) → (estado, valor),
                     #   invalidate / invalidate_prefix, from_policy. Sigue siendo dict de (valor, ts)
       policy.py       # CachePolicy(ttl, empty_ttl, fail_ttl, max_entries) y UNA constante por tipo
-                    #   de dato con su motivo: la fuente de los TTL (stores.py los reexporta)
+                    #   de dato con su motivo: la única fuente de los TTL (los tests leen policy.X.ttl)
       history_cache.py / market_cache.py / user_cache.py # instancias con los nombres de siempre
                     #   (_item_history_cache, _search_cache, _profile_cache…); el cooldown del
                     #   refresh de inventario es una TtlCache más
@@ -273,7 +274,7 @@ steam/errors/handling.py ← steam/errors/domain_errors, steam/domain/{enums,mod
 steam/domain/*          ← steam/domain, steam/errors, steam/utils (catalog → enums, models;
                           normalizers → catalog, utils/urls; rules → enums, models, normalizers;
                           liquidity → models)
-steam/cache/*           ← nothing internal (stores.py importa de aquí, nunca al revés)
+steam/cache/*           ← nothing internal (stores.py importa policy de aquí, nunca al revés)
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
 steam/api/*             ← steam/errors, settings (solo steam_client)
@@ -306,7 +307,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | DELETE | `/me` | Bearer (+cookie/body refresh) | **Borrado de cuenta (LAUNCH-04)**: borra `device_tokens`, `price_alerts`, `portfolio_history`, `inventory_snapshots` (PERF-14) y **todos** sus `refresh_tokens` (SEC-11) del SteamID, vacía sus cachés en memoria, revoca el refresh y limpia la cookie. Idempotente. Es la URL de borrado que exige Google Play, vía botón en Perfil |
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
 | GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers/item_mapper.py:_map_item` + enrichment below). **Ante un 429 de steamwebapi (PERF-14)** devuelve el último snapshot con las cabeceras `X-Inventory-Stale: 1` y `X-Inventory-Captured-At` (ISO-8601); el cuerpo sigue siendo la lista. Ver «Degradación ante 429» |
-| POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio en `stores.py`). |
+| POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio, `_inventory_refresh_cooldown` en `steam/cache/user_cache.py`). |
 | GET | `/market/movers` | Bearer | Top gainers/losers 24 h (hot & cold), servido del snapshot de `market_movers`. |
 | GET | `/market/items` | Bearer | **Búsqueda** por nombre — `?q=` es obligatorio (400 si falta). No es un listado. |
 | GET | `/market/price` | Bearer | Datos completos de un item (incluye `liquidityBreakdown`). |
@@ -417,13 +418,19 @@ Dos invariantes del troceado, ambos load-bearing:
 
 ## In-memory stores (single-worker only)
 
-Los stores de auth y `_leetify_cache` viven en `stores.py`; las cachés de `steam/` viven en
-`steam/cache/` (CLEAN-16) y `stores.py` solo las reexporta por compatibilidad hasta la Fase 6.
+Los stores de auth (`_nonces`, `_auth_codes`, `_rate_store`) y `_leetify_cache` viven en
+`stores.py`. Las cachés de `steam/` viven **solo** en `steam/cache/` (CLEAN-16, CLEAN-19):
+instancias en `history_cache`, `market_cache`, `user_cache` e `image_cache.catalog_cache`, y
+los TTL en `steam/cache/policy.py` (`policy.PROFILE.ttl`, `policy.ITEM_HISTORY.empty_ttl`,
+`policy.MARKET_LOOKUP.fail_ttl`…). `stores.py` no reexporta nada de eso (guardia
+`tests/test_cache_policy.py::test_stores_no_reexporta_las_caches_de_steam`); `grep -rn "_cache" stores.py`
+solo da `_leetify_cache`. `steam.cache.ALL_CACHES` es el registro: `clear_all()` (conftest) y
+`stats_all()` (línea `[steam-cache]` del cap-tick).
 **TODO:** replace with Redis before running multiple workers.
-Desde CLEAN-09 las cachés de `steam/` son `TtlCache` (subclase de `dict` de `(valor, ts)`,
-hoy en `steam/cache/base_cache.py`, con su `CachePolicy` en `steam/cache/policy.py`):
+Las cachés de `steam/` son `TtlCache` (subclase de `dict` de `(valor, ts)`, en
+`steam/cache/base_cache.py`, con su `CachePolicy` en `steam/cache/policy.py`):
 migrar a Redis (CAL-04) es cambiar esa clase. Nada en `steam/` ni `tools/` compara `cached[1]`
-a mano (guardia en `tests/test_stores_ttl_cache.py`): se usa `fresh(key, now, empty_ttl=)`,
+a mano (guardia en `tests/test_cache_policy.py`): se usa `fresh(key, now, empty_ttl=)`,
 `stale(key)` (stale-on-error), `put`, y `mark_failed` / `in_backoff` para el caché negativo,
 aparte del último dato bueno (PERF-17). `stats()` da `hits`, `misses` y `stale_served`.
 
@@ -431,18 +438,19 @@ aparte del último dato bueno (PERF-17). `stats()` da `hits`, `misses` y `stale_
 
 | Store | Key → Value | Purpose |
 |-------|------------|---------|
-| `_nonces` | nonce → (issued_at, redirect_origin) | CSRF protection for OpenID |
-| `_auth_codes` | code → (steam_id, expires_at) | One-time codes (TTL 30 s) |
-| `_rate_store` | ip → [timestamps] | Sliding-window rate limiter |
+| `_nonces` (`stores.py`) | nonce → (issued_at, redirect_origin) | CSRF protection for OpenID |
+| `_auth_codes` (`stores.py`) | code → (steam_id, expires_at) | One-time codes (TTL 30 s) |
+| `_rate_store` (`stores.py`) | ip → [timestamps] | Sliding-window rate limiter |
 | `_profile_cache` | steam_id → perfil | `TtlCache` 23 h — steamwebapi Starter: 20 req/60s per endpoint |
 | `_inventory_cache` | steam_id → items | `TtlCache` 23 h |
 | `_market_index_cache` | tf → índice | `TtlCache` 23 h; stale ante 402 |
-| `_item_history_cache` | `name:interval:market:days` / `name:csfloat:35d` → puntos | `TtlCache` 23 h; el enriquecimiento pasa `empty_ttl=HISTORY_EMPTY_TTL` (5 min) |
+| `_item_history_cache` | `name:interval:market:days` / `name:csfloat:35d` → puntos | `TtlCache` 23 h; el enriquecimiento pasa `empty_ttl=ITEM_HISTORY.empty_ttl` (5 min) |
 | `_topmovers_raw_cache` | `"latest"` → (gainers, losers) | `TtlCache` 23 h (`TOPMOVERS_RAW`); caducado no sirve de respaldo (CAL-12) |
 | `_search_cache` / `_item_price_cache` / `_market_prices_cache` | clave del usuario → resultado | `TtlCache` 5 min con `max_entries` 200 / 500 / 100 (expulsa la más antigua al escribir) |
-| `_market_lookup_cache` / `_market_providers_cache` | market / `"providers"` → precios / lista | `TtlCache` 23 h, backoff `LOOKUP_FAIL_TTL` (5 min) tras un fallo |
-| `catalog_cache` (`CatalogCache`) | images / rarities / meta `"catalog"` → nº de entradas | `TtlCache` 23 h; fallo total → backoff `IMAGE_FAIL_TTL` (CAL-08). Alias compat: `_item_image_cache`, `_item_rarity_cache`, `_image_cache_meta` |
+| `_market_lookup_cache` / `_market_providers_cache` | market / `"providers"` → precios / lista | `TtlCache` 23 h, backoff `fail_ttl` (5 min) tras un fallo |
+| `catalog_cache` (`CatalogCache`) | images / rarities / meta `"catalog"` → nº de entradas | `TtlCache` 23 h; fallo total → backoff `IMAGE_CATALOG.fail_ttl` (CAL-08) |
 | `_news_cache` / `_fx_cache` | count / `"usdeur"` | `TtlCache` 30 min / 24 h |
+| `_leetify_cache` (`stores.py`) | (steam_id, ruta) → (json, ts) | dict plano, 5 min (`policy.LEETIFY`), errores sin cachear (SEC-09) |
 
 ## Rankings de mercado (`market_trending` / `market_movers`)
 

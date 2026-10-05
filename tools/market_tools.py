@@ -101,7 +101,7 @@ def _para_llm(items: Sequence[Mapping[str, Any]], limite: int = _TOP_ITEMS_LLM) 
 
 async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncClient) -> dict:
     """Devuelve precio detallado de una skin por nombre exacto."""
-    from stores import _item_price_cache
+    from steam.cache.market_cache import _item_price_cache
     from steam.adapters.steam_adapter import adapt_items
     from steam.mappers.item_mapper import _map_item
     from steam.services import catalog_service, pricing_service
@@ -159,7 +159,7 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
 
 async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict] | dict:
     """Busca skins por nombre y devuelve resultados relevantes."""
-    from stores import _search_cache
+    from steam.cache.market_cache import _search_cache
     from steam.domain.rules import is_sticker_slab
     from steam.adapters.steam_adapter import adapt_items
     from steam.mappers.item_mapper import _map_item

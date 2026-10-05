@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import main
-from stores import _item_price_cache, _market_index_cache, _market_prices_cache, _search_cache
+from steam.cache.market_cache import _item_price_cache, _market_index_cache, _market_prices_cache, _search_cache
 
 STALE = -1e9   # timestamp monotónico muy antiguo: la entrada existe pero ha caducado
 

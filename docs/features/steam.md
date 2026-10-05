@@ -94,7 +94,7 @@ tests para pasar, ha cambiado el contrato y hay que parar.
 
 - Simulan las APIs externas **por HTTP** con la fixture `steam_api` (`tests/conftest.py` +
   `tests/steam_fake.py`): responde por sufijo de `host + path` sobre
-  `app.state.http_client`, vacía las cachés de `stores.py` y quita la espera del
+  `app.state.http_client`, vacía las cachés de `steam/cache/` (`clear_all`) y quita la espera del
   `_history_limiter`. Así no dependen de en qué módulo viva cada función.
 - Los bugs del mapa (CAL-11 a CAL-14) llevaban un `xfail(strict=True)` que afirmaba el
   comportamiento **correcto**; la Fase 2 del refactor (CLEAN-15) los cerró y hoy no queda

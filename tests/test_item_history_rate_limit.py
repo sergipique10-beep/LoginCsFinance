@@ -6,10 +6,9 @@ import time
 from unittest.mock import AsyncMock
 
 from chat import router as chat_router
-from stores import (
-    ITEM_HISTORY_RATE_LIMIT_CALLS, RATE_LIMIT_CALLS,
-    _item_history_cache, _news_cache, _rate_store,
-)
+from stores import ITEM_HISTORY_RATE_LIMIT_CALLS, RATE_LIMIT_CALLS, _rate_store
+from steam.cache.history_cache import _item_history_cache
+from steam.cache.user_cache import _news_cache
 
 AUTH_KEY = "testclient"   # clave del bucket de auth para la IP de TestClient
 

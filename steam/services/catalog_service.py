@@ -143,9 +143,9 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
         except DEGRADABLE as exc:
             _log_catalog_failure(label, exc)
 
-    # CAL-08: "catalog" significa "última carga buena" (stores.py). Si no cargó ninguna
+    # CAL-08: "catalog" en `catalog_cache.meta` significa "última carga buena". Si no cargó ninguna
     # fuente (GitHub caído en el arranque de Render), no se estampa: se reintenta
-    # pasado IMAGE_FAIL_TTL en vez de pasar 23 h con `image: ""`.
+    # pasado `IMAGE_CATALOG.fail_ttl` en vez de pasar 23 h con `image: ""`.
     if not fetched:
         catalog_cache.mark_failed(now)
         logger.warning("[catalog] all sources failed; retry in %ds", catalog_cache.meta.fail_ttl)

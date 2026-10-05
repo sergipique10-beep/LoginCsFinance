@@ -1,5 +1,5 @@
 """PERF-17: los lookups de precios por mercado y de proveedores apuntan el fallo y no
-reintentan durante _LOOKUP_FAIL_TTL. Durante el backoff se sigue sirviendo el último
+reintentan durante `MARKET_LOOKUP.fail_ttl`. Durante el backoff se sigue sirviendo el último
 dato bueno (stale-on-error); el caché negativo no lo pisa."""
 import time
 from unittest.mock import MagicMock
@@ -10,10 +10,8 @@ import pytest
 from steam.services import pricing_service
 from steam.services import providers_service
 from steam.domain import catalog
-from stores import (
-    LOOKUP_FAIL_TTL, MARKET_LOOKUP_CACHE_TTL, MARKET_PROVIDERS_CACHE_TTL,
-    _market_lookup_cache, _market_providers_cache,
-)
+from steam.cache.market_cache import _market_lookup_cache, _market_providers_cache
+from steam.cache.policy import MARKET_LOOKUP, MARKET_PROVIDERS
 
 
 class _FakeClient:
@@ -46,7 +44,7 @@ def _expire_backoff(key: str) -> None:
     # CLEAN-09: el backoff vive en cada caché ("lookup:<market>" → _market_lookup_cache).
     cache, k = ((_market_lookup_cache, key.split(":", 1)[1]) if key.startswith("lookup:")
                 else (_market_providers_cache, key))
-    cache.mark_failed(k, now=time.monotonic() - LOOKUP_FAIL_TTL - 1)
+    cache.mark_failed(k, now=time.monotonic() - MARKET_LOOKUP.fail_ttl - 1)
 
 
 # ── _fetch_market_price_lookup ────────────────────────────────────────────────
@@ -79,7 +77,7 @@ async def test_price_lookup_serves_last_good_during_backoff():
     assert (await pricing_service._fetch_market_price_lookup(good, "csfloat")).data == {"AK": 10.0}
     # El dato bueno caduca y la fuente cae.
     lookup, _ = _market_lookup_cache["csfloat"]
-    _market_lookup_cache["csfloat"] = (lookup, time.monotonic() - MARKET_LOOKUP_CACHE_TTL - 1)
+    _market_lookup_cache["csfloat"] = (lookup, time.monotonic() - MARKET_LOOKUP.ttl - 1)
 
     down = _FakeClient(status=500)
     stale = await pricing_service._fetch_market_price_lookup(down, "csfloat")
@@ -114,7 +112,7 @@ async def test_providers_serve_last_good_during_backoff():
     good = _FakeClient(status=200, payload=[{"id": "csfloat", "name": "CSFloat X", "logo": "https://l/x.png"}])
     providers = (await providers_service.fetch_market_providers(good)).data
     assert providers[1]["name"] == "CSFloat X"
-    _market_providers_cache["providers"] = (providers, time.monotonic() - MARKET_PROVIDERS_CACHE_TTL - 1)
+    _market_providers_cache["providers"] = (providers, time.monotonic() - MARKET_PROVIDERS.ttl - 1)
 
     down = _FakeClient(exc=httpx.ConnectError("down"))
     assert (await providers_service.fetch_market_providers(down)).data == providers

@@ -12,7 +12,7 @@ import pytest
 import main
 from steam.routes import items as items_routes
 from steam.services import pricing_service
-from stores import _item_history_cache
+from steam.cache.history_cache import _item_history_cache
 
 NAME = "AK-47 | Nightwish (Well-Worn)"
 URL = f"/item/history?name={NAME}&market=buff&days=30"

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 from steam.domain.models import Fetched
 from steam.services import catalog_service, pricing_service
-from stores import _item_image_cache
+from steam.cache.image_cache import catalog_cache
 
 STUB = {"name": "AK", "priceDelta24h": None, "priceDelta7d": None, "priceDelta30d": None}
 
@@ -45,7 +45,7 @@ async def test_enrich_market_prices_mutates_and_returns_same_list(monkeypatch):
 
 
 def test_enrich_images_from_cache_mutates_and_returns_same_list(monkeypatch):
-    monkeypatch.setitem(_item_image_cache, "AK", "https://img/ak.png")
+    monkeypatch.setitem(catalog_cache.images, "AK", "https://img/ak.png")
     items = [{"name": "AK"}]
     before = copy.deepcopy(items)
 

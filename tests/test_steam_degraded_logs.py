@@ -13,7 +13,8 @@ import pytest
 from steam.errors import handling as degraded
 from steam.services import catalog_service, pricing_service, rankings_service
 from steam.services import providers_service
-from stores import _item_history_cache, _item_price_cache, _market_lookup_cache, _search_cache
+from steam.cache.history_cache import _item_history_cache
+from steam.cache.market_cache import _item_price_cache, _market_lookup_cache, _search_cache
 from tests.test_steam_contract_market import NAME, RAW
 from tools.inventory_tools import _ver_inventario
 
@@ -133,12 +134,12 @@ async def test_catalogo_todas_las_fuentes_caidas(steam_api, http, lines, monkeyp
 
 async def test_catalogo_una_fuente_caida_carga_las_demas(steam_api, http, lines, monkeypatch):
     import asyncio
-    from stores import _image_cache_meta
+    from steam.cache.image_cache import catalog_cache
     monkeypatch.setattr(catalog_service, "_image_cache_lock", asyncio.Lock())
     steam_api.on("skins.json", content=b"<html>")   # las otras seis responden [] (fixture)
     await catalog_service.fetch_static_images(http)
     assert lines("catalog") == [("invalid_json", "empty")]
-    assert _image_cache_meta.fresh("catalog") is not None   # cargó: no entra en backoff
+    assert catalog_cache.meta.fresh("catalog") is not None   # cargó: no entra en backoff
 
 
 async def test_registro_en_tracked_skins_best_effort(steam_api, http, lines, monkeypatch):
@@ -190,7 +191,7 @@ async def test_rankings_sin_ninguna_fuente(steam_api, http, lines, compute, flow
 
 async def test_topmovers_caducado_no_se_sirve(steam_api, http, lines):
     # CAL-12: un topmovers de hace días no vale como respaldo; sin fuente fresca, error.
-    from stores import _topmovers_raw_cache
+    from steam.cache.history_cache import _topmovers_raw_cache
     _topmovers_raw_cache.put("latest", ((), ()), now=-1e9)
     steam_api.on("api/items", status=500)
     steam_api.on("market-index/cs2", exc=httpx.ConnectError("x"))
@@ -213,7 +214,7 @@ def test_busqueda_y_precio_stale_por_402(steam_api, client, lines):
 
 
 def test_indice_y_precios_por_mercado_stale_por_402(steam_api, client, lines, monkeypatch):
-    from stores import _market_index_cache, _market_prices_cache
+    from steam.cache.market_cache import _market_index_cache, _market_prices_cache
     _market_index_cache.put("24h", {"x": 1}, now=-1e9)
     _market_prices_cache.put("buff::usd", [{"p": 1}], now=-1e9)
     steam_api.on("market-index/cs2", status=402)

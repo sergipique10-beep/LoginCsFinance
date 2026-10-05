@@ -13,10 +13,10 @@ import pytest
 import main
 from steam.rankings_repo import movers_repo, trending_repo
 from steam.services import catalog_service
-from stores import (
-    _fx_cache, _item_history_cache, _item_price_cache,
-    _market_index_cache, _market_lookup_cache, _market_prices_cache,
-    _market_providers_cache, _search_cache, _topmovers_raw_cache,
+from steam.cache.history_cache import _item_history_cache, _topmovers_raw_cache
+from steam.cache.market_cache import (
+    _fx_cache, _item_price_cache, _market_index_cache, _market_lookup_cache, _market_prices_cache,
+    _market_providers_cache, _search_cache,
 )
 from tests.test_steam_contract_rows import ITEM_KEYS as ROW_ITEM_KEYS, SAMPLE
 from steam.mappers.row_mapper import _to_row

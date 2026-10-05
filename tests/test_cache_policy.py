@@ -130,15 +130,18 @@ def test_invalidate_y_prefijo():
     assert set(c) == {7}
 
 
-def test_stores_reexporta_los_ttl_de_policy():
-    # Hasta la Fase 6 stores.py sigue exponiendo las constantes; su valor sale de policy.
-    assert stores.PROFILE_CACHE_TTL == policy.PROFILE.ttl == 82800
-    assert stores.HISTORY_EMPTY_TTL == policy.ITEM_HISTORY.empty_ttl == 300
-    assert stores.SEARCH_CACHE_TTL == policy.SEARCH.ttl == 300
-    assert stores.TtlCache is TtlCache
+def test_stores_no_reexporta_las_caches_de_steam():
+    """CLEAN-19: `stores.py` se queda con los stores de auth y `_leetify_cache`. Las cachés
+    de steam/ y sus TTL se importan de `steam.cache.<módulo>` / `steam.cache.policy`."""
+    caches = sorted(n for n in vars(stores) if n.endswith("_cache"))
+    assert caches == ["_leetify_cache"]
+    assert not any(isinstance(v, TtlCache) for v in vars(stores).values())
+    assert not any(n.endswith("_TTL") and n not in {"NONCE_TTL", "CODE_TTL", "ACCESS_TOKEN_TTL", "REFRESH_TOKEN_TTL", "LEETIFY_CACHE_TTL"}
+                   for n in vars(stores))
+    assert stores.LEETIFY_CACHE_TTL == policy.LEETIFY.ttl   # el único TTL de caché que conserva
 
 
-# ── CLEAN-16 (3.2): instancias por dominio, registro y CatalogCache ───────────
+# ── Instancias por dominio, registro y CatalogCache ───────────
 
 def test_registro_de_caches_y_stats_all():
     import steam.cache as cache
@@ -154,13 +157,6 @@ def test_registro_de_caches_y_stats_all():
     cache.clear_all()
     assert not market_cache._search_cache and not catalog_cache
     assert all(st["entries"] == 0 for st in cache.stats_all().values())
-
-
-def test_stores_alias_son_las_mismas_instancias():
-    from steam.cache.image_cache import catalog_cache
-    from steam.cache.market_cache import _search_cache
-    assert stores._search_cache is _search_cache
-    assert stores._item_image_cache is catalog_cache.images and stores._image_cache_meta is catalog_cache.meta
 
 
 def test_catalog_cache():

@@ -14,9 +14,9 @@ from steam.adapters.static_catalog_adapter import adapt_catalog_source
 from steam.adapters.steam_adapter import adapt_market_index
 from steam.services.rankings_service import _build_movers_from_topmovers
 from steam.services.catalog_service import _register_flat, _register_skin, rarity_from_cache as _rarity_from_cache
-from stores import (
-    _image_cache_meta, _item_image_cache, _item_rarity_cache, _market_index_cache, _topmovers_raw_cache,
-)
+from steam.cache.history_cache import _topmovers_raw_cache
+from steam.cache.image_cache import catalog_cache
+from steam.cache.market_cache import _market_index_cache
 
 TOPMOVERS = {
     "gainers": [
@@ -63,13 +63,13 @@ def catalogo():
     """Catálogo estático con dos entradas y marcado como recién cargado, para que
     /market/index no salga a la red a por el de verdad."""
     import time
-    saved = (dict(_item_image_cache), dict(_item_rarity_cache), dict(_image_cache_meta))
-    _item_image_cache.clear(); _item_rarity_cache.clear()
+    saved = (dict(catalog_cache.images), dict(catalog_cache.rarities), dict(catalog_cache.meta))
+    catalog_cache.images.clear(); catalog_cache.rarities.clear()
     _register_flat(adapt_catalog_source([STICKER], label="stickers")[0])
     _register_skin(adapt_catalog_source([SKIN], label="skins")[0])
-    _image_cache_meta.put("catalog", 1)
+    catalog_cache.meta.put("catalog", 1)
     yield
-    for store, old in zip((_item_image_cache, _item_rarity_cache, _image_cache_meta), saved):
+    for store, old in zip((catalog_cache.images, catalog_cache.rarities, catalog_cache.meta), saved):
         store.clear(); store.update(old)
 
 
@@ -96,7 +96,7 @@ def test_hottest_item_es_el_mayor_gainer_con_su_porcentaje(catalogo):
 
 
 def test_hottest_item_sin_rareza_si_no_esta_en_el_catalogo(catalogo):
-    _item_rarity_cache.clear()
+    catalog_cache.rarities.clear()
     hottest = _index()["hottestItem"]
     assert hottest["rarity"] is None and hottest["rarityColor"] is None
     assert hottest["price"] == 0.17
@@ -107,8 +107,8 @@ def test_rareza_del_catalogo_cubre_desgastes_y_souvenir(catalogo):
     assert _rarity_from_cache("Souvenir MAC-10 | Tornado (Battle-Scarred)") == ("Consumer Grade", "b0c3d9")
     assert _rarity_from_cache("Sticker Slab | Mood Ring Strafe (Holo)") is None
     # El caché de imágenes no cambia de forma por registrar la rareza.
-    assert _item_image_cache["MAC-10 | Tornado (Battle-Scarred)"] == SKIN["image"]
-    assert _item_image_cache["★ MAC-10 | Tornado"] == SKIN["image"]
+    assert catalog_cache.images["MAC-10 | Tornado (Battle-Scarred)"] == SKIN["image"]
+    assert catalog_cache.images["★ MAC-10 | Tornado"] == SKIN["image"]
 
 
 def test_change24h_es_un_porcentaje_no_un_importe():
