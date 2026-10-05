@@ -84,10 +84,13 @@ async def _ver_inventario(
         # La misma descarga que GET /inventory, sin registrar en tracked_skins y sin
         # snapshot: así era la del chat antes de unificarlas (CLEAN-11).
         try:
-            items = await inventory_service.fetch_fresh_inventory(client, steam_id, track=False)
+            fetched = await inventory_service.fetch_fresh_inventory(client, steam_id, track=False)
         except Exception as exc:  # noqa: BLE001 — borde del chat: cualquier fallo vuelve al modelo con su motivo (CAL-14), nunca como `[]`
             logger.warning("[tools] ver_inventario falló: %r", exc)
             return {"error": user_message(exc)}
+        if fetched.status == "error":   # 410/411 (CAL-13): no hay inventario que leer, y no se cachea
+            return {"error": "Steam no tiene inventario de CS2 para este usuario"}
+        items = fetched.data
         _inventory_cache.put(steam_id, items, now)
 
     return _resumen_inventario(items, buscar)

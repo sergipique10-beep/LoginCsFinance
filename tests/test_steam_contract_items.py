@@ -112,7 +112,6 @@ def test_inventory_errores(steam_api, client, route, status):
     assert client.get("/inventory").status_code == status
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-13")
 def test_inventory_410_no_pisa_el_snapshot(steam_api, client):
     SNAPSHOT_DB[STEAM_ID] = ([{"name": NAME}], "2026-10-03T10:00:00+00:00")
     steam_api.on("api/inventory", status=410)

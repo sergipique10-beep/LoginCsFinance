@@ -17,7 +17,8 @@ from stores import (
 )
 from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
-from ..errors.handling import SOURCE_ERRORS, http_error_for, log_degraded, reason_of
+from ..domain.models import Fetched
+from ..errors.handling import SOURCE_ERRORS, http_error_for, log_degraded
 from ..errors import UPSTREAM_QUOTA_DETAIL, QuotaExhausted, RateLimited, UpstreamError
 from ..services import inventory as inventory_service
 from ..services import pricing
@@ -42,9 +43,10 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
         raise http_error_for(exc, timeout_status=504) from exc
 
 
-async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
+async def _fetch_fresh_inventory(request: Request, steam_id: str) -> Fetched[list]:
     """El inventario recién leído, con los errores de steamwebapi traducidos a HTTP.
-    429 y 402 suben tal cual: los degrada quien llama (PERF-14)."""
+    429 y 402 suben tal cual: los degrada quien llama (PERF-14). Un 410/411 llega como
+    `Fetched` con `status="error"` y lo resuelve `_no_inventory` (CAL-13)."""
     try:
         return await inventory_service.fetch_fresh_inventory(
             request.app.state.http_client, steam_id, track=True,
@@ -54,10 +56,6 @@ async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
     except UpstreamError as exc:
         if exc.status == 403:
             raise HTTPException(status_code=403, detail="Inventory is private") from exc
-        if exc.status in (410, 411):
-            # CAL-13: se sirve y se guarda como inventario vacío (CLEAN-12: con su línea).
-            log_degraded("inventory", reason_of(exc), "empty")
-            return []
         if exc.status is not None:
             logger.error("steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
         raise http_error_for(exc, timeout_status=504) from exc
@@ -109,6 +107,15 @@ async def _snapshot_response(steam_id: str) -> JSONResponse | None:
     })
 
 
+async def _no_inventory(steam_id: str, reason: str) -> JSONResponse | list:
+    """410/411 de steamwebapi (CAL-13): el snapshot con `X-Inventory-Stale` si lo hay,
+    si no `[]`. Ni la caché ni el snapshot se pisan con el vacío: un inventario que
+    hoy no se puede leer no borra el último que sí se leyó."""
+    snap = await _snapshot_response(steam_id)
+    log_degraded("inventory", reason, "stale" if snap is not None else "empty")
+    return snap if snap is not None else []
+
+
 def _backoff(attempt: int, retry_after: float | None) -> float:
     """Exponencial con jitter «equal» (mitad fija, mitad aleatoria), y nunca menos
     de lo que pidió steamwebapi en Retry-After."""
@@ -123,7 +130,7 @@ async def _retry_inventory(request: Request, steam_id: str, retry_after: float |
         for attempt in range(INVENTORY_429_MAX_RETRIES):
             await asyncio.sleep(_backoff(attempt, retry_after))
             try:
-                items = await _fetch_fresh_inventory(request, steam_id)
+                fetched = await _fetch_fresh_inventory(request, steam_id)
             except RateLimited as exc:
                 retry_after = exc.retry_after
                 _log_429(steam_id, f"retry-{attempt + 1}", retry_after, "none")
@@ -134,7 +141,10 @@ async def _retry_inventory(request: Request, steam_id: str, retry_after: float |
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[inventory] reintento de %s abortado: %r", steam_id, exc)
                 return
-            await _store(steam_id, items, time.monotonic())
+            if fetched.status == "error":
+                logger.warning("[inventory] reintento de %s: %s, no se guarda nada", steam_id, fetched.reason)
+                return
+            await _store(steam_id, fetched.data, time.monotonic())
             logger.info("[inventory-429] user=%s recuperado en el reintento %d", steam_id, attempt + 1)
             return
         logger.warning("[inventory-429] user=%s sin recuperar tras %d reintentos",
@@ -180,11 +190,13 @@ async def get_inventory(request: Request, user: dict = Depends(require_jwt)):
         return snap
 
     try:
-        items = await _fetch_fresh_inventory(request, steam_id)
+        fetched = await _fetch_fresh_inventory(request, steam_id)
     except (RateLimited, QuotaExhausted) as exc:
         return await _degraded_inventory(request, steam_id, exc, "get")
-    await _store(steam_id, items, now)
-    return items
+    if fetched.status == "error":
+        return await _no_inventory(steam_id, fetched.reason or "unknown")
+    await _store(steam_id, fetched.data, now)
+    return fetched.data
 
 
 @router.post("/inventory/refresh", summary="Fuerza un refresh del inventario ignorando el caché de 23h")
@@ -201,12 +213,14 @@ async def refresh_inventory(request: Request, user: dict = Depends(require_jwt))
         return snap
 
     try:
-        items = await _fetch_fresh_inventory(request, steam_id)
+        fetched = await _fetch_fresh_inventory(request, steam_id)
     except (RateLimited, QuotaExhausted) as exc:
         return await _degraded_inventory(request, steam_id, exc, "refresh")
-    await _store(steam_id, items, now)
+    if fetched.status == "error":
+        return await _no_inventory(steam_id, fetched.reason or "unknown")
+    await _store(steam_id, fetched.data, now)
     _inventory_refresh_cooldown[steam_id] = now
-    return items
+    return fetched.data
 
 
 @router.get("/item/history", dependencies=[Depends(item_history_rate_limit)], summary="Historial de precios de un item CS2")

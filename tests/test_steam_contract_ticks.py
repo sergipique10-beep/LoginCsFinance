@@ -161,7 +161,6 @@ def test_movers_tick_fallback_reutiliza_topmovers_de_market_index(steam_api, rep
     assert client.post("/internal/movers-tick", headers=TOKEN).json() == {"ok": True, "count": 4}
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-12")
 def test_movers_tick_no_usa_un_topmovers_de_hace_dias(steam_api, repos, client, monkeypatch):
     steam_api.on("market-index/cs2", json={**TOPMOVERS, "history": []})
     real = time.monotonic

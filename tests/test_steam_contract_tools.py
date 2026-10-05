@@ -77,7 +77,6 @@ async def test_buscar_skin_vacio(steam_api, api, query, body):
     assert await _buscar_skin(query=query, client=api) == []
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-11")
 async def test_buscar_skin_no_contamina_la_busqueda_de_market(steam_api, api, client):
     steam_api.on("api/items", json=[RAW])
     await _buscar_skin(query="redline", client=api)

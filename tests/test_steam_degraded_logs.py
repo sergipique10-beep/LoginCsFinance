@@ -149,12 +149,25 @@ async def test_rankings_sin_ninguna_fuente(steam_api, http, lines, compute, flow
     steam_api.on("market-index/cs2", status=500)
     await compute(http)
     assert lines(flow) == [("timeout", "error")]
+    assert lines("topmovers") == [("http_500", "empty")]   # el respaldo también deja su línea
+
+
+async def test_topmovers_caducado_no_se_sirve(steam_api, http, lines):
+    # CAL-12: un topmovers de hace días no vale como respaldo; sin fuente fresca, error.
+    from stores import _topmovers_raw_cache
+    _topmovers_raw_cache.put("latest", ((), ()), now=-1e9)
+    steam_api.on("api/items", status=500)
+    steam_api.on("market-index/cs2", exc=httpx.ConnectError("x"))
+    fetched = await market_service.compute_movers(http)
+    assert (fetched.status, fetched.reason) == ("error", "topmovers_stale")
+    assert lines("topmovers") == [("unavailable", "empty")]
+    assert lines("movers") == [("topmovers_stale", "error")]
 
 
 # ── Stale ante 402 (el cliente recibe un 200 normal) ──────────────────────────
 
 def test_busqueda_y_precio_stale_por_402(steam_api, client, lines):
-    _search_cache.put("redline", [{"name": NAME}], now=-1e9)
+    _search_cache.put("market:redline", [{"name": NAME}], now=-1e9)
     _item_price_cache.put(NAME.lower(), {"name": NAME}, now=-1e9)
     steam_api.on("api/items", status=402)
     assert client.get("/market/items?q=redline").json() == [{"name": NAME}]

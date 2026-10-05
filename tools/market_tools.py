@@ -164,7 +164,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict] |
     from steam.adapters.steam_adapter import adapt_items
     from steam.mappers.item_mapper import _map_item
     from steam.services import catalog, pricing
-    from steam.services.market import search_items
+    from steam.services.market import search_cache_key, search_items
 
     import time
 
@@ -172,7 +172,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict] |
     if not q:
         return []
 
-    cache_key = q.lower()
+    cache_key = search_cache_key("chat", q)   # CAL-11: sin pisar la búsqueda de /market/items
     now = time.monotonic()
     hit = _search_cache.fresh(cache_key, now)
     if hit is not None:

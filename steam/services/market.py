@@ -171,6 +171,14 @@ async def search_items(client: httpx.AsyncClient, query: str, *, max: int, selec
     return await steam_client.items(client, search=query, max=max, select=select)
 
 
+def search_cache_key(namespace: str, query: str) -> str:
+    """Clave de `_search_cache` (CAL-11). La búsqueda web (`market`) y la del chat
+    (`chat`) piden `select` distintos: el del chat no trae los campos del Liquidity
+    Score, así que compartir clave dejaba a /market/items sirviendo hasta 10 items sin
+    liquidez durante 5 min."""
+    return f"{namespace}:{query.lower()}"
+
+
 async def _ranking_items(client: httpx.AsyncClient, tag: str,
                          fallback_label: str) -> tuple[list[SteamItem] | None, str | None]:
     """Fuente principal de movers y trending: /items por unidades vendidas. Devuelve
@@ -193,21 +201,27 @@ async def _ranking_items(client: httpx.AsyncClient, tag: str,
         return None, "unexpected_format"
 
 
-async def _topmovers(client: httpx.AsyncClient, tag: str, now: float, *,
-                     log_sample: bool) -> tuple[tuple[TopMover, ...], tuple[TopMover, ...]] | None:
-    """Respaldo: topmovers de market-index. Se usa lo último cacheado, tenga la edad que
-    tenga (CAL-12); si no hay nada, se pide market-index ahora para llenarlo."""
-    raw_topmovers = _topmovers_raw_cache.stale("latest")
-    if not raw_topmovers:
-        try:
-            mi = adapt_market_index(await steam_client.market_index(client, timeout=15.0))
-            _topmovers_raw_cache.put("latest", (mi.gainers, mi.losers), now)
-            raw_topmovers = (mi.gainers, mi.losers)
-        except Exception as exc:
-            # Un status distinto de 200 se salta en silencio, como antes del cliente.
-            if not (isinstance(exc, UpstreamError) and exc.status is not None):
-                logger.warning("[%s] could not fetch market-index for topmovers: %s", tag, exc)
-    return raw_topmovers
+async def _topmovers(client: httpx.AsyncClient, tag: str,
+                     now: float) -> tuple[tuple[tuple[TopMover, ...], tuple[TopMover, ...]] | None, str | None]:
+    """Respaldo: topmovers de market-index. Devuelve (gainers+losers, None), o (None,
+    motivo) si no hay nada que servir.
+
+    Solo vale lo cacheado dentro de `TOPMOVERS_RAW_TTL` (CAL-12: antes se usaba lo último
+    que hubiera, tuviera la edad que tuviera); si caducó o no hay, se pide market-index
+    ahora. Si eso falla y lo que había estaba caducado, el motivo es `topmovers_stale`.
+    """
+    cached = _topmovers_raw_cache.fresh("latest", now)
+    if cached:
+        return cached, None
+    try:
+        mi = adapt_market_index(await steam_client.market_index(client, timeout=15.0))
+    except (UpstreamError, InvalidPayload, UnexpectedPayload) as exc:
+        logger.warning("[%s] could not fetch market-index for topmovers: %s", tag, reason_of(exc))
+        log_degraded("topmovers", reason_of(exc), "empty")
+        expired = _topmovers_raw_cache.stale("latest")
+        return None, "topmovers_stale" if expired else None
+    _topmovers_raw_cache.put("latest", (mi.gainers, mi.losers), now)
+    return (mi.gainers, mi.losers), None
 
 
 async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
@@ -264,7 +278,8 @@ async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
         return Fetched(result)
 
     # ── Fallback: market-index topmovers (free plan) ─────────────────────────
-    raw_topmovers = await _topmovers(client, "market-movers", now, log_sample=True)
+    raw_topmovers, topmovers_reason = await _topmovers(client, "market-movers", now)
+    reason = topmovers_reason or reason
     if raw_topmovers:
         gainers, losers = raw_topmovers
         fallback = _build_movers_from_topmovers(gainers, losers)
@@ -321,7 +336,8 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
         return Fetched(result)
 
     # ── Fallback: topmovers from cache (free plan) ────────────────────────────
-    raw_topmovers = await _topmovers(client, "market-trending", now, log_sample=False)
+    raw_topmovers, topmovers_reason = await _topmovers(client, "market-trending", now)
+    reason = topmovers_reason or reason
     if raw_topmovers:
         gainers, losers = raw_topmovers
         combined = (*gainers, *losers)
@@ -368,7 +384,7 @@ def _stale_or_raise(flow: str, stale: _T | None, exc: QuotaExhausted) -> Fetched
 
 async def search_market(client: httpx.AsyncClient, query: str) -> Fetched[list[SkinCard]]:
     """GET /market/items: búsqueda por nombre con el shape completo y caché de 5 min."""
-    cache_key = query.lower()
+    cache_key = search_cache_key("market", query)
     now = time.monotonic()
     hit = _search_cache.fresh(cache_key, now)
     if hit is not None:

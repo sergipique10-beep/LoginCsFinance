@@ -82,8 +82,10 @@ tests para pasar, ha cambiado el contrato y hay que parar.
   `tests/steam_fake.py`): responde por sufijo de `host + path` sobre
   `app.state.http_client`, vacía las cachés de `stores.py` y quita la espera del
   `_history_limiter`. Así no dependen de en qué módulo viva cada función.
-- Los bugs del mapa de abajo (CAL-11 a CAL-14) llevan un `xfail(strict=True)` que
-  afirma el comportamiento **correcto**: el día que se arreglen, hay que quitar la marca.
+- Los bugs del mapa (CAL-11 a CAL-14) llevaban un `xfail(strict=True)` que afirmaba el
+  comportamiento **correcto**; la Fase 2 del refactor (CLEAN-15) los cerró y hoy no queda
+  ningún `xfail` en estos ficheros. Un bug nuevo del mapa se añade igual: test con `xfail`
+  estricto, fila con su issue.
 
 ## Mapa de degradaciones
 
@@ -96,14 +98,14 @@ aceptada), *UX-46* (hacerla visible al usuario, necesita al front) o el issue de
 (`steam/errors/handling.py`), una por fila con algo en la última columna;
 `tests/test_steam_degraded_logs.py` provoca cada una. Las que ya se ven (cabecera, `code`,
 `stale` en el cuerpo, 5xx) no llevan línea. Fuera a propósito: los mappers (una línea
-por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
+por campo y tick, UX-46).
 
 | Flujo | Disparador | Qué devuelve | ¿Lo ve el cliente? | Decisión | Log (`flow` · `reason`) |
 |---|---|---|---|---|---|
 | Inventario | 429 / 402 con snapshot | snapshot | `X-Inventory-Stale` | conservar (PERF-14) | — |
 | Inventario | 402 sin snapshot | 503 | `code: upstream_quota` | conservar (SEC-16) | — |
 | Inventario | 429 sin snapshot | 429, `detail` de texto | sin `code` | CAL-14 | — |
-| Inventario | 410 / 411 | `[]` guardado en caché y snapshot | invisible | CAL-13 | `inventory` · `http_410`/`http_411` |
+| Inventario | 410 / 411 | snapshot con `X-Inventory-Stale` si lo hay, si no `[]`; **ni la caché ni el snapshot se pisan** | cabecera (con snapshot) | resuelto (CLEAN-15) | `inventory` · `http_410`/`http_411`, `served=stale` o `empty` |
 | Inventario | JSON inválido | 502 | 502 | resuelto (CLEAN-15, `http_error_for`) | — |
 | Perfil `/me` | 402 / 429 | 503 | `code: upstream_quota` / `upstream_rate_limit` | resuelto (CLEAN-15) | — |
 | Perfil `/me` | 200 sin perfil | perfil en blanco **sin cachear** | invisible | resuelto (CLEAN-14) | `profile` · `empty_body` |
@@ -115,12 +117,12 @@ por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
 | Proveedores | fallo | stale o `_FALLBACK_PROVIDERS` | invisible | conservar (PERF-17) | `providers` · motivo o `backoff` |
 | FX | fallo / tasa fuera de 0,5–2,0 | última tasa o ninguna | `stale` en el cuerpo | conservar (UX-08) | — |
 | Movers / trending | `/items` caído o ilegible | fallback a topmovers, deltas `0.0` | invisible | UX-46 (el JSON ilegible daba 500: resuelto, CLEAN-15) | `movers`/`trending` · motivo de `/items` (`invalid_json` si ilegible); `served=fallback`, o `error` sin fuentes |
-| Movers / trending | topmovers cacheado viejo | se usa sin mirar su edad | invisible | CAL-12 | — |
+| Movers / trending | topmovers cacheado caducado (`TOPMOVERS_RAW_TTL`) | no se usa: se pide market-index; si también falla, `error` | `kept_previous` en el tick | resuelto (CLEAN-15) | `topmovers` · motivo del respaldo (`served=empty`); `movers`/`trending` · `topmovers_stale` |
 | `movers-tick` | ninguna fuente | conserva el snapshot anterior | `kept_previous` | conservar (CAL-10) | — |
 | Trending | sticker slabs | no se filtran (sí en movers y búsqueda) | — | CAL-14 | — |
 | Búsqueda / precio | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `search`/`item_price` · `quota` (solo stale) |
 | Búsqueda / precio | 429 | 503 + `Retry-After` | `code: upstream_rate_limit` | resuelto (CLEAN-15) | — |
-| Búsqueda | caché compartida con el chat | hasta 10 items sin liquidez | invisible | CAL-11 | — |
+| Búsqueda | caché compartida con el chat | clave con namespace (`market:`/`chat:`, `search_cache_key`): cada uno la suya | — | resuelto (CLEAN-15) | — |
 | `/market/index` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_index` · `quota` (solo stale) |
 | `/market/prices` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_prices` · `quota` (solo stale) |
 | `/market/index` | gainer sin `markethashname` / sin `change24h` | se descarta / `0.0` | invisible | resuelto (CLEAN-14) | `market_index` · `invalid_field` (solo al descartar) |

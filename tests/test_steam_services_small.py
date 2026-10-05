@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from steam.errors import UnexpectedPayload, UpstreamError
+from steam.domain.models import Fetched
+from steam.errors import UnexpectedPayload
 from steam.services import inventory as inventory_service
 from steam.services import news as news_service
 from steam.services import profile as profile_service
@@ -34,8 +35,8 @@ def register(monkeypatch):
 @pytest.mark.parametrize("track, registered", [(True, True), (False, False)])
 async def test_inventario_track_decide_si_se_registra(fake, http, register, track, registered):
     fake.on("api/inventory", json=[RAW])
-    items = await inventory_service.fetch_fresh_inventory(http, "1", track=track)
-    assert [i["name"] for i in items] == [NAME]
+    fetched = await inventory_service.fetch_fresh_inventory(http, "1", track=track)
+    assert fetched.status == "ok" and [i["name"] for i in fetched.data] == [NAME]
     assert register.await_count == int(registered)
     if registered:
         register.assert_awaited_once_with([NAME], "inventory")
@@ -47,12 +48,13 @@ async def test_inventario_que_no_es_lista(fake, http, register):
         await inventory_service.fetch_fresh_inventory(http, "1", track=True)
 
 
-async def test_inventario_410_lo_decide_quien_llama(fake, http, register):
-    # La ruta lo convierte en [] y el chat en un fallo (CAL-13): el service no se lo traga.
-    fake.on("api/inventory", status=410)
-    with pytest.raises(UpstreamError) as info:
-        await inventory_service.fetch_fresh_inventory(http, "1", track=True)
-    assert info.value.status == 410
+@pytest.mark.parametrize("status", [410, 411])
+async def test_inventario_410_es_error_sin_datos(fake, http, register, status):
+    # CAL-13: no hay inventario que leer. La ruta decide (snapshot o []) y nadie guarda el vacío.
+    fake.on("api/inventory", status=status)
+    fetched = await inventory_service.fetch_fresh_inventory(http, "1", track=True)
+    assert fetched == Fetched([], "error", f"http_{status}")
+    register.assert_not_awaited()
 
 
 # ── perfil ────────────────────────────────────────────────────────────────────
