@@ -206,10 +206,10 @@ Cada punto quita **un** `xfail(strict=True)`; el test afirma el comportamiento c
 
 ## Fase 4 — Reglas de negocio sin strings sueltos (CLEAN-17)
 
-### Tarea 4.1 — `domain/enums.py`
+### Tarea 4.1 — `domain/enums.py` — [x]
 - `Market(str, Enum)`: `STEAM, CSFLOAT, BUFF`; `TRACKED_MARKETS`, `VALID_MARKETS`, `HISTORY_MARKETS` de `domain/catalog.py` pasan a derivarse del enum (mismos valores). `WeaponCategory`, `Wear` (5 valores de `WEAR_NAMES`), `NewsCategory` (`BLOG, VALVE, HLTV, LIQUIPEDIA, ESPORTS, OTHER` con su color), `FetchStatus`, `Served`.
 
-### Tarea 4.2 — `domain/rules.py` y `domain/normalizers.py`
+### Tarea 4.2 — `domain/rules.py` y `domain/normalizers.py` — [x]
 - `git mv steam/domain/names.py steam/domain/normalizers.py` (+ `normalize_image_url` desde `item_mapper`, con `utils/urls.py` debajo). `git mv steam/liquidity.py steam/domain/liquidity.py` (`compute_liquidity(item: SteamItem)`).
 - `rules.py`: `ranking_eligible`, `plausible_ratio`, `plausible_fx_rate` (desde validators, que se queda con validación de **valor**), `diversificar`, `turnover` (desde `services/market.py:112-162`), `is_sticker_slab(item: SteamItem)` — **decide por `item_type` primero** (`"sticker slab"` normalizado) y solo si falta usa el nombre; se aplica también en `compute_trending` (hoy no: fila «Trending · sticker slabs» del mapa, CAL-14). `is_readable_news(entry: NewsEntry)` desde `news_mapper`. `news_category(feedname, feedlabel) -> NewsCategory` sustituye los 5 substrings de `news_mapper.py:60-68` (misma salida, tabla explícita + `OTHER`).
 - `weapon_category`: la tabla `WEAPON_CATEGORY` se queda como catálogo; los 8 substrings de respaldo (`"glove"`, `"knife"`, …) pasan a una tabla `WEAPON_CATEGORY_FALLBACK` explícita en `domain/catalog.py` con test; cuando `SteamItem.weapon_type` viene, gana siempre (ya es así).
@@ -354,3 +354,53 @@ Por fase, además:
   sigue funcionando vía los alias.
 - **Pendiente para la Fase 4:** `domain/enums.py` con `Market`, `Wear`, `NewsCategory`; `rules.py` /
   `normalizers.py` según el plan.
+
+### Fase 4 (CLEAN-17, commits `664aa51`..HEAD)
+- **Movido:** `steam/domain/names.py` → `steam/domain/normalizers.py`; `steam/liquidity.py` →
+  `steam/domain/liquidity.py`; `tests/test_domain_names.py` → `tests/test_domain_normalizers.py`.
+  De `domain/validators.py` a `domain/rules.py`: `plausible_ratio`, `plausible_fx_rate`,
+  `ranking_eligible` y sus constantes (`MAX_PLAUSIBLE_RATIO`, `FX_MIN/FX_MAX`, `MIN_RANKING_PRICE`,
+  `MIN_SOLD_*`). De `services/market.py` a `rules.py`: `_diversificar` → `diversificar`,
+  `_turnover` → `turnover`, `_MAX_POR_CATEGORIA/_MAX_POR_SKIN` → `MAX_POR_*`. De `mappers/news_mapper.py`
+  a `rules.py`: `is_readable_news` (con su regex y umbral). De `mappers/item_mapper.py` a
+  `normalizers.py`: `_normalize_image` → `normalize_image_url`, sobre `steam/utils/urls.py`.
+- **Nuevo:** `domain/enums.py` gana `Market`, `WeaponCategory`, `Wear`, `NewsCategory` (`str, Enum`;
+  `NewsCategory.color`); `domain/catalog.py` deriva `WEAR_NAMES`, `TRACKED_MARKETS`,
+  `HISTORY_MARKETS`, `VALID_MARKETS` (= `HISTORY_MARKETS | PASSTHROUGH_MARKETS`), `PROVIDER_IDS` y
+  `KNOWN_LOGOS` de ellos, y expone `WEAPON_CATEGORY_FALLBACK` (los 8 substrings de respaldo como
+  tabla ordenada). `rules.is_sticker_slab(item: SteamItem)`, `rules.news_category(feedname,
+  feedlabel) -> NewsCategory` con `NEWS_CATEGORY_MARKS`; `normalizers.has_slab_mark`, `name_key`,
+  `names_match`; `steam/utils/{__init__,urls}.py`; `tests/test_domain_enums.py`,
+  `tests/test_domain_rules.py`; capa `utils` en la guardia AST de `tests/test_steam_layers.py`.
+- **Igual:** el contrato JSON de todas las rutas (`tests/test_steam_contract_*` sin tocar); todos los
+  valores: `WEAR_NAMES`, los conjuntos de mercados, las categorías de arma, los colores de las
+  noticias, los umbrales de plausibilidad y de rankings, las cuotas de diversificación. Fuera de
+  `domain/` siguen viajando `str` planos (`.value`): en Python 3.11 `f"{Market.BUFF}"` da
+  `Market.BUFF`, y una URL o una clave de caché cambiaría en silencio (test
+  `test_los_derivados_son_str_planos_no_miembros`). `FetchStatus` y `Served` siguen como `Literal`.
+- **Cambiado:** el trending filtra sticker slabs como ya hacían movers y búsqueda (fila «Trending ·
+  sticker slabs» del mapa, CAL-14: resuelto). `is_sticker_slab` decide por `item_type` antes que por el
+  nombre.
+- **Riesgo reducido:** `grep -rnE "in name|startswith\(|\.lower\(\) ==" steam/services steam/mappers`
+  → **0**; cada decisión sobre un ítem, un ranking, una tasa o una noticia tiene un nombre en
+  `domain/rules.py` y un test en `tests/test_domain_rules.py`; los substrings de categoría y de fuente
+  de noticia son tablas que se leen enteras, no cadenas de `if`; la guardia de prefijos cubre además
+  «sticker slab», `"glove"`, `"knife"` y `"bayonet"`; `utils/` no puede importar nada interno (AST).
+- **Prueba:** DoD en verde en los dos commits (1013 tests, cobertura 91 %; ruff 71, mypy 56, sin
+  cambios, sin `--bless`). Smoke: `/` 200, `/auth/dev-token` 404; `/news/cs2` no se pudo comprobar
+  end-to-end desde la sesión (la red de la sesión bloquea `api.steampowered.com`: 502 vía
+  `http_error_for`, que es la traducción esperada).
+- **Desvíos respecto al plan:** (1) `is_sticker_slab(item)` decide por `item_type` **primero**, pero
+  el nombre sigue siendo respaldo siempre que el itemtype no diga «sticker slab», no solo cuando
+  falta: el contrato de los ticks (`tests/test_steam_contract_ticks.py`, no editable) fija un slab
+  con `itemtype: "sticker"` y nombre «Sticker Slab | …» que los movers tienen que dejar fuera.
+  (2) `VALID_MARKETS` no puede derivarse solo de `Market` (tiene 12 mercados y el enum 3): es
+  `HISTORY_MARKETS | PASSTHROUGH_MARKETS`, con los 10 sin cliente propio en una constante aparte;
+  el conjunto resultante es idéntico. (3) `news_category` mira `feedlabel` **solo** cuando no hay
+  `feedname` (antes, sin feedname, el color era siempre el ámbar); con feedname la salida es la de
+  antes. (4) `_clean_news_content` sigue en `news_mapper` (a `utils/strings.py` en la Fase 6.1,
+  con `rag/` y `notifications/` importándolo de allí). (5) `WEAPON_CATEGORY` apunta a miembros de
+  `WeaponCategory`, pero `weapon_category()` devuelve `.value` por la misma razón del punto «Igual».
+- **Pendiente para la Fase 5:** `canonical_price` y `price_capture._lookup_item` siguen sobre el dict
+  crudo de `/item` (5.4); `stores.py` conserva los alias a las cachés (Fase 6); `capture_trending`
+  sigue purgando sin fuentes (decisión del dueño del contrato).

@@ -3,10 +3,10 @@ construye con él cuando /items no responde."""
 import logging
 from collections.abc import Sequence
 
-from steam.domain.models import MoverItem, TopMover
 from steam.domain.catalog import weapon_category
-from steam.domain.names import is_sticker_slab
-from steam.mappers.item_mapper import _normalize_image
+from steam.domain.models import MoverItem, TopMover
+from steam.domain.normalizers import normalize_image_url
+from steam.domain.rules import is_sticker_slab
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -31,7 +31,7 @@ def _map_topmovers_item(mover: TopMover) -> MoverItem:
         "weaponType":     item.weapon_type or weapon_category(item.item_type),
         "itemName":       item.item_name,
         "itemType":       item.item_type,
-        "image":          _normalize_image(item.image or ""),
+        "image":          normalize_image_url(item.image),
         "rarity":         item.rarity if item.rarity is not None else "Base Grade",
         "rarityColor":    item.color if item.color is not None else "b0c3d9",
         "borderColor":    item.border_color if item.border_color is not None else "b0c3d9",
@@ -80,10 +80,8 @@ def _build_movers_from_topmovers(gainers: Sequence[TopMover],
                                  losers: Sequence[TopMover]) -> dict[str, list[MoverItem]] | None:
     if not gainers and not losers:
         return None
-    def _is_slab(mover: TopMover) -> bool:
-        return is_sticker_slab(mover.item.market_name or mover.item.market_hash_name or "")
-    hot  = [_map_topmovers_item(g) for g in gainers if not _is_slab(g)][:_MOVERS_LIMIT]
-    cold = [_map_topmovers_item(m) for m in losers  if not _is_slab(m)][:_MOVERS_LIMIT]
+    hot  = [_map_topmovers_item(g) for g in gainers if not is_sticker_slab(g.item)][:_MOVERS_LIMIT]
+    cold = [_map_topmovers_item(m) for m in losers  if not is_sticker_slab(m.item)][:_MOVERS_LIMIT]
     logger.info("[market-movers] topmovers raw: gainers=%d losers=%d | after_filter: hot=%d cold=%d",
                 len(gainers), len(losers), len(hot), len(cold))
     hot  = sorted(hot,  key=lambda x: x["_change24h"], reverse=True)

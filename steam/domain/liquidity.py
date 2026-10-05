@@ -21,7 +21,7 @@ _MAX_HAIRCUT = 0.50            # si el bid está al 50% de la vitrina, "vender r
 _BUYORDER_SATURATION = 5000.0
 
 # Un bid por encima del ask es imposible en un mercado real: es basura de la API.
-# Mismo espíritu que MAX_PLAUSIBLE_RATIO (steam/domain/validators.py) en _inline_delta.
+# Mismo espíritu que MAX_PLAUSIBLE_RATIO (steam/domain/rules.py) en _inline_delta.
 _MAX_BID_OVER_ASK = 1.05
 
 # Si los componentes disponibles no cubren al menos esta fracción del peso total,

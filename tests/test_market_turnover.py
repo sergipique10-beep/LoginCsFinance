@@ -1,4 +1,4 @@
-"""Criterio de relevancia de los rankings (steam/routes/market.py).
+"""Criterio de relevancia de los rankings (steam/domain/rules.py:turnover).
 
 Ordenar por unidades vendidas premia lo barato por construcción: una Galil de
 $0.10 vende más piezas que una AK de $28 aunque mueva 17x menos dinero. El
@@ -6,8 +6,8 @@ resultado medido en producción: 0 items por encima de $10 en trending, y el 61%
 por debajo de $0.50.
 """
 
-from steam.domain.validators import MIN_RANKING_PRICE
-from steam.services.market import _turnover
+from steam.domain.rules import MIN_RANKING_PRICE
+from steam.domain.rules import turnover as _turnover
 
 
 def _item(precio: float, vendidas: int) -> dict:

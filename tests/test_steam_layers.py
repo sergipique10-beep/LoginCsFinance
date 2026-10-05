@@ -56,6 +56,9 @@ FORBIDDEN = {
                  "steam.domain", "stores"),
     "cache":    ("steam.mappers", "steam.services", "steam.clients", "steam.api", "steam.adapters",
                  "steam.routes", "steam.domain"),
+    # CLEAN-17: utils/ no importa nada interno (domain/ sí puede importar de utils/).
+    "utils":    ("steam.mappers", "steam.services", "steam.clients", "steam.api", "steam.adapters",
+                 "steam.cache", "steam.routes", "steam.domain", "steam.errors", "stores", "settings"),
 }
 
 

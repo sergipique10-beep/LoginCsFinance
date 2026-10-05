@@ -160,7 +160,7 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
 async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict] | dict:
     """Busca skins por nombre y devuelve resultados relevantes."""
     from stores import _search_cache
-    from steam.domain.names import is_sticker_slab
+    from steam.domain.rules import is_sticker_slab
     from steam.adapters.steam_adapter import adapt_items
     from steam.mappers.item_mapper import _map_item
     from steam.services import catalog, pricing
@@ -194,8 +194,7 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict] |
     catalog.cache_images(items)
     result = [
         _map_item(item) for item in items
-        if (item.price_latest_sell or 0) > 0
-        and not is_sticker_slab(item.market_name or item.market_hash_name or "")
+        if (item.price_latest_sell or 0) > 0 and not is_sticker_slab(item)
     ][:10]
 
     await catalog.fetch_static_images(client)

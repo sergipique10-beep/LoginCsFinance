@@ -9,7 +9,8 @@ from steam.adapters.news_adapter import adapt_news
 from steam.api import news_client
 from steam.errors.handling import DEGRADABLE, log_degraded, reason_of
 from steam.domain.models import Fetched, NewsItem
-from steam.mappers.news_mapper import _map_news_item, is_readable_news
+from steam.domain.rules import is_readable_news
+from steam.mappers.news_mapper import _map_news_item
 
 # Cuántas noticias se piden de más para poder descartar las no latinas (UX-05),
 # y tope duro para que un `count` alto no dispare una petición enorme a Steam.

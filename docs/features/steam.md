@@ -29,14 +29,15 @@ files:
   - steam/domain/__init__.py
   - steam/domain/catalog.py
   - steam/domain/enums.py
+  - steam/domain/liquidity.py
   - steam/domain/models.py
-  - steam/domain/names.py
+  - steam/domain/normalizers.py
+  - steam/domain/rules.py
   - steam/domain/validators.py
   - steam/errors/__init__.py
   - steam/errors/domain_errors.py
   - steam/errors/handling.py
   - steam/inventory_snapshot_repo.py
-  - steam/liquidity.py
   - steam/mappers/__init__.py
   - steam/mappers/item_mapper.py
   - steam/mappers/market_index_mapper.py
@@ -62,6 +63,8 @@ files:
   - steam/services/pricing.py
   - steam/services/profile.py
   - steam/services/providers.py
+  - steam/utils/__init__.py
+  - steam/utils/urls.py
 ---
 
 # Módulo `steam`
@@ -130,7 +133,7 @@ por campo y tick, UX-46).
 | Movers / trending | topmovers cacheado caducado (`TOPMOVERS_RAW_TTL`) | no se usa: se pide market-index; si también falla, `error` | `kept_previous` en el tick | resuelto (CLEAN-15) | `topmovers` · motivo del respaldo (`served=empty`); `movers`/`trending` · `topmovers_stale` |
 | `movers-tick` | ninguna fuente | conserva el snapshot anterior | `kept_previous` | conservar (CAL-10) | — |
 | `trending-tick` | ninguna fuente | no inserta pero **sí purga** (`purged`) | `count: 0` | lo fija el contrato (`test_trending_tick_sin_fuentes_no_inserta_pero_purga`); el plan de CLEAN-15 proponía no purgar con `status="error"`: decisión pendiente del dueño del contrato | — |
-| Trending | sticker slabs | no se filtran (sí en movers y búsqueda) | — | CAL-14 | — |
+| Trending | sticker slabs | se filtran, como en movers y búsqueda (`rules.is_sticker_slab(item)`: por `item_type` y, si no lo dice, por el nombre) | — | resuelto (CLEAN-17; CAL-14) | — |
 | Búsqueda / precio | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `search`/`item_price` · `quota` (solo stale) |
 | Búsqueda / precio | 429 | 503 + `Retry-After` | `code: upstream_rate_limit` | resuelto (CLEAN-15) | — |
 | Búsqueda | caché compartida con el chat | clave con namespace (`market:`/`chat:`, `search_cache_key`): cada uno la suya | — | resuelto (CLEAN-15) | — |

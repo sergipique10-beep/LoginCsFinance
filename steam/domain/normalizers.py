@@ -1,5 +1,7 @@
-"""Reglas que interpretan nombres de ítem de CS2 (CLEAN-10). Funciones puras: cada
-prefijo («StatTrak™ », «★ », «Souvenir ») y la marca de slab viven solo aquí.
+"""Normalizadores de nombres e imágenes de ítem de CS2 (CLEAN-10, CLEAN-17; ex names.py).
+Funciones puras: cada prefijo («StatTrak™ », «★ », «Souvenir ») y la marca de slab
+viven solo aquí (guardia en tests/test_domain_normalizers.py). Las REGLAS que deciden
+algo sobre un ítem (¿es un slab?, ¿entra en el ranking?) están en `domain/rules.py`.
 
 Invariante (CLAUDE.md): el `name` de una tarjeta sale de `markethashname` antes que de
 `marketname`, porque el marketname puede venir localizado. Estas reglas reciben ese name.
@@ -7,11 +9,14 @@ Invariante (CLAUDE.md): el `name` de una tarjeta sale de `markethashname` antes 
 from collections.abc import Sequence
 
 from steam.domain.catalog import WEAR_NAMES
+from steam.utils.urls import is_http_url, steam_cdn_url
 
 STATTRAK = "StatTrak™ "
 STAR = "★ "
 SOUVENIR = "Souvenir "
-_SLAB = "sticker slab"
+# Marca de los sticker slabs, en minúsculas: aparece como `itemtype` («Sticker Slab») y
+# como prefijo del nombre («Sticker Slab | Crown (Foil)»). La decisión está en rules.
+SLAB_MARK = "sticker slab"
 
 
 def image_lookup_candidates(name: str, item_type: str | None) -> list[str]:
@@ -50,10 +55,38 @@ def without_souvenir(name: str) -> str | None:
     return name[len(SOUVENIR):] if name.startswith(SOUVENIR) else None
 
 
-def is_sticker_slab(name: str) -> bool:
-    return _SLAB in name.lower()
+def has_slab_mark(text: str | None) -> bool:
+    """¿Lleva la marca de slab (en un `itemtype` o en un nombre)? Sin decidir nada más."""
+    return SLAB_MARK in (text or "").lower()
 
 
 def skin_base(name: str) -> str:
     """Nombre sin el desgaste: 'AK-47 | Crane Flight (Field-Tested)' → sin '(...)'."""
     return name.split(" (")[0].strip().lower()
+
+
+def name_key(name: str) -> str:
+    """Forma comparable de un nombre: la que usan las claves de caché y el match exacto
+    de /market/price (steamwebapi /items?search es fuzzy; el front manda el
+    markethashname canónico, en inglés, y se compara sin distinguir mayúsculas)."""
+    return name.lower()
+
+
+def names_match(a: str, b: str) -> bool:
+    return name_key(a) == name_key(b)
+
+
+def normalize_image_url(raw: str | None) -> str:
+    """Valor `image` de steamwebapi → URL absoluta del CDN de Steam, o "".
+
+    /items e /inventory devuelven la URL completa (community.akamai.steamstatic.com):
+    pasa tal cual. Las otras ramas son defensivas (ruta relativa, hash pelado) para
+    endpoints menos documentados, como los topmovers de /market-index. La cadena
+    vacía se devuelve vacía para que el `@if(imageUrl())` del front no pinte una
+    imagen rota.
+    """
+    if not raw:
+        return ""
+    if is_http_url(raw):
+        return raw
+    return steam_cdn_url(raw)

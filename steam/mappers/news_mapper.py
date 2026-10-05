@@ -1,9 +1,11 @@
-"""Mappers de Steam News: limpieza del cuerpo, filtro de alfabeto (UX-05) y `NewsItem`."""
+"""Mappers de Steam News: limpieza del cuerpo y `NewsItem`. El filtro de alfabeto (UX-05,
+`is_readable_news`) y la categoría por fuente (`news_category`) están en `domain/rules.py`."""
 import html
 import re
 from datetime import datetime, timezone
 
 from steam.domain.models import NewsEntry, NewsItem
+from steam.domain.rules import news_category
 
 
 def _clean_news_content(raw: str, max_chars: int = 220) -> str:
@@ -20,52 +22,9 @@ def _clean_news_content(raw: str, max_chars: int = 220) -> str:
     return text
 
 
-# UX-05: la Steam News API (appid 730) no admite filtro de idioma — devuelve lo
-# que publica cada partner, y los medios rusos y chinos publican en su idioma.
-# `feedlabel` identifica la fuente, no el idioma, así que no sirve para filtrar.
-# Se mira el texto: si una fracción apreciable del titular es cirílico o CJK, la
-# noticia es ilegible para el usuario objetivo y se descarta.
-_NON_LATIN_RE = re.compile(
-    r"[Ѐ-ӿ"      # cirílico
-    r"一-鿿"       # han (chino / kanji)
-    r"぀-ヿ"       # kana japonés
-    r"가-힯]"      # hangul coreano
-)
-
-# Fracción de caracteres no latinos por encima de la cual se descarta. 0.2 deja
-# pasar un titular en inglés con una palabra o un nombre propio en otro alfabeto,
-# y descarta el que está escrito entero en él.
-_NON_LATIN_THRESHOLD = 0.2
-
-
-def is_readable_news(entry: NewsEntry) -> bool:
-    """False si el titular está mayoritariamente en un alfabeto no latino.
-
-    Se mira solo el titular: es lo que el usuario lee en la lista, y el cuerpo
-    puede traer markup y nombres propios que ensucian la proporción.
-    """
-    title = (entry.title or "").strip()
-    if not title:
-        return True  # sin titular no hay nada que juzgar; que decida el resto
-
-    letters = [c for c in title if c.isalpha()]
-    if not letters:
-        return True  # solo números o símbolos: no es un idioma
-
-    non_latin = sum(1 for c in letters if _NON_LATIN_RE.match(c))
-    return (non_latin / len(letters)) <= _NON_LATIN_THRESHOLD
-
-
 def _map_news_item(entry: NewsEntry, index: int, image_url: str = "") -> NewsItem:
-    feedname  = (entry.feed_name or "").lower()
     feedlabel = entry.feed_label if entry.feed_label is not None else "NEWS"
-
-    if "blog" in feedname or "valve" in feedname:
-        category_color = "4a9eff"
-    elif any(x in feedname for x in ("hltv", "liquipedia", "esport")):
-        category_color = "8847ff"
-    else:
-        category_color = "f0c040"
+    category_color = news_category(entry.feed_name, entry.feed_label).color
 
     try:
         date_str = datetime.fromtimestamp(entry.date, tz=timezone.utc).strftime("%Y-%m-%d") if entry.date is not None else ""
