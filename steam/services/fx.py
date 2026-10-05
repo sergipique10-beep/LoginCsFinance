@@ -4,7 +4,7 @@ import time
 
 import httpx
 
-from stores import _fx_cache
+from steam.cache.market_cache import _fx_cache
 from steam.adapters.fx_adapter import adapt_rates
 from steam.api import fx_client
 from steam.domain.validators import plausible_fx_rate

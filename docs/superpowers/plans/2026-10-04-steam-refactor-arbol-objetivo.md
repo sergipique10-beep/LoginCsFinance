@@ -185,13 +185,13 @@ Cada punto quita **un** `xfail(strict=True)`; el test afirma el comportamiento c
 
 ## Fase 3 — Caché encapsulada (CLEAN-16)
 
-### Tarea 3.1 — `steam/cache/base_cache.py` y `policy.py`
+### Tarea 3.1 — `steam/cache/base_cache.py` y `policy.py` — [x]
 - Mover `TtlCache` desde `stores.py` (`git mv` no aplica: es parte de un fichero; se corta y `stores.py` queda con auth + `_leetify_cache` + un `from steam.cache.base_cache import TtlCache  # compat` que se retira en Fase 6).
 - `CacheState = Enum("fresh","stale","empty","error")`; `TtlCache.lookup(key, now) -> tuple[CacheState, Any]`: `fresh` si en TTL, `empty` si no hay entrada, `stale` si hay entrada caducada, `error` si `in_backoff`. Los `fresh/stale/put/mark_failed/in_backoff` actuales se conservan (son la API que CLEAN-09 fijó).
 - `policy.py`: `@dataclass(frozen=True) CachePolicy(ttl, empty_ttl=None, fail_ttl=0, max_entries=None)` y las constantes (`PROFILE`, `INVENTORY`, `MARKET_INDEX`, `ITEM_HISTORY`, `SEARCH`, …) **con los valores actuales de `stores.py`**, una por tipo de dato, cada una con su motivo (el comentario que ya tienen). `TtlCache.from_policy(policy)`. `invalidate(key)` y `invalidate_prefix(prefix)` (política por clave / por fuente).
 - Tests `tests/test_cache_policy.py`: expiración, `empty_ttl`, stale, backoff, `max_entries`, `lookup()` devuelve el estado correcto, `invalidate_prefix`, `stats()`.
 
-### Tarea 3.2 — Las cachés por dominio
+### Tarea 3.2 — Las cachés por dominio — [x]
 - `history_cache.py`, `market_cache.py`, `user_cache.py`: instancias `TtlCache.from_policy(...)` con los **mismos nombres** (`_item_history_cache`, `_search_cache`…) para que el cambio en services/tests sea solo el import.
 - `image_cache.py`: `class CatalogCache` que sustituye `_item_image_cache`, `_item_rarity_cache` y `_image_cache_meta`: `image_for(candidates)`, `rarity_for(name)`, `register(keys, image, rarity)`, `mark_loaded(n)`, `mark_failed()`, `is_fresh_or_backoff()`, `__len__`, `clear()`. `catalog_service` deja de indexar dicts.
 - `_inventory_refresh_cooldown` → `TtlCache(INVENTORY_REFRESH_COOLDOWN)` en `user_cache.py` (hoy dict con `monotonic` a mano en `routes/items.py:206,219`).
@@ -333,3 +333,24 @@ Por fase, además:
 - **Pendiente para la Fase 3:** `Fetched.status` sigue sin exponerse al front (UX-46); las cachés se
   siguen tocando desde `stores` (CLEAN-16 las encapsula); `_news_cache`, `_profile_cache` y compañía siguen
   siendo `TtlCache` de módulo.
+
+### Fase 3 (CLEAN-16, commits `9acba67`..HEAD)
+- **Movido:** `TtlCache` de `stores.py` → `steam/cache/base_cache.py`; `tests/test_stores_ttl_cache.py` →
+  `tests/test_cache_policy.py`. **Nuevo:** `steam/cache/{policy,history_cache,market_cache,user_cache,image_cache}.py`,
+  `CacheState`, `TtlCache.lookup/invalidate/invalidate_prefix/from_policy`, `CatalogCache`, `ALL_CACHES` /
+  `clear_all()` / `stats_all()`, línea `[steam-cache]` por caché en cada cap-tick.
+- **Igual:** todos los TTL (ahora en `policy.py`, cada uno con su motivo); los nombres de las instancias; el contrato
+  JSON; `TtlCache` sigue siendo `dict` de `(valor, ts)` (los tests que envejecen entradas a mano no cambian).
+- **Riesgo reducido:** los TTL tienen una sola fuente; el catálogo ya no son tres dicts sueltos sino una clase con
+  `is_fresh_or_backoff`; el cooldown del refresh ya no compara `monotonic` a mano; `conftest` limpia las cachés por
+  el registro (`clear_all`), no recorriendo `vars(stores)`; `steam/cache` no importa nada interno (guardia AST).
+- **Prueba:** DoD en verde (952 tests, cobertura 90,9 %; ruff 71, mypy 56 sin cambios).
+- **Desvíos:** (1) `stores.py` conserva **alias** a las mismas instancias (`_search_cache`,
+  `_item_image_cache = catalog_cache.images`…) además del `TtlCache` compat: así `from stores import _x` sigue
+  valiendo en tools/ y en ~15 tests y la Fase 6 los retira de golpe. Por eso `grep -rn "_cache" stores.py` aún
+  lista los alias, no solo `_leetify_cache` (criterio de salida pendiente hasta la Fase 6). (2) `CatalogCache`
+  expone `images` / `rarities` como dicts (y `steam/cache/image_cache.py` es el único `dict[str, str] = {}` que
+  queda): es lo que permite que los tests sigan leyéndolos. (3) `tests/test_image_cache.py` no se ha adaptado:
+  sigue funcionando vía los alias.
+- **Pendiente para la Fase 4:** `domain/enums.py` con `Market`, `Wear`, `NewsCategory`; `rules.py` /
+  `normalizers.py` según el plan.

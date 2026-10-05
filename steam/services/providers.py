@@ -5,7 +5,7 @@ import time
 
 import httpx
 
-from stores import _market_providers_cache
+from steam.cache.market_cache import _market_providers_cache
 from steam.adapters.provider_adapter import adapt_markets
 from steam.api import steam_client
 from steam.domain import catalog as domain_catalog

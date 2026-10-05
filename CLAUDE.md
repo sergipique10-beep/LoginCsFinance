@@ -164,6 +164,20 @@ LoginCsFinance/
       provider_mapper.py # _build_providers(list[ProviderInfo]) → steam, csfloat, buff
       row_mapper.py   #   _row_to_item, _to_row (filas de market_trending / market_movers)
     liquidity.py    # Liquidity Score (0-100): compute_liquidity(SteamItem). Puro.
+    cache/          # Caché con política explícita (CLEAN-16). No importa nada de steam/ salvo
+                    #   errors. stores.py reexporta las instancias por compatibilidad (Fase 6)
+      base_cache.py   # TtlCache (ex stores.py) + CacheState + lookup(key, now) → (estado, valor),
+                    #   invalidate / invalidate_prefix, from_policy. Sigue siendo dict de (valor, ts)
+      policy.py       # CachePolicy(ttl, empty_ttl, fail_ttl, max_entries) y UNA constante por tipo
+                    #   de dato con su motivo: la fuente de los TTL (stores.py los reexporta)
+      history_cache.py / market_cache.py / user_cache.py # instancias con los nombres de siempre
+                    #   (_item_history_cache, _search_cache, _profile_cache…); el cooldown del
+                    #   refresh de inventario es una TtlCache más
+      image_cache.py  # CatalogCache (catalog_cache): images + rarities + meta/backoff (CAL-08),
+                    #   register / image_for / rarity_for / mark_loaded / mark_failed /
+                    #   is_fresh_or_backoff. Sustituye los tres dicts planos
+      __init__.py     # ALL_CACHES, clear_all() (conftest), stats_all() (línea [steam-cache]
+                    #   por caché en cada cap-tick)
     services/       # Orquestación, una responsabilidad por módulo (CLEAN-11). Sin FastAPI:
                     #   lanzan los errores de steam/errors/ y las rutas los traducen a HTTP.
                     #   Todo service con camino de degradación devuelve Fetched[T] (CLEAN-15:
@@ -226,6 +240,7 @@ steam/domain/models.py  ← steam/domain/enums
 steam/errors/handling.py ← steam/errors/domain_errors, steam/domain/{enums,models} (+ fastapi)
 steam/domain/*          ← steam/domain, steam/errors (catalog → models, names → catalog)
 steam/liquidity.py      ← steam/domain/models
+steam/cache/*           ← nothing internal (stores.py importa de aquí, nunca al revés)
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
 steam/api/*             ← steam/errors, settings (solo steam_client)
@@ -368,8 +383,11 @@ Dos invariantes del troceado, ambos load-bearing:
 
 ## In-memory stores (single-worker only)
 
-All stores live in `stores.py`. **TODO:** replace with Redis before running multiple workers.
-Desde CLEAN-09 las cachés de `steam/` son `TtlCache` (subclase de `dict` de `(valor, ts)`):
+Los stores de auth y `_leetify_cache` viven en `stores.py`; las cachés de `steam/` viven en
+`steam/cache/` (CLEAN-16) y `stores.py` solo las reexporta por compatibilidad hasta la Fase 6.
+**TODO:** replace with Redis before running multiple workers.
+Desde CLEAN-09 las cachés de `steam/` son `TtlCache` (subclase de `dict` de `(valor, ts)`,
+hoy en `steam/cache/base_cache.py`, con su `CachePolicy` en `steam/cache/policy.py`):
 migrar a Redis (CAL-04) es cambiar esa clase. Nada en `steam/` ni `tools/` compara `cached[1]`
 a mano (guardia en `tests/test_stores_ttl_cache.py`): se usa `fresh(key, now, empty_ttl=)`,
 `stale(key)` (stale-on-error), `put`, y `mark_failed` / `in_backoff` para el caché negativo,
@@ -386,10 +404,10 @@ aparte del último dato bueno (PERF-17). `stats()` da `hits`, `misses` y `stale_
 | `_inventory_cache` | steam_id → items | `TtlCache` 23 h |
 | `_market_index_cache` | tf → índice | `TtlCache` 23 h; stale ante 402 |
 | `_item_history_cache` | `name:interval:market:days` / `name:csfloat:35d` → puntos | `TtlCache` 23 h; el enriquecimiento pasa `empty_ttl=HISTORY_EMPTY_TTL` (5 min) |
-| `_topmovers_raw_cache` | `"latest"` → (gainers, losers) | `TtlCache`; solo se lee como stale (darle TTL es CAL-12) |
+| `_topmovers_raw_cache` | `"latest"` → (gainers, losers) | `TtlCache` 23 h (`TOPMOVERS_RAW`); caducado no sirve de respaldo (CAL-12) |
 | `_search_cache` / `_item_price_cache` / `_market_prices_cache` | clave del usuario → resultado | `TtlCache` 5 min con `max_entries` 200 / 500 / 100 (expulsa la más antigua al escribir) |
 | `_market_lookup_cache` / `_market_providers_cache` | market / `"providers"` → precios / lista | `TtlCache` 23 h, backoff `LOOKUP_FAIL_TTL` (5 min) tras un fallo |
-| `_image_cache_meta` | `"catalog"` → nº de entradas | `TtlCache` 23 h; fallo total → backoff `IMAGE_FAIL_TTL` (CAL-08) |
+| `catalog_cache` (`CatalogCache`) | images / rarities / meta `"catalog"` → nº de entradas | `TtlCache` 23 h; fallo total → backoff `IMAGE_FAIL_TTL` (CAL-08). Alias compat: `_item_image_cache`, `_item_rarity_cache`, `_image_cache_meta` |
 | `_news_cache` / `_fx_cache` | count / `"usdeur"` | `TtlCache` 30 min / 24 h |
 
 ## Rankings de mercado (`market_trending` / `market_movers`)

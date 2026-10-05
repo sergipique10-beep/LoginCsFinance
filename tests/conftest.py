@@ -126,12 +126,14 @@ def client(monkeypatch):
 def steam_api(client, monkeypatch):
     """CAL-09: steamwebapi, ByMykel, frankfurter y Steam News simulados por HTTP, con
     todas las cachés en memoria vacías y el `_history_limiter` sin esperas."""
+    import steam.cache
     import stores
     from steam.api import steam_client
     from tests.steam_fake import FakeUpstream
 
     def _clear_caches():
-        for name, value in vars(stores).items():
+        steam.cache.clear_all()   # CLEAN-16: las cachés de steam/ en un solo sitio
+        for name, value in vars(stores).items():   # auth, leetify y los alias compat
             if name.startswith("_") and not name.startswith("__") and isinstance(value, dict):
                 value.clear()
 
