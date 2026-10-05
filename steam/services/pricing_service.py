@@ -4,7 +4,7 @@ sus deltas (`enrich_prices`) y el lookup de CSFloat/Buff (`enrich_market_prices`
 import asyncio
 import logging
 import time
-from datetime import date, timedelta
+from datetime import timedelta
 from functools import partial
 
 import httpx
@@ -20,6 +20,8 @@ from steam.errors.handling import DEGRADABLE, degraded, reason_of
 from steam.domain.models import Fetched, HistoryPoint
 from steam.errors import HistoryBusy, QuotaExhausted, RateLimited, UnexpectedPayload
 from steam.mappers.item_mapper import _delta_from_history
+from steam.utils import dates
+from steam.utils.strings import lower_key
 
 # El adapter del histórico de cada mercado con histórico (`HISTORY_MARKETS`).
 _HISTORY_ADAPTERS = {"csfloat": csfloat_adapter.adapt_history, "buff": buff_adapter.adapt_history}
@@ -52,7 +54,7 @@ async def fetch_history_for_item(
             # Sin cachear: un vacío "por saturación" no es un dato.
             raise HistoryBusy(name) from None
     now = time.monotonic()  # limiter may have blocked; refresh for cache stamps
-    today = date.today()
+    today = dates.today()
     try:
         raw = await csfloat_client.history(
             client, name, (today - timedelta(days=35)).isoformat(), today.isoformat(), timeout=30.0,
@@ -154,7 +156,7 @@ async def get_item_history(client: httpx.AsyncClient, name: str, interval: str, 
     daba un `200 []` que el front pintaba como «sin histórico»). Un cuerpo ilegible da
     `[]` sin cachear.
     """
-    market = market.lower() if market else None
+    market = lower_key(market) or None
     days = max(1, min(days, 365))  # el frontend pide por timeframe; acotar el rango
     cache_key = f"{name}:{interval}:{market or 'steam'}:{days}"
     now = time.monotonic()
@@ -165,7 +167,7 @@ async def get_item_history(client: httpx.AsyncClient, name: str, interval: str, 
     # Buff163/CSFloat usan el endpoint por-market (fechas + quantity); Steam usa la
     # ruta legacy (interval + sold). Distintos hosts, params y forma de respuesta.
     if market in domain_catalog.HISTORY_MARKETS:
-        today = date.today()
+        today = dates.today()
         fetch = partial(
             MARKET_CLIENTS[market].history,
             client, name, (today - timedelta(days=days)).isoformat(), today.isoformat(),

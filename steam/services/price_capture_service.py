@@ -9,7 +9,6 @@ por skin no aborta la corrida.
 """
 import json
 import logging
-from datetime import date
 from pathlib import Path
 
 import httpx
@@ -22,6 +21,7 @@ from steam.domain.models import SteamItem
 from steam.domain.rules import canonical_price
 from steam.errors import QuotaExhausted
 from steam.errors.handling import DEGRADABLE, log_degraded, reason_of
+from steam.utils import dates
 from steam import price_history_repo as repo
 
 logger = logging.getLogger("uvicorn.error")
@@ -64,7 +64,7 @@ async def capture(client: httpx.AsyncClient) -> dict:
 
     Best-effort por skin: un fallo de lookup no aborta el lote.
     """
-    today = date.today().isoformat()
+    today = dates.today().isoformat()
 
     # PERF-11: presupuesto diario. Lo gastado hoy se lee de la BD, así que el
     # tope aguanta aunque el workflow haga varios lotes o Render reinicie.

@@ -29,6 +29,7 @@ from steam.mappers.market_index_mapper import _map_market_index_point
 from steam.services import catalog_service, pricing_service
 
 from steam.services.rankings_service import _MOVERS_SELECT
+from steam.utils.strings import lower_key
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -51,7 +52,7 @@ def search_cache_key(namespace: str, query: str) -> str:
     (`chat`) piden `select` distintos: el del chat no trae los campos del Liquidity
     Score, así que compartir clave dejaba a /market/items sirviendo hasta 10 items sin
     liquidez durante 5 min."""
-    return f"{namespace}:{query.lower()}"
+    return f"{namespace}:{lower_key(query)}"
 
 
 def _stale_or_raise(flow: str, stale: _T | None, exc: QuotaExhausted) -> Fetched[_T]:
@@ -94,7 +95,7 @@ async def search_market(client: httpx.AsyncClient, query: str) -> Fetched[list[S
 async def get_item_full(client: httpx.AsyncClient, query: str) -> Fetched[SkinCard | None]:
     """GET /market/price: un item con el shape completo de _map_item (liquidez y
     volumen incluidos), o None si la búsqueda no trae el nombre exacto."""
-    cache_key = query.lower()
+    cache_key = lower_key(query)
     now = time.monotonic()
     hit = _item_price_cache.fresh(cache_key, now)
     if hit is not None:
@@ -177,7 +178,7 @@ async def get_market_index(client: httpx.AsyncClient, tf: str) -> Fetched[dict]:
 async def get_market_prices(client: httpx.AsyncClient, market: str, name: str | None,
                             currency: str | None) -> Fetched[Any]:
     """GET /market/prices: passthrough de /market/{market}/prices, caché de 5 min."""
-    cache_key = f"{market}:{(name or '').lower()}:{(currency or 'usd').lower()}"
+    cache_key = f"{market}:{lower_key(name)}:{lower_key(currency) or 'usd'}"
     now = time.monotonic()
     hit = _market_prices_cache.fresh(cache_key, now)
     if hit is not None:

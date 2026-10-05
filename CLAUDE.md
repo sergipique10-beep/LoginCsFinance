@@ -173,13 +173,16 @@ LoginCsFinance/
                     #   _resolve_phase (la imagen la normaliza domain/normalizers)
       movers_mapper.py #  _map_topmovers_item(TopMover), _MOVERS_LIMIT (el respaldo hot/cold está en rankings_service)
       market_index_mapper.py # _map_market_index_point(IndexPoint)
-      news_mapper.py  #   _map_news_item(NewsEntry) (color vía rules.news_category),
-                    #   _clean_news_content (lo importan rag/ y notifications/; a utils/ en la Fase 6)
+      news_mapper.py  #   _map_news_item(NewsEntry) (color vía rules.news_category); reexporta
+                    #   _clean_news_content = utils.strings.clean_news_content para rag/ y notifications/
       profile_mapper.py #  _map_profile(ProfileData | None, steam_id)
       provider_mapper.py # _build_providers(list[ProviderInfo]) → steam, csfloat, buff
       row_mapper.py   #   _row_to_item, _to_row (filas de market_trending / market_movers)
-    utils/          # Sin dependencias internas (CLEAN-17 abre el paquete; la Fase 6 trae strings y dates)
+    utils/          # Sin dependencias internas (CLEAN-17/19; guardia AST en tests/test_steam_layers.py)
       urls.py         # STEAM_CDN, is_http_url, steam_cdn_url
+      strings.py      # clean_news_content (news_mapper lo reexporta como _clean_news_content para
+                    #   rag/ y notifications/), lower_key (claves de caché)
+      dates.py        # today() (inyectable en tests), iso_day(timestamp), hour_floor(dt)
     cache/          # Caché con política explícita (CLEAN-16). No importa nada de steam/ salvo
                     #   errors. stores.py reexporta las instancias por compatibilidad (Fase 6)
       base_cache.py   # TtlCache (ex stores.py) + CacheState + lookup(key, now) → (estado, valor),
@@ -274,8 +277,8 @@ steam/cache/*           ← nothing internal (stores.py importa de aquí, nunca 
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
 steam/api/*             ← steam/errors, settings (solo steam_client)
-steam/adapters/*        ← steam/domain, steam/errors (nunca api, mappers, services, stores)
-steam/mappers/*         ← steam/domain (nunca adapters, services, stores)
+steam/adapters/*        ← steam/domain, steam/errors, steam/utils (nunca api, mappers, services, stores)
+steam/mappers/*         ← steam/domain, steam/utils (nunca adapters, services, stores)
 steam/services/*        ← steam/api, steam/adapters, steam/domain, steam/errors, steam/mappers,
                           steam/cache, repos de Supabase (rankings, cap_history, price_history,
                           inventory_snapshot); market_service → rankings_service (_MOVERS_SELECT)

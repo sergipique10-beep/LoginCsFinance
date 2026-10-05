@@ -1,25 +1,14 @@
-"""Mappers de Steam News: limpieza del cuerpo y `NewsItem`. El filtro de alfabeto (UX-05,
+"""Mappers de Steam News: `NewsItem` (la limpieza del cuerpo está en utils/strings). El filtro de alfabeto (UX-05,
 `is_readable_news`) y la categoría por fuente (`news_category`) están en `domain/rules.py`."""
-import html
-import re
 from datetime import datetime, timezone
 
 from steam.domain.models import NewsEntry, NewsItem
 from steam.domain.rules import news_category
+from steam.utils.strings import clean_news_content
 
-
-def _clean_news_content(raw: str, max_chars: int = 220) -> str:
-    text = re.sub(r"<[^>]+>", " ", raw)           # HTML tags
-    text = re.sub(r"\[[^\]]*\]", " ", text)        # BBCode [b], [url=...], [img]
-    text = re.sub(r"\{[^}]*\}", " ", text)         # {STEAM_CLAN_IMAGE}, {h2}, etc.
-    text = html.unescape(text)                     # &amp; &nbsp; &#39; etc.
-    text = re.sub(r"https?://\S+", "", text)       # full URLs
-    text = re.sub(r"(?<!\w)/\S+", "", text)        # /path or //cdn tokens
-    text = re.sub(r"\s*\\\s*", " ", text)          # backslash separators
-    text = " ".join(text.split())
-    if len(text) > max_chars:
-        text = text[:max_chars].rsplit(" ", 1)[0]
-    return text
+# rag/ingest.py y notifications/service.py lo importan con este nombre (CLEAN-19 lo mueve
+# a utils/strings sin tocar esos paquetes).
+_clean_news_content = clean_news_content
 
 
 def _map_news_item(entry: NewsEntry, index: int, image_url: str = "") -> NewsItem:
@@ -32,7 +21,7 @@ def _map_news_item(entry: NewsEntry, index: int, image_url: str = "") -> NewsIte
         date_str = ""
 
     author = (entry.author or "").strip()
-    excerpt = _clean_news_content(entry.contents or "")
+    excerpt = clean_news_content(entry.contents or "")
 
     return {
         "id":            entry.gid if entry.gid is not None else str(index),
