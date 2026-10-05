@@ -1,4 +1,4 @@
-"""Constantes del dominio de steam/ (CLEAN-10): desgastes, categorías, mercados y
+"""Constantes del dominio de steam/: desgastes, categorías, mercados y
 proveedores. Inmutables: un llamador que mute una constante compartida la cambiaría
 para todos los demás.
 """
@@ -9,7 +9,7 @@ from steam.domain.enums import Market, Wear, WeaponCategory
 from steam.domain.models import MarketProvider
 
 # Desgastes de CS2, en orden. Respaldo cuando el catálogo de ByMykel no trae los de una skin.
-# Derivado de `Wear` (CLEAN-17): los strings salen del enum, y son los mismos de siempre.
+# Derivado de `Wear`: los strings salen del enum.
 WEAR_NAMES: tuple[str, ...] = tuple(w.value for w in Wear)
 
 _R, _SR, _P, _SMG, _H, _K = (
@@ -88,7 +88,7 @@ def weapon_category(itemtype: str | None) -> str | None:
 
 # ── Mercados ──────────────────────────────────────────────────────────────────
 
-# Los tres se derivan de `Market` (CLEAN-17), como `.value`: fuera de domain/ se
+# Los tres se derivan de `Market`, como `.value`: fuera de domain/ se
 # construyen URLs y claves de caché con ellos y un miembro del enum no formatea igual.
 
 # Mercados cuyo precio se añade a cada tarjeta (`csfloatPrice`, `buffPrice`): un lookup
@@ -132,8 +132,8 @@ _FALLBACK_PROVIDERS: tuple[Mapping[str, str], ...] = (
 
 
 def fallback_providers() -> list[MarketProvider]:
-    """La lista de respaldo, como copia: antes se devolvía por referencia y un llamador
-    que la mutara la cambiaba para todos. Mismo JSON."""
+    """La lista de respaldo, como copia: por referencia, un llamador que la mutara la
+    cambiaría para todos. Mismo JSON."""
     return [MarketProvider(id=p["id"], name=p["name"], logoUrl=p["logoUrl"]) for p in _FALLBACK_PROVIDERS]
 
 

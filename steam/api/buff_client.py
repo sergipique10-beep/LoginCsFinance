@@ -1,4 +1,4 @@
-"""Cliente de Buff163 vía steamwebapi (CLEAN-14): los endpoints `/market/buff/…`.
+"""Cliente de Buff163 vía steamwebapi: los endpoints `/market/buff/…`.
 No es una API propia: comparte transporte, clave y errores con `steam_client`. Existe
 para que los services pidan «el histórico de Buff163» sin pasar el nombre del mercado
 como string; `steam.api.MARKET_CLIENTS` elige el módulo por mercado.

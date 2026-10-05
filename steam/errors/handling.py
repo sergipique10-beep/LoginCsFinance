@@ -1,8 +1,8 @@
-"""Manejo de errores y degradaciones de steam/ (CLEAN-12, movido a errors/ en CLEAN-14).
+"""Manejo de errores y degradaciones de steam/.
 
-- `http_error_for` (CLEAN-15): la traducción ÚNICA de los errores tipados a HTTP. Las
-  rutas capturan `SOURCE_ERRORS` y lanzan lo que devuelve; antes cada ruta tenía su
-  bloque de `except` y los status divergían (un 200 ilegible daba 500: CAL-14).
+- `http_error_for`: la traducción ÚNICA de los errores tipados a HTTP. Las rutas
+  capturan `SOURCE_ERRORS` y lanzan lo que devuelve; con un bloque `except` por ruta los
+  status divergían (un 200 ilegible daba 500: CAL-14).
 - `log_degraded`: una línea con formato fijo cada vez que se sirve un dato degradado que
   el cliente no ve (caducado, vacío o de respaldo), y el conteo de la última hora para
   ese (flow, reason). Mismo patrón que `[inventory-429]`.
@@ -69,7 +69,7 @@ def reason_of(exc: BaseException) -> str:
 
 
 def http_error_for(exc: BaseException, *, timeout_status: int = 502) -> HTTPException:
-    """El `HTTPException` que corresponde a un error tipado (CLEAN-15).
+    """El `HTTPException` que corresponde a un error tipado.
 
     - `QuotaExhausted` (402, cuota mensual) → 503 `UPSTREAM_QUOTA_DETAIL` (SEC-16).
     - `RateLimited` (429) y `HistoryBusy` (limiter lleno) → 503 `UPSTREAM_RATE_LIMIT_DETAIL`
@@ -78,7 +78,7 @@ def http_error_for(exc: BaseException, *, timeout_status: int = 502) -> HTTPExce
       (/market/items y /market/price siempre respondieron 502 al timeout).
     - `SourceUnavailable` (red) y cualquier otro `UpstreamError` → 502.
     - `InvalidPayload` (200 ilegible), `UnexpectedPayload` e `InvalidField` → 502 con el
-      motivo en `detail`. Antes `InvalidPayload` salía como 500 (CAL-14).
+      motivo en `detail`: un 200 ilegible es un fallo de la fuente, no un 500 (CAL-14).
 
     Lo que no sea `SOURCE_ERRORS` no es un fallo de la fuente: se devuelve un 502 genérico
     para no perderlo, pero quien llama debería capturar solo `SOURCE_ERRORS`.
@@ -103,7 +103,7 @@ def http_error_for(exc: BaseException, *, timeout_status: int = 502) -> HTTPExce
 
 def user_message(exc: BaseException) -> str:
     """Motivo legible de un error de la fuente, para que el modelo del chat lo explique
-    (CAL-14): antes cualquier fallo salía como «error al ejecutar» o como un `[]`."""
+    (CAL-14: sin motivo, el chat decía «error al ejecutar» o devolvía un `[]`)."""
     if isinstance(exc, QuotaExhausted):
         return "la cuota mensual de steamwebapi está agotada; los datos de mercado volverán el día 10"
     if isinstance(exc, (RateLimited, HistoryBusy)):

@@ -1,4 +1,4 @@
-"""Orquestación del mercado (CLEAN-11, partido en CLEAN-18): búsqueda, item completo,
+"""Orquestación del mercado: búsqueda, item completo,
 índice de mercado y precios por mercado. Los rankings y sus ticks están en
 `rankings_service.py`; el histórico del índice en `cap_history_service.py`. Sin FastAPI:
 lanza los errores de `steam/errors/` y las rutas los traducen a HTTP.
@@ -121,7 +121,7 @@ async def get_item_full(client: httpx.AsyncClient, query: str) -> Fetched[SkinCa
     catalog_service.enrich_images_from_cache([item])
 
     _item_price_cache.put(cache_key, item, now)
-    logger.info("[market-price] name=%r → hit", query)
+    logger.info("[market-items] price name=%r → hit", query)
     return Fetched(item)
 
 

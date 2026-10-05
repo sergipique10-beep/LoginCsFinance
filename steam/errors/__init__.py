@@ -1,7 +1,7 @@
-"""Errores y manejo de degradaciones de steam/ (CLEAN-14).
+"""Errores y manejo de degradaciones de steam/.
 
 `domain_errors`: los errores tipados que lanzan clientes, adapters y services.
-`handling`: `log_degraded` / `reason_of` (ex `steam/degraded.py`).
+`handling`: `log_degraded` / `degraded` / `reason_of` / `http_error_for`.
 Se re-exporta todo: `from steam.errors import QuotaExhausted` sigue valiendo (lo usan
 alerts/, tools/ y las rutas).
 """

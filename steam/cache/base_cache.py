@@ -1,4 +1,4 @@
-"""`TtlCache`, la caché con contrato de steam/ (CLEAN-09, movida desde stores.py en CLEAN-16).
+"""`TtlCache`, la caché con contrato de steam/.
 
 Sigue siendo un dict de `(valor, ts)` (los tests antiguos lo leen y escriben así) y
 centraliza la regla del TTL, el TTL corto de los vacíos, el stale-on-error, el caché
@@ -24,13 +24,13 @@ class CacheState(Enum):
 
 
 class TtlCache(dict):
-    """Caché `clave → (valor, ts)` con la regla del TTL en un solo sitio (CLEAN-09).
+    """Caché `clave → (valor, ts)` con la regla del TTL en un solo sitio.
 
     - `fresh`: el valor si está dentro del TTL; si no, None. `empty_ttl` acorta el
       TTL de los valores vacíos (un histórico `[]` no vale 23 h); por defecto el de la
       política.
     - `stale`: el último valor, tenga la edad que tenga (stale-on-error).
-    - `lookup`: `(CacheState, valor)` en una sola llamada (CLEAN-16).
+    - `lookup`: `(CacheState, valor)` en una sola llamada.
     - `mark_failed` / `in_backoff`: caché negativo aparte del valor, para no pisar el
       último dato bueno (PERF-17). Un `put` lo borra.
     - `max_entries`: al pasarse, `put` expulsa las entradas más antiguas. Sin limpieza

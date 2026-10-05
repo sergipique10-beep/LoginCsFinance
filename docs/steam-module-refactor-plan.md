@@ -1,5 +1,14 @@
 # Refactor plan para el módulo steam
 
+> **Ejecutado (2026-10-04 → 2026-10-05, CLEAN-13..19).** Este documento es el plan original.
+> Lo que se hizo de verdad, fase a fase, con lo movido, lo que siguió igual, los desvíos y
+> las guardias que lo protegen, está en el plan de implementación
+> `docs/superpowers/plans/2026-10-04-steam-refactor-arbol-objetivo.md` (sección «Salida de
+> fase» y el resumen de las seis fases al final) y en el diagnóstico/spec
+> `docs/superpowers/specs/2026-10-04-steam-refactor-arbol-objetivo-design.md`. El árbol
+> resultante está en `CLAUDE.md` («Module structure» y «Dependency order»); el mapa de
+> degradaciones, en `docs/features/steam.md`.
+
 ## Objetivo
 
 Normalizar, desacoplar y estabilizar el módulo de integración de Steam para que deje de mezclar:

@@ -1,4 +1,4 @@
-"""Cachés por usuario y de noticias (CLEAN-16). Mismos nombres que tenían en stores.py."""
+"""Cachés por usuario y de noticias."""
 from steam.cache import policy
 from steam.cache.base_cache import TtlCache
 

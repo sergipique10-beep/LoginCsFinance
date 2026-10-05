@@ -1,6 +1,6 @@
-"""Políticas de caché de steam/ (CLEAN-16): UNA constante por tipo de dato, con su TTL y
-su motivo. Son la fuente de los valores; `stores.py` solo los reexporta por compatibilidad
-hasta la Fase 6. Migrar a Redis (CAL-04) es cambiar `TtlCache`, no esto.
+"""Políticas de caché de steam/: UNA constante por tipo de dato, con su TTL y su motivo.
+Son la única fuente de los valores (los tests leen `policy.X.ttl`). Migrar a Redis (CAL-04)
+es cambiar `TtlCache`, no esto.
 """
 from dataclasses import dataclass
 

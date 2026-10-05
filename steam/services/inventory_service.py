@@ -1,7 +1,6 @@
-"""Inventario de CS2 (CLEAN-11, CLEAN-18): descarga compartida por GET /inventory y la
-tool del chat `ver_inventario` (`fetch_fresh_inventory`), y la lectura con degradación
-ante 429/402 (snapshot durable + reintento en segundo plano, PERF-14) que antes vivía en
-`routes/items.py` (`get_inventory`). Sin FastAPI: devuelve `Fetched[Inventory]` y la ruta
+"""Inventario de CS2: descarga compartida por GET /inventory y la tool del chat
+`ver_inventario` (`fetch_fresh_inventory`), y la lectura con degradación ante 429/402
+(`get_inventory`: snapshot durable + reintento en segundo plano, PERF-14). Sin FastAPI: devuelve `Fetched[Inventory]` y la ruta
 decide cabeceras y status.
 """
 import asyncio
@@ -44,7 +43,7 @@ async def fetch_fresh_inventory(client: httpx.AsyncClient, steam_id: str, *, tra
 
     - 410/411 → `Fetched([], "error", "http_410")`: no hay inventario que servir, pero
       tampoco es un dato. `get_inventory` sirve el snapshot si lo tiene y NO pisa la caché
-      ni el snapshot con `[]` (CAL-13: antes se guardaba el vacío 23 h y en Supabase).
+      ni el snapshot con `[]` (CAL-13: un vacío guardado valdría 23 h y pisaría el snapshot).
     - El resto de errores del cliente suben tal cual. Un cuerpo que no es lista →
       `UnexpectedPayload` (lo lanza el adapter).
     - `track`: registrar los nombres en `tracked_skins` para la captura diaria. Lo hace
@@ -153,7 +152,7 @@ async def _retry_inventory(client: httpx.AsyncClient, steam_id: str, retry_after
                 _log_429(steam_id, f"retry-{attempt + 1}", retry_after, "none")
                 continue
             except QuotaExhausted:
-                logger.warning("[inventory-402] user=%s cuota agotada en el reintento; se aborta", steam_id)
+                logger.warning("[inventory] user=%s 402 (cuota agotada) en el reintento; se aborta", steam_id)
                 return
             except SOURCE_ERRORS as exc:   # lo que la ruta traduciría a HTTP (403, 502...)
                 logger.warning("[inventory] reintento de %s abortado: %s", steam_id, reason_of(exc))
@@ -187,7 +186,7 @@ async def _degraded_inventory(client: httpx.AsyncClient, steam_id: str,
         _log_429(steam_id, origin, exc.retry_after, "snapshot" if snap else "none")
         _schedule_retry(client, steam_id, exc.retry_after)
     else:
-        logger.warning("[inventory-402] user=%s origin=%s cuota agotada served=%s",
+        logger.warning("[inventory] user=%s origin=%s 402 (cuota agotada) served=%s",
                        steam_id, origin, "snapshot" if snap else "none")
     if snap is None:
         return Fetched(Inventory([]), "error", reason)

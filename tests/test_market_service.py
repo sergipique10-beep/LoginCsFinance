@@ -6,7 +6,8 @@ import pytest
 
 from steam.errors import InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout, UnexpectedPayload
 from steam.services import market_service, rankings_service
-from stores import _item_price_cache, _market_index_cache, _search_cache, _topmovers_raw_cache
+from steam.cache.history_cache import _topmovers_raw_cache
+from steam.cache.market_cache import _item_price_cache, _market_index_cache, _search_cache
 from tests.test_steam_contract_market import NAME, RAW
 
 TOPMOVERS = {"topmovers": {"gainers": [{"markethashname": "G", "price": 1, "change24h": 5}], "losers": []}}

@@ -1,9 +1,9 @@
-"""Caché de steam/ con política explícita (CLEAN-16).
+"""Caché de steam/ con política explícita.
 
 `base_cache.TtlCache` + `CacheState`; `policy.CachePolicy` y una política por tipo de
 dato; instancias por dominio en history_cache / market_cache / user_cache / image_cache.
 `ALL_CACHES` es el registro: `clear_all()` (tests) y `stats_all()` (línea `[steam-cache]`
-del cap-tick). stores.py reexporta las instancias por compatibilidad hasta la Fase 6.
+del cap-tick). Es la única casa de estas cachés: nada se reexporta desde stores.py.
 """
 from steam.cache import history_cache, image_cache, market_cache, user_cache
 from steam.cache.base_cache import CacheState, TtlCache

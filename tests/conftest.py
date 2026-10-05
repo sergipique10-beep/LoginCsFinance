@@ -9,10 +9,8 @@ from fastapi.testclient import TestClient
 import main
 from main import app
 from auth.service import require_jwt
-from stores import (
-    _auth_codes, _inventory_cache, _inventory_refresh_cooldown,
-    _nonces, _rate_store,
-)
+from stores import _auth_codes, _nonces, _rate_store
+from steam.cache.user_cache import _inventory_cache, _inventory_refresh_cooldown
 from auth import refresh_repo
 from steam import inventory_snapshot_repo
 
@@ -132,8 +130,8 @@ def steam_api(client, monkeypatch):
     from tests.steam_fake import FakeUpstream
 
     def _clear_caches():
-        steam.cache.clear_all()   # CLEAN-16: las cachés de steam/ en un solo sitio
-        for name, value in vars(stores).items():   # auth, leetify y los alias compat
+        steam.cache.clear_all()   # las cachés de steam/, por el registro
+        for name, value in vars(stores).items():   # auth y leetify
             if name.startswith("_") and not name.startswith("__") and isinstance(value, dict):
                 value.clear()
 

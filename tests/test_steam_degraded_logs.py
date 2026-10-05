@@ -13,7 +13,8 @@ import pytest
 from steam.errors import handling as degraded
 from steam.services import catalog_service, pricing_service, rankings_service
 from steam.services import providers_service
-from stores import _item_history_cache, _item_price_cache, _market_lookup_cache, _search_cache
+from steam.cache.history_cache import _item_history_cache
+from steam.cache.market_cache import _item_price_cache, _market_lookup_cache, _search_cache
 from tests.test_steam_contract_market import NAME, RAW
 from tools.inventory_tools import _ver_inventario
 
@@ -133,12 +134,12 @@ async def test_catalogo_todas_las_fuentes_caidas(steam_api, http, lines, monkeyp
 
 async def test_catalogo_una_fuente_caida_carga_las_demas(steam_api, http, lines, monkeypatch):
     import asyncio
-    from stores import _image_cache_meta
+    from steam.cache.image_cache import catalog_cache
     monkeypatch.setattr(catalog_service, "_image_cache_lock", asyncio.Lock())
     steam_api.on("skins.json", content=b"<html>")   # las otras seis responden [] (fixture)
     await catalog_service.fetch_static_images(http)
     assert lines("catalog") == [("invalid_json", "empty")]
-    assert _image_cache_meta.fresh("catalog") is not None   # cargó: no entra en backoff
+    assert catalog_cache.meta.fresh("catalog") is not None   # cargó: no entra en backoff
 
 
 async def test_registro_en_tracked_skins_best_effort(steam_api, http, lines, monkeypatch):
@@ -190,7 +191,7 @@ async def test_rankings_sin_ninguna_fuente(steam_api, http, lines, compute, flow
 
 async def test_topmovers_caducado_no_se_sirve(steam_api, http, lines):
     # CAL-12: un topmovers de hace días no vale como respaldo; sin fuente fresca, error.
-    from stores import _topmovers_raw_cache
+    from steam.cache.history_cache import _topmovers_raw_cache
     _topmovers_raw_cache.put("latest", ((), ()), now=-1e9)
     steam_api.on("api/items", status=500)
     steam_api.on("market-index/cs2", exc=httpx.ConnectError("x"))
@@ -213,7 +214,7 @@ def test_busqueda_y_precio_stale_por_402(steam_api, client, lines):
 
 
 def test_indice_y_precios_por_mercado_stale_por_402(steam_api, client, lines, monkeypatch):
-    from stores import _market_index_cache, _market_prices_cache
+    from steam.cache.market_cache import _market_index_cache, _market_prices_cache
     _market_index_cache.put("24h", {"x": 1}, now=-1e9)
     _market_prices_cache.put("buff::usd", [{"p": 1}], now=-1e9)
     steam_api.on("market-index/cs2", status=402)
@@ -242,3 +243,47 @@ def test_sin_degradacion_no_hay_linea(steam_api, client, lines):
     steam_api.on("csfloat/history", json=[])
     client.get("/market/items?q=redline")
     assert lines("search") == [] and lines("market_lookup") == []
+
+
+# ── Inventario: snapshot por 429/402 y el snapshot que no se puede leer o guardar ──
+
+@pytest.mark.parametrize("status, reason", [(429, "rate_limit"), (402, "quota")])
+def test_inventario_sirve_snapshot_por_429_y_402(steam_api, client, lines, monkeypatch, status, reason):
+    # PERF-14: el 200 con snapshot es invisible salvo por la cabecera; deja su línea
+    # (además de la de `[inventory-429]`). Sin tarea de reintento en el test.
+    from unittest.mock import MagicMock
+    from steam.services import inventory_service
+    from tests.conftest import SNAPSHOT_DB, STEAM_ID
+    monkeypatch.setattr(inventory_service, "_schedule_retry", MagicMock())
+    SNAPSHOT_DB[STEAM_ID] = ([RAW], "2026-10-02T08:00:00+00:00")
+    steam_api.on("api/inventory", status=status)
+    resp = client.get("/inventory")
+    assert resp.status_code == 200 and resp.headers["X-Inventory-Stale"] == "1"
+    assert lines("inventory") == [(reason, "stale")]
+
+
+def test_inventario_snapshot_ilegible_o_no_guardable(steam_api, client, lines, monkeypatch):
+    # Best-effort (PERF-14): Supabase caído no rompe /inventory, pero queda registrado.
+    from unittest.mock import AsyncMock, MagicMock
+    from steam import inventory_snapshot_repo
+    from steam.cache.user_cache import _inventory_cache
+    from steam.errors import StorageError
+    from steam.services import inventory_service
+    monkeypatch.setattr(inventory_service, "_schedule_retry", MagicMock())
+    monkeypatch.setattr(inventory_snapshot_repo, "save", AsyncMock(side_effect=StorageError("caída")))
+    monkeypatch.setattr(inventory_snapshot_repo, "load", AsyncMock(side_effect=StorageError("caída")))
+    steam_api.on("api/inventory", json=[RAW])
+    assert client.get("/inventory").status_code == 200   # guardar el snapshot falló: la lectura sigue
+    _inventory_cache.clear()
+    steam_api.on("api/inventory", status=429)
+    assert client.get("/inventory").status_code == 429   # leer el snapshot falló: no hay nada que servir
+    assert lines("inventory_snapshot") == [("storage", "empty"), ("storage", "empty")]
+
+
+def test_noticia_cuya_pagina_no_trae_og_image(steam_api, client, lines):
+    steam_api.on("GetNewsForApp/v2/", json={"appnews": {"newsitems": [
+        {"gid": "1", "title": "A", "url": "https://news/1", "contents": "", "date": 0},
+    ]}})
+    steam_api.on("news/1", content=b"<html><head><title>sin og</title></head></html>")
+    assert client.get("/news/cs2").json()[0]["imageUrl"] == ""
+    assert lines("news_image") == [("no_og_tag", "empty")]

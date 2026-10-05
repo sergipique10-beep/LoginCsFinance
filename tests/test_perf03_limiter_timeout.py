@@ -8,7 +8,7 @@ import pytest
 from steam.services import catalog_service, pricing_service
 from steam.api.steam_client import _history_limiter
 from steam.errors import HistoryBusy
-from stores import _item_history_cache
+from steam.cache.history_cache import _item_history_cache
 from tools import market_tools
 
 
@@ -64,7 +64,7 @@ async def test_historial_tool_explains_saturation_instead_of_waiting(monkeypatch
 
 @pytest.mark.asyncio
 async def test_precio_tool_answers_without_deltas_when_busy_and_does_not_cache(monkeypatch):
-    from stores import _item_price_cache
+    from steam.cache.market_cache import _item_price_cache
     _item_price_cache.clear()
     raw = {"markethashname": "AK", "image": "https://img/ak.png", "pricelatestsell": 10}
     client = MagicMock()

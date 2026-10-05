@@ -1,4 +1,4 @@
-"""Rankings de mercado (CLEAN-18, ex market_service): hot/cold (movers) y trending desde
+"""Rankings de mercado: hot/cold (movers) y trending desde
 /items con respaldo de topmovers, su lectura desde los snapshots de Supabase y los ticks
 que los persisten (capture_trending, enrich_trending, capture_movers). Sin FastAPI.
 """
@@ -87,14 +87,14 @@ _TRENDING_STALE_DAYS = 7
 _ITEMS_FETCH_MAX = 5000
 
 # Cuotas por categoría y por skin del reparto (`rules.diversificar`), y el criterio de
-# relevancia (`rules.turnover` = precio × unidades): viven en domain/rules.py (CLEAN-17).
+# relevancia (`rules.turnover` = precio × unidades): viven en domain/rules.py.
 
 
 async def _ranking_items(client: httpx.AsyncClient, tag: str,
                          fallback_label: str) -> tuple[list[SteamItem] | None, str | None]:
     """Fuente principal de movers y trending: /items por unidades vendidas. Devuelve
-    (items, None), o (None, motivo) si no responde, no es JSON (CAL-14: antes 500) o no
-    es una lista; entonces se cae a topmovers."""
+    (items, None), o (None, motivo) si no responde, no es JSON o no es una lista (un 200
+    ilegible es una degradación, no un 500: CAL-14); entonces se cae a topmovers."""
     try:
         data = await steam_client.items(
             client, sort_by="soldZa", max=_ITEMS_FETCH_MAX, select=_MOVERS_SELECT,
@@ -117,9 +117,8 @@ async def _topmovers(client: httpx.AsyncClient, tag: str,
     """Respaldo: topmovers de market-index. Devuelve (gainers+losers, None), o (None,
     motivo) si no hay nada que servir.
 
-    Solo vale lo cacheado dentro de `TOPMOVERS_RAW_TTL` (CAL-12: antes se usaba lo último
-    que hubiera, tuviera la edad que tuviera); si caducó o no hay, se pide market-index
-    ahora. Si eso falla y lo que había estaba caducado, el motivo es `topmovers_stale`.
+    Solo vale lo cacheado dentro de `TOPMOVERS_RAW_TTL` (CAL-12: un ranking de hace días
+    no es respaldo); si caducó o no hay, se pide market-index ahora. Si eso falla y lo que había estaba caducado, el motivo es `topmovers_stale`.
     """
     cached = _topmovers_raw_cache.fresh("latest", now)
     if cached:
@@ -221,8 +220,7 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
         catalog_service.cache_images(data)
         result = []
         for item in data:
-            # Slabs fuera también aquí (CAL-14, CLEAN-17): antes solo los filtraban
-            # movers y búsqueda, y el trending los colaba como si fueran skins.
+            # Slabs fuera también aquí, como en movers y búsqueda: no son skins (CAL-14).
             if ranking_eligible(item, MIN_SOLD_TRENDING) and not is_sticker_slab(item):
                 result.append(_map_item(item))
         # Por relevancia (turnover = precio × unidades) y luego se reparte entre

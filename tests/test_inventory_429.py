@@ -15,7 +15,7 @@ from steam.domain.models import Fetched
 from steam.errors import QuotaExhausted, StorageError
 from steam.services import inventory_service
 from steam.errors import RateLimited
-from stores import _inventory_cache
+from steam.cache.user_cache import _inventory_cache
 from tests.conftest import SNAPSHOT_DB, STEAM_ID
 
 SNAP_ITEMS = [{"name": "AK-47 | Redline"}]
@@ -76,7 +76,7 @@ def test_429_on_refresh_also_serves_snapshot_and_keeps_cooldown_free(client, mon
     assert resp.headers["X-Inventory-Stale"] == "1"
     schedule.assert_called_once()
     # el refresh fallido no gasta el cooldown de 1 h del botón
-    from stores import _inventory_refresh_cooldown
+    from steam.cache.user_cache import _inventory_refresh_cooldown
     assert STEAM_ID not in _inventory_refresh_cooldown
 
 

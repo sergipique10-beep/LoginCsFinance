@@ -1,5 +1,5 @@
 """Mercados soportados como price provider (GET /market/providers), con respaldo
-estático si steamwebapi no responde (PERF-17) (CLEAN-11)."""
+estático si steamwebapi no responde (PERF-17)."""
 import logging
 import time
 
@@ -34,10 +34,10 @@ async def fetch_market_providers(client: httpx.AsyncClient) -> Fetched[list[Mark
     try:
         markets = adapt_markets(await steam_client.info_markets(client))   # forma rara → UnexpectedPayload
     except DEGRADABLE as exc:
-        logger.warning("[market-providers] info/markets failed: %s", reason_of(exc))
+        logger.warning("[providers] info/markets failed: %s", reason_of(exc))
         _market_providers_cache.mark_failed("providers", now)
         return _providers_stale(reason_of(exc))
     providers = _build_providers(markets)
     _market_providers_cache.put("providers", providers, now)
-    logger.info("[market-providers] loaded %d providers", len(providers))
+    logger.info("[providers] loaded %d providers", len(providers))
     return Fetched(providers)

@@ -1,5 +1,5 @@
-"""Validadores de VALOR de steam/ (CLEAN-14): un campo del payload → su tipo, o None.
-Las reglas de plausibilidad y de rankings (CLEAN-12) y `canonical_price` (CLEAN-18) viven en
+"""Validadores de VALOR de steam/: un campo del payload → su tipo, o None.
+Las reglas de plausibilidad y de rankings y `canonical_price` viven en
 `domain/rules.py`; aquí no se decide nada sobre un ítem, solo qué es y qué no es un número.
 """
 from collections.abc import Mapping
@@ -7,7 +7,7 @@ from typing import Any
 
 from steam.errors import InvalidField
 
-# ── Validadores de valor (CLEAN-14) ───────────────────────────────────────────
+# ── Validadores de valor ────────────────────────────────────────────────────
 # Sustituyen a `float(x or 0)` / `int(x or 0)` en los adapters. La regla: un campo
 # ausente, vacío o no convertible es `None` (no `0`, no `""`); un valor de un tipo
 # imposible (un dict donde va un número) es `InvalidField`, porque eso ya no es un

@@ -1,4 +1,4 @@
-"""Histórico de precios y precios por mercado (CLEAN-11): el histórico de CSFloat con
+"""Histórico de precios y precios por mercado: el histórico de CSFloat con
 sus deltas (`enrich_prices`) y el lookup de CSFloat/Buff (`enrich_market_prices`).
 """
 import asyncio
@@ -35,7 +35,7 @@ async def fetch_history_for_item(
     """Histórico de 35 días de CSFloat para el enriquecimiento, la predicción y el chat.
 
     `ok` con los puntos; `error` con `[]` (y su motivo) si la fuente falló o el cuerpo
-    no era una lista: ese vacío se cachea `HISTORY_EMPTY_TTL` (5 min), no 23 h. Si el
+    no era una lista: ese vacío se cachea `ITEM_HISTORY.empty_ttl` (5 min), no 23 h. Si el
     limiter no da hueco en `limiter_timeout`, `HistoryBusy` sin cachear nada (PERF-03).
     """
     cache_key = f"{name}:csfloat:35d"
@@ -102,7 +102,7 @@ async def enrich_prices(
     return result
 
 
-# PERF-17: tras un fallo, no se reintenta durante LOOKUP_FAIL_TTL (5 min). Sin esto,
+# PERF-17: tras un fallo, no se reintenta durante `MARKET_LOOKUP.fail_ttl` (5 min). Sin esto,
 # cada inventario/movers/búsqueda con la fuente caída repetía dos lookups condenados
 # a fallar, gastando cuota y hasta 30 s de timeout. El backoff vive en la propia caché
 # (`mark_failed`), aparte del último dato bueno.
@@ -125,12 +125,12 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
         data = await MARKET_CLIENTS[market].prices(client, {"format": "json"}, timeout=30.0)
         rows = adapt_price_rows(data, market=market)   # forma rara → UnexpectedPayload
     except DEGRADABLE as exc:
-        logger.warning("[market-lookup] %s failed: %s", market, reason_of(exc))
+        logger.warning("[market-prices] lookup %s failed: %s", market, reason_of(exc))
         _market_lookup_cache.mark_failed(market, now)
         return _lookup_stale(market, reason_of(exc))
     lookup: dict[str, float] = {r.name: r.price for r in rows}
     _market_lookup_cache.put(market, lookup, now)
-    logger.info("[market-lookup] %s: %d prices loaded", market, len(lookup))
+    logger.info("[market-prices] lookup %s: %d prices loaded", market, len(lookup))
     return Fetched(lookup)
 
 

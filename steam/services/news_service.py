@@ -1,4 +1,4 @@
-"""Noticias de CS2 (GET /news/cs2) con su og:image y caché de 30 min (CLEAN-11)."""
+"""Noticias de CS2 (GET /news/cs2) con su og:image y caché de 30 min."""
 import asyncio
 import time
 

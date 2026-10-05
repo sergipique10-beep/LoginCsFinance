@@ -1,4 +1,4 @@
-"""Modelos de steam/: los TypedDict de salida (CLEAN-08) y los modelos internos (CLEAN-14).
+"""Modelos de steam/: los TypedDict de salida y los modelos internos.
 
 Salida: el contrato JSON con el front escrito como tipo.
 
@@ -150,7 +150,7 @@ class HistoryPoint(TypedDict):
 
 @dataclass(frozen=True)
 class Fetched(Generic[T]):
-    """Resultado de un service con camino de degradación (CLEAN-12).
+    """Resultado de un service con camino de degradación.
 
     `status`: `ok` (dato bueno), `stale` (caché caducada), `partial` (respaldo
     incompleto: topmovers, proveedores estáticos) o `error` (vacío o nada que servir).
@@ -162,7 +162,7 @@ class Fetched(Generic[T]):
     reason: str | None = None
 
 
-# ── Modelos internos (CLEAN-14) ────────────────────────────────────────────────
+# ── Modelos internos ───────────────────────────────────────────────────────────
 # Lo que los adapters (`steam/adapters/`) construyen a partir del JSON crudo de cada
 # fuente, ya con tipos: `None` significa «el campo no vino o no era convertible», y
 # `0` significa cero. Son dataclasses inmutables y NO son contrato con el front: los

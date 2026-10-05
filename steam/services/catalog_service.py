@@ -1,5 +1,5 @@
 """Catálogo estático de ByMykel (imágenes y rareza) y la caché de imágenes de
-steamwebapi (CLEAN-11). La descarga va por `steam/api/static_catalog_client.py`; aquí viven
+steamwebapi. La descarga va por `steam/api/static_catalog_client.py`; aquí viven
 el registro de claves, el lock de PERF-18 y el backoff de CAL-08.
 """
 import asyncio
@@ -37,7 +37,7 @@ def cache_images(items: Sequence[SteamItem]) -> None:
 
 def enrich_images_from_cache(items: list) -> list:
     """Rellena `image` desde el catálogo estático. **Muta** los items en sitio y
-    devuelve la misma lista (CLEAN-05: mismo contrato que enrich_market_prices)."""
+    devuelve la misma lista (mismo contrato que enrich_market_prices)."""
     if not catalog_cache:
         return items
     for item in items:
@@ -103,9 +103,9 @@ async def fetch_static_images(client: httpx.AsyncClient) -> None:
 
 
 def _log_catalog_failure(label: str, exc: Exception) -> None:
-    """Una fuente del catálogo falló: se salta (las demás cargan) y deja su línea. Antes
-    el fallo parcial no quedaba registrado como degradación (CLEAN-15)."""
-    logger.warning("[image-cache] could not load %s (%s): %s", label, reason_of(exc), exc)
+    """Una fuente del catálogo falló: se salta (las demás cargan) y deja su línea de
+    degradación, una por fuente."""
+    logger.warning("[catalog] could not load %s (%s): %s", label, reason_of(exc), exc)
     log_degraded("catalog", reason_of(exc), "empty")
 
 
@@ -143,17 +143,17 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
         except DEGRADABLE as exc:
             _log_catalog_failure(label, exc)
 
-    # CAL-08: "catalog" significa "última carga buena" (stores.py). Si no cargó ninguna
+    # CAL-08: "catalog" en `catalog_cache.meta` significa "última carga buena". Si no cargó ninguna
     # fuente (GitHub caído en el arranque de Render), no se estampa: se reintenta
-    # pasado IMAGE_FAIL_TTL en vez de pasar 23 h con `image: ""`.
+    # pasado `IMAGE_CATALOG.fail_ttl` en vez de pasar 23 h con `image: ""`.
     if not fetched:
         catalog_cache.mark_failed(now)
-        logger.warning("[image-cache] all sources failed; retry in %ds", catalog_cache.meta.fail_ttl)
+        logger.warning("[catalog] all sources failed; retry in %ds", catalog_cache.meta.fail_ttl)
         log_degraded("catalog", "all_sources_failed", "empty")
         return
     catalog_cache.mark_loaded(now)
     logger.info(
-        "[image-cache] loaded %d total entries (%+d new) — sources: %s",
+        "[catalog] loaded %d total entries (%+d new) — sources: %s",
         len(catalog_cache),
         len(catalog_cache) - total_before,
         fetched,

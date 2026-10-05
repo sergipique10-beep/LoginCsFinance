@@ -11,7 +11,8 @@ from steam.services import price_capture_service as price_capture
 from steam.services import pricing_service, providers_service
 from steam.api import steam_client
 from steam.errors import UpstreamError
-from stores import _item_history_cache, _market_lookup_cache, _market_providers_cache
+from steam.cache.history_cache import _item_history_cache
+from steam.cache.market_cache import _market_lookup_cache, _market_providers_cache
 
 FAKE_KEY = "test-sentinel-not-a-real-key-0001"
 ROOT = Path(__file__).resolve().parent.parent

@@ -1,4 +1,4 @@
-"""Cachés del mercado (CLEAN-16). Mismos nombres que tenían en stores.py."""
+"""Cachés del mercado."""
 from steam.cache import policy
 from steam.cache.base_cache import TtlCache
 

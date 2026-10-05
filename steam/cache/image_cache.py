@@ -1,5 +1,5 @@
-"""Catálogo estático de ByMykel en memoria (CLEAN-16): imágenes, rareza y la marca de
-carga buena con su backoff (CAL-08), que antes eran tres dicts sueltos en stores.py.
+"""Catálogo estático de ByMykel en memoria: imágenes, rareza y la marca de carga buena
+con su backoff (CAL-08).
 """
 from collections.abc import Iterable
 

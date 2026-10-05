@@ -190,7 +190,7 @@ def test_delete_me_wipes_tokens_alerts_caches_and_revokes_refresh(client, monkey
 
     Desde UX-16 incluye el histórico de la cartera (portfolio_history)."""
     from unittest.mock import AsyncMock
-    from stores import _profile_cache, _inventory_cache, _inventory_refresh_cooldown
+    from steam.cache.user_cache import _profile_cache, _inventory_cache, _inventory_refresh_cooldown
     from tests.conftest import STEAM_ID as JWT_SUB  # el sub que firma el fixture `client`
 
     tokens = AsyncMock()

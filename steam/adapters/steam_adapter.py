@@ -102,7 +102,7 @@ def adapt_inventory(raw: Any) -> list[SteamItem]:
 
 def adapt_profile(raw: Any) -> ProfileData | None:
     """`/profile`: steamwebapi devuelve una lista con el perfil (o vacía) o el objeto.
-    None = 200 sin perfil; antes se servían campos vacíos y se cacheaban 23 h (CAL-14)."""
+    None = 200 sin perfil: el service lo sirve en blanco y sin cachear (CAL-14)."""
     data = raw
     if isinstance(raw, list):
         if not raw:
@@ -123,7 +123,7 @@ def adapt_profile(raw: Any) -> ProfileData | None:
 
 def _top_movers(raw: Any) -> tuple[tuple[TopMover, ...], int]:
     """(movers, descartados): un gainer/loser sin `markethashname` no es un item
-    (antes era un `KeyError` → 500 en /market/index, CAL-14)."""
+    (sin descartarlo, /market/index respondía 500 por `KeyError`: CAL-14)."""
     if raw is None:
         return (), 0
     movers: list[TopMover] = []

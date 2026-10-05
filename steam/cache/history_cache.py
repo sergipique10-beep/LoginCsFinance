@@ -1,4 +1,4 @@
-"""Cachés del histórico (CLEAN-16). Mismos nombres que tenían en stores.py."""
+"""Cachés del histórico."""
 from steam.cache import policy
 from steam.cache.base_cache import TtlCache
 

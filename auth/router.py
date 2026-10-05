@@ -19,10 +19,8 @@ from settings import (
     REVIEW_STEAM_ID,
     REVIEW_USER,
 )
-from stores import (
-    _auth_codes, CODE_TTL, TOKEN_AUDIENCE,
-    _profile_cache, _inventory_cache, _inventory_refresh_cooldown,
-)
+from stores import _auth_codes, CODE_TTL, TOKEN_AUDIENCE
+from steam.cache.user_cache import _inventory_cache, _inventory_refresh_cooldown, _profile_cache
 from auth.service import (
     _consume_nonce,
     _get_client_ip,

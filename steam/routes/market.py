@@ -1,4 +1,4 @@
-"""Rutas de /market y de los ticks del mercado (CLEAN-11): auth, rate limit, llamar al
+"""Rutas de /market y de los ticks del mercado: auth, rate limit, llamar al
 service (`steam/services/`) y traducir sus errores a HTTP. La lógica vive en los services.
 """
 from fastapi import APIRouter, Depends, Header, HTTPException, Request

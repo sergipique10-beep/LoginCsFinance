@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import main
 import steam.routes.news as news_module
 from steam.api import news_client
-from stores import NEWS_CACHE_TTL, _news_cache
+from steam.cache.policy import NEWS
+from steam.cache.user_cache import _news_cache
 
 
 def _fake_steam_client(calls: list) -> MagicMock:
@@ -47,7 +48,7 @@ def test_cache_expires_after_ttl(client, monkeypatch):
 
     assert client.get("/news/cs2").status_code == 200
     items, ts = _news_cache[5]
-    _news_cache[5] = (items, ts - NEWS_CACHE_TTL - 1)   # envejecer la entrada
+    _news_cache[5] = (items, ts - NEWS.ttl - 1)   # envejecer la entrada
 
     assert client.get("/news/cs2").status_code == 200
     assert len(calls) == 2

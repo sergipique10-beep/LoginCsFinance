@@ -1,10 +1,9 @@
 {
   "bind_all_interfaces": 0,
-  "coverage_floor": 90,
+  "coverage_floor": 91,
   "files_without_test": [
     "middleware.py",
     "portfolio/repo.py",
-    "steam/inventory_snapshot_repo.py",
     "steam/router.py",
     "tools/predict_tools.py"
   ],

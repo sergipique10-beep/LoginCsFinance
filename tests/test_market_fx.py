@@ -11,7 +11,8 @@ import pytest
 
 from steam.services.fx_service import fetch_fx_rate as _fetch_fx_rate
 from steam.domain.models import Fetched
-from stores import FX_CACHE_TTL, _fx_cache
+from steam.cache.market_cache import _fx_cache
+from steam.cache.policy import FX
 
 
 class _FakeClient:
@@ -53,7 +54,7 @@ async def test_sirve_la_tasa_y_la_cachea():
 async def test_tras_el_ttl_refresca():
     c = _FakeClient(_resp({"rates": {"EUR": 0.88}}), _resp({"rates": {"EUR": 0.91}}))
     await _fetch_fx_rate(c)
-    _fx_cache["usdeur"] = (0.88, time.monotonic() - FX_CACHE_TTL - 1)
+    _fx_cache["usdeur"] = (0.88, time.monotonic() - FX.ttl - 1)
     assert await _fetch_fx_rate(c) == Fetched(0.91)
     assert c.calls == 2
 
@@ -62,7 +63,7 @@ async def test_tras_el_ttl_refresca():
 async def test_fuente_caida_reutiliza_el_ultimo_valor_como_stale():
     c = _FakeClient(_resp({"rates": {"EUR": 0.88}}), httpx.ConnectError("boom"))
     await _fetch_fx_rate(c)
-    _fx_cache["usdeur"] = (0.88, time.monotonic() - FX_CACHE_TTL - 1)
+    _fx_cache["usdeur"] = (0.88, time.monotonic() - FX.ttl - 1)
     assert await _fetch_fx_rate(c) == Fetched(0.88, "stale", "unavailable")
 
 

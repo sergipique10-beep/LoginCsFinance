@@ -1,16 +1,18 @@
-"""CAL-08: la caché de imágenes solo se da por cargada si al menos una fuente cargó.
-Si fallan todas, backoff corto (IMAGE_FAIL_TTL) en vez de 23 h sin reintento.
+"""CAL-08: el catálogo de imágenes (`catalog_cache`) solo se da por cargado si al menos
+una fuente cargó. Si fallan todas, backoff corto (`IMAGE_CATALOG.fail_ttl`) en vez de
+23 h sin reintento.
 
-CLEAN-09: la marca de carga buena es la entrada "catalog" de `_image_cache_meta` (una
-TtlCache) y el fallo total, su `mark_failed`."""
+La marca de carga buena es la entrada "catalog" de `catalog_cache.meta` (una TtlCache)
+y el fallo total, su `mark_failed`."""
 import asyncio
 import time
 from unittest.mock import MagicMock
 
 import pytest
 
+from steam.cache.image_cache import catalog_cache
+from steam.cache.policy import IMAGE_CATALOG
 from steam.services import catalog_service
-from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
 
 N_SOURCES = 7
 
@@ -33,11 +35,11 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _clean_cache():
-    saved = (dict(_item_image_cache), dict(_item_rarity_cache), dict(_image_cache_meta))
-    for store in (_item_image_cache, _item_rarity_cache, _image_cache_meta):
-        store.clear()
+    stores = (catalog_cache.images, catalog_cache.rarities, catalog_cache.meta)
+    saved = tuple(dict(store) for store in stores)
+    catalog_cache.clear()
     yield
-    for store, old in zip((_item_image_cache, _item_rarity_cache, _image_cache_meta), saved, strict=True):
+    for store, old in zip(stores, saved, strict=True):
         store.clear()
         store.update(old)
 
@@ -48,7 +50,7 @@ async def test_total_failure_does_not_stamp_ts():
     await catalog_service.fetch_static_images(client)
 
     assert client.calls == N_SOURCES
-    assert "catalog" not in _image_cache_meta
+    assert "catalog" not in catalog_cache.meta
 
 
 async def test_total_failure_backs_off_then_retries():
@@ -59,7 +61,7 @@ async def test_total_failure_backs_off_then_retries():
     assert client.calls == N_SOURCES
 
     # Pasado el backoff, la siguiente llamada reintenta las siete descargas.
-    _image_cache_meta.mark_failed("catalog", now=time.monotonic() - IMAGE_FAIL_TTL - 1)
+    catalog_cache.mark_failed(now=time.monotonic() - IMAGE_CATALOG.fail_ttl - 1)
     await catalog_service.fetch_static_images(client)
     assert client.calls == 2 * N_SOURCES
 
@@ -69,9 +71,9 @@ async def test_one_source_ok_stamps_ts():
 
     await catalog_service.fetch_static_images(client)
 
-    assert "catalog" in _image_cache_meta
-    assert not _image_cache_meta.in_backoff("catalog")
-    assert _item_image_cache["AK-47 | Redline"] == "https://img/x.png"
+    assert "catalog" in catalog_cache.meta
+    assert not catalog_cache.meta.in_backoff("catalog")
+    assert catalog_cache.images["AK-47 | Redline"] == "https://img/x.png"
 
     await catalog_service.fetch_static_images(client)           # TTL largo: no vuelve a pedir
     assert client.calls == N_SOURCES
@@ -107,7 +109,7 @@ async def test_concurrent_reload_downloads_once():
     await asyncio.gather(*[catalog_service.fetch_static_images(client) for _ in range(5)])
 
     assert client.calls == N_SOURCES          # 7, no 35
-    assert "catalog" in _image_cache_meta
+    assert "catalog" in catalog_cache.meta
 
 
 async def test_concurrent_total_failure_downloads_once():
@@ -129,9 +131,9 @@ async def test_cancelled_loader_releases_lock_and_leaves_no_stamp():
         await task
 
     assert not catalog_service._image_cache_lock.locked()
-    assert "catalog" not in _image_cache_meta
-    assert not _image_cache_meta.in_backoff("catalog")
+    assert "catalog" not in catalog_cache.meta
+    assert not catalog_cache.meta.in_backoff("catalog")
 
     gate.set()
     await asyncio.wait_for(catalog_service.fetch_static_images(client), timeout=1)
-    assert "catalog" in _image_cache_meta
+    assert "catalog" in catalog_cache.meta

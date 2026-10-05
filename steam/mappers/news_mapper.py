@@ -6,8 +6,8 @@ from steam.domain.models import NewsEntry, NewsItem
 from steam.domain.rules import news_category
 from steam.utils.strings import clean_news_content
 
-# rag/ingest.py y notifications/service.py lo importan con este nombre (CLEAN-19 lo mueve
-# a utils/strings sin tocar esos paquetes).
+# rag/ingest.py y notifications/service.py lo importan con este nombre; la implementación
+# vive en utils/strings.
 _clean_news_content = clean_news_content
 
 

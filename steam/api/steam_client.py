@@ -1,9 +1,9 @@
-"""Cliente único de steamwebapi (CLEAN-06).
+"""Cliente único de steamwebapi.
 
 Steam, CSFloat y Buff van todos por aquí: los dos últimos son endpoints
 `/market/{market}/…` de steamwebapi, no APIs propias. Una función por endpoint;
 cada una devuelve el JSON tal cual si el status es 200 y lanza un error tipado
-(`steam/errors.py`) si no. **No parsea ni normaliza nada**: eso es de los mappers.
+(`steam/errors/`) si no. **No parsea ni normaliza nada**: eso es de los mappers.
 
 Los timeouts son los de cada llamada antes del cliente; donde no se pasa, manda el
 del `httpx.AsyncClient` compartido (10 s, `main.py`). El limiter no se aplica aquí:
