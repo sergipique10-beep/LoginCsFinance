@@ -25,6 +25,7 @@ A las que cumplen la condición las marca disparadas ANTES de mandar la push:
 si el envío revienta a medias, el siguiente tick no las reenvía. Se sacrifica
 un aviso perdido a cambio de no duplicar nunca.
 """
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -50,6 +51,9 @@ MAX_NAME_LEN = 200
 CACHED_PRICE_MAX_AGE = timedelta(hours=6)
 # Una consulta a /item por skin y día como máximo.
 LOOKUP_MIN_INTERVAL = timedelta(hours=24)
+# PUSH-10: un tick a la vez. El bucle interno y el POST del workflow comparten
+# proceso; sin esto dos evaluaciones solapadas podrían mandar la misma push dos veces.
+_tick_lock = asyncio.Lock()
 
 
 class AlertError(Exception):
@@ -176,6 +180,24 @@ def _format_push(alert: dict, price: float) -> tuple[str, str, dict[str, str]]:
 async def evaluate_alerts(http_client: httpx.AsyncClient) -> dict:
     """Un lote de evaluación. Devuelve contadores; `pendientes` es lo que queda
     activo fuera de este lote (rota en los siguientes ticks)."""
+    async with _tick_lock:
+        return await _evaluate_alerts(http_client)
+
+
+async def run_tick_loop(http_client: httpx.AsyncClient, interval: float) -> None:
+    """Tick interno (PUSH-10): el schedule de GitHub ejecuta el cron «horario» cada
+    3–9 h (medido 9 días), así que el backend evalúa él mismo cada `interval` s
+    mientras el pinger (PERF-07) lo mantiene despierto. Un fallo se registra y el
+    bucle sigue; se para cancelando la tarea (CancelledError no se captura)."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await evaluate_alerts(http_client)
+        except Exception as exc:  # noqa: BLE001 — el siguiente tick lo reintenta
+            logger.error("[alerts] tick interno falló: %s", exc)
+
+
+async def _evaluate_alerts(http_client: httpx.AsyncClient) -> dict:
     total_active = await repo.count_active()
     alerts = await repo.fetch_active(ALERTS_LOOKUP_CAP)
 

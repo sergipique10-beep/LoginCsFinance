@@ -164,6 +164,12 @@ ALERTS_TICK_TOKEN = os.getenv("ALERTS_TICK_TOKEN", "")
 # con el cron horario. Las que no entran rotan al siguiente tick (LRU por
 # last_checked_at).
 ALERTS_LOOKUP_CAP = int(os.getenv("ALERTS_LOOKUP_CAP", "18"))
+# PUSH-10: segundos entre ticks internos de alertas (0 = desactivado). El schedule de
+# GitHub ejecuta alerts-tick.yml cada 3–9 h en vez de cada hora, así que el backend
+# evalúa él mismo mientras el pinger (PERF-07) lo mantiene despierto; el workflow
+# queda de respaldo. Cuesta cero cuota: los lookups a /item siguen siendo uno por
+# skin y día (LOOKUP_MIN_INTERVAL); el resto son lecturas de Supabase.
+ALERTS_TICK_INTERVAL = int(os.getenv("ALERTS_TICK_INTERVAL", "900"))
 # PERF-14: reintento en segundo plano del inventario tras un 429 de steamwebapi (límite
 # por minuto, transitorio; el 402 de cuota mensual NO se reintenta). Backoff exponencial
 # con jitter: espera = max(Retry-After, BASE·2^intento) acotada a CAP, con ±50 % de jitter.
