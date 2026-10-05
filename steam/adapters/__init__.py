@@ -1,4 +1,4 @@
-"""Adapters de steam/ (CLEAN-14): del JSON crudo de cada fuente al modelo interno
+"""Adapters de steam/: del JSON crudo de cada fuente al modelo interno
 (`steam/domain/models.py`), ya validado.
 
 Contrato de cada función: entrada `Any` (lo que devolvió `api/*`), salida un modelo

@@ -1,4 +1,4 @@
-"""Cliente de CSFloat vía steamwebapi (CLEAN-14): los endpoints `/market/csfloat/…`.
+"""Cliente de CSFloat vía steamwebapi: los endpoints `/market/csfloat/…`.
 No es una API propia: comparte transporte, clave y errores con `steam_client`. Existe
 para que los services pidan «el histórico de CSFloat» sin pasar el nombre del mercado
 como string; `steam.api.MARKET_CLIENTS` elige el módulo por mercado.

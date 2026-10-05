@@ -1,8 +1,7 @@
-"""Errores tipados de las fuentes externas de steam/ (CLEAN-06).
+"""Errores tipados de las fuentes externas de steam/.
 
-El cliente (`steam/api/steam_client.py`) traduce cada respuesta a uno de estos;
-quien llama decide qué HTTP devolver. Antes vivían repartidos: `QuotaExhausted` en
-price_capture, `SteamRateLimited` en routes/items y `HistoryBusy` en services.
+El transporte (`steam/api/http.py`) traduce cada respuesta a uno de estos; quien llama
+decide qué HTTP devolver (`steam/errors/handling.py:http_error_for`).
 """
 
 
@@ -71,7 +70,7 @@ class InvalidPayload(Exception):
 
 
 class StorageError(Exception):
-    """Supabase no respondió o rechazó la operación (CLEAN-15). Lo lanza `storage_call`
+    """Supabase no respondió o rechazó la operación. Lo lanza `storage_call`
     (`steam/cap_history_repo.py`) traduciendo los errores de postgrest, de red y la
     configuración ausente; los llamadores best-effort (snapshot del inventario,
     `register_tracked`) capturan esto y nada más: un `KeyError` en un repo es un bug."""
@@ -98,7 +97,7 @@ class UnexpectedPayload(Exception):
 
 
 class InvalidField(UnexpectedPayload):
-    """Un campo del payload tiene un tipo imposible (CLEAN-14): un dict donde va un
+    """Un campo del payload tiene un tipo imposible: un dict donde va un
     número, una lista donde va un string. Lo lanzan los validadores de valor
     (`domain/validators.py`) desde los adapters. Un campo **ausente** o un string no
     numérico no es esto: eso es `None` en el modelo interno.

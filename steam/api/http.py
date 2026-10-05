@@ -1,5 +1,5 @@
-"""Transporte común de los clientes de steam/ (CLEAN-07): un GET que devuelve el JSON
-del 200 o lanza el error tipado de `steam/errors.py`. Lo usan steamwebapi, el
+"""Transporte común de los clientes de steam/: un GET que devuelve el JSON del 200 o
+lanza el error tipado de `steam/errors/`. Lo usan steamwebapi, el
 catálogo de ByMykel, frankfurter y Steam News; cada uno pone su URL y su timeout.
 """
 from typing import Any
@@ -62,7 +62,7 @@ async def get_text(client: httpx.AsyncClient, url: str, *, headers: dict | None 
                    timeout: Timeout = httpx.USE_CLIENT_DEFAULT,
                    follow_redirects: FollowRedirects = httpx.USE_CLIENT_DEFAULT) -> str:
     """El cuerpo de un 200 como texto (páginas HTML: el og:image de las noticias).
-    Mismos errores tipados que `get_json` (CLEAN-14)."""
+    Mismos errores tipados que `get_json`."""
     resp = await _get_200(client, url, None, headers=headers, timeout=timeout,
                           follow_redirects=follow_redirects)
     return resp.text

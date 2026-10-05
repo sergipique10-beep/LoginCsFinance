@@ -1,4 +1,4 @@
-"""Histórico de precios y precios por mercado (CLEAN-11): el histórico de CSFloat con
+"""Histórico de precios y precios por mercado: el histórico de CSFloat con
 sus deltas (`enrich_prices`) y el lookup de CSFloat/Buff (`enrich_market_prices`).
 """
 import asyncio
@@ -125,12 +125,12 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
         data = await MARKET_CLIENTS[market].prices(client, {"format": "json"}, timeout=30.0)
         rows = adapt_price_rows(data, market=market)   # forma rara → UnexpectedPayload
     except DEGRADABLE as exc:
-        logger.warning("[market-lookup] %s failed: %s", market, reason_of(exc))
+        logger.warning("[market-prices] lookup %s failed: %s", market, reason_of(exc))
         _market_lookup_cache.mark_failed(market, now)
         return _lookup_stale(market, reason_of(exc))
     lookup: dict[str, float] = {r.name: r.price for r in rows}
     _market_lookup_cache.put(market, lookup, now)
-    logger.info("[market-lookup] %s: %d prices loaded", market, len(lookup))
+    logger.info("[market-prices] lookup %s: %d prices loaded", market, len(lookup))
     return Fetched(lookup)
 
 

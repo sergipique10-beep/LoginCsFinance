@@ -1,4 +1,4 @@
-"""Normalizadores de nombres e imágenes de ítem de CS2 (CLEAN-10, CLEAN-17; ex names.py).
+"""Normalizadores de nombres e imágenes de ítem de CS2.
 Funciones puras: cada prefijo («StatTrak™ », «★ », «Souvenir ») y la marca de slab
 viven solo aquí (guardia en tests/test_domain_normalizers.py). Las REGLAS que deciden
 algo sobre un ítem (¿es un slab?, ¿entra en el ranking?) están en `domain/rules.py`.

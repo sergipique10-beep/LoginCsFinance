@@ -1,6 +1,6 @@
-"""Clientes HTTP de las fuentes externas de steam/ (ex `steam/clients/`, CLEAN-14).
+"""Clientes HTTP de las fuentes externas de steam/.
 
-Uno por fuente, sin caché, sin fallback y sin normalizar (CLEAN-06/07): devuelven el
+Uno por fuente, sin caché, sin fallback y sin normalizar: devuelven el
 JSON del 200 o lanzan el error tipado de `steam/errors/`. `MARKET_CLIENTS` da el módulo
 de cada mercado con histórico (`HISTORY_MARKETS` del dominio) por su nombre.
 """

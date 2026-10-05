@@ -1,4 +1,4 @@
-"""Cliente del catálogo estático de ByMykel/CSGO-API (CLEAN-07): imágenes y rareza
+"""Cliente del catálogo estático de ByMykel/CSGO-API: imágenes y rareza
 de skins, cuchillos, stickers… El bucle por fuentes, el lock (PERF-18), el backoff
 (CAL-08) y el registro de claves viven en quien llama (`services._load_static_images`).
 """

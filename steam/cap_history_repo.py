@@ -50,7 +50,7 @@ _STORAGE_FAILURES = (APIError, httpx.HTTPError, RuntimeError)
 
 async def storage_call(fn: Callable[[], T]) -> T:
     """Ejecuta una operación síncrona de supabase-py en un hilo y traduce sus fallos a
-    `StorageError` (CLEAN-15), para que un llamador best-effort capture eso y no
+    `StorageError`, para que un llamador best-effort capture eso y no
     `Exception`. Lo usan solo los caminos que no deben romper la respuesta (snapshot del
     inventario, `register_tracked`); los ticks dejan subir el error tal cual."""
     try:

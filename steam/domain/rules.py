@@ -1,9 +1,9 @@
-"""Reglas de negocio de steam/ (CLEAN-17): las decisiones sobre un ítem, un ranking, una
-tasa o una noticia que antes vivían como strings y comparaciones sueltas en services y
-mappers. Puras: reciben el modelo interno (o la tarjeta ya mapeada, en los rankings) y
+"""Reglas de negocio de steam/: las decisiones sobre un ítem, un ranking, una tasa o una
+noticia, cada una con nombre y test propios en vez de strings y comparaciones sueltas en
+services y mappers. Puras: reciben el modelo interno (o la tarjeta ya mapeada, en los rankings) y
 devuelven un veredicto. Ninguna es nueva; endurecerlas cambia lo que ve el usuario (UX-46).
 
-- Plausibilidad (CLEAN-12): `plausible_ratio`, `plausible_fx_rate`.
+- Plausibilidad: `plausible_ratio`, `plausible_fx_rate`.
 - Rankings: `ranking_eligible`, `turnover`, `diversificar`.
 - Slabs: `is_sticker_slab(item)` decide por `item_type` primero y por el nombre después.
 - Noticias (UX-05): `is_readable_news`, `news_category`.
@@ -145,7 +145,7 @@ def is_sticker_slab(item: SteamItem) -> bool:
     Decide por `item_type` primero («Sticker Slab» en steamwebapi, fixture
     `tests/fixtures/steamwebapi/items.json`). Si el itemtype no lo dice —falta, o
     la API lo clasifica como «sticker» a secas, que es lo que fija el contrato de
-    los ticks— decide el nombre, canónico o localizado, igual que antes de CLEAN-17.
+    los ticks— decide el nombre, canónico o localizado.
     """
     if has_slab_mark(item.item_type):
         return True

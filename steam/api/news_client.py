@@ -1,4 +1,4 @@
-"""Cliente de Steam News y del og:image de cada noticia (CLEAN-07)."""
+"""Cliente de Steam News y del og:image de cada noticia."""
 import re
 from typing import Any
 
@@ -25,9 +25,9 @@ _OG_TIMEOUT = 4.0
 async def fetch_og_image(client: httpx.AsyncClient, url: str) -> str:
     """La imagen og:image de la página de la noticia, o "" si la página no la trae.
 
-    Un fallo de red o un status distinto de 200 **lanza** el error tipado (CLEAN-14):
-    antes devolvía "" en silencio y la degradación no tenía motivo. Quien decide que una
-    noticia sin imagen se pinta igual es `services/news.py`, que registra el motivo.
+    Un fallo de red o un status distinto de 200 **lanza** el error tipado: un "" sin
+    motivo sería una degradación invisible. Quien decide que una noticia sin imagen se
+    pinta igual es `services/news_service.py`, que registra el motivo.
     """
     html = await get_text(client, url, timeout=_OG_TIMEOUT, follow_redirects=True,
                           headers={"User-Agent": "Mozilla/5.0"})

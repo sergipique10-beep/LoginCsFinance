@@ -1,4 +1,4 @@
-"""Enumeraciones del dominio de steam/ (CLEAN-15, CLEAN-17).
+"""Enumeraciones del dominio de steam/.
 
 `FetchStatus` y `Served` son `Literal` y no `Enum` a propósito: `Fetched.status` y
 `log_degraded` se comparan y se escriben como strings en services, rutas y tests, y un
@@ -6,7 +6,7 @@
 es que las dos listas vivan en un solo sitio y que `served_to_status`
 (`steam/errors/handling.py`) sea la única correspondencia entre ellas.
 
-`Market`, `WeaponCategory`, `Wear` y `NewsCategory` (CLEAN-17) son `str, Enum`: los
+`Market`, `WeaponCategory`, `Wear` y `NewsCategory` son `str, Enum`: los
 valores son los strings que ya viajaban sueltos por el código, y `domain/catalog.py`
 deriva sus tuplas y conjuntos de aquí. Fuera de `domain/` se usan los `.value`: en
 Python ≥ 3.11 `f"{Market.BUFF}"` da `Market.BUFF`, no `buff`, y una URL o una clave

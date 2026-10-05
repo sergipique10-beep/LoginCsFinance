@@ -1,4 +1,4 @@
-"""Histórico del índice de mercado de CS2 (CLEAN-18, ex market_service): captura horaria
+"""Histórico del índice de mercado de CS2: captura horaria
 en Supabase (`capture_cap_snapshot`, /internal/cap-tick) y lectura agrupada por timeframe
 (`get_cap_history`, /market/cap-history). Sin FastAPI.
 """
@@ -122,7 +122,7 @@ async def capture_cap_snapshot(client: httpx.AsyncClient) -> dict:
 
     await insert_snapshot(point)
     logger.info("[cap-tick] snapshot saved: %s = %.4f", point["ts"], point["priceindex"])
-    # Observabilidad de las cachés (CLEAN-16): una línea por caché cada hora, sin endpoint.
+    # Observabilidad de las cachés: una línea por caché cada hora, sin endpoint.
     for name, st in stats_all().items():
         logger.info("[steam-cache] name=%s entries=%d hits=%d misses=%d stale_served=%d",
                     name, st["entries"], st["hits"], st["misses"], st["stale_served"])

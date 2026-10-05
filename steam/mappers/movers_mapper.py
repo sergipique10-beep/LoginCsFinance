@@ -1,5 +1,5 @@
 """Mapper de topmovers (`/market-index/cs2`). El ranking hot/cold de respaldo que se
-construye con él cuando /items no responde vive en `services/rankings_service.py` (CLEAN-18)."""
+construye con él cuando /items no responde vive en `services/rankings_service.py`."""
 
 from steam.domain.catalog import weapon_category
 from steam.domain.models import MoverItem, TopMover

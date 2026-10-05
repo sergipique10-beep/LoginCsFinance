@@ -1,4 +1,4 @@
-"""Tipo de cambio USD→EUR (UX-08) con caché de 24 h y stale si la fuente cae (CLEAN-11)."""
+"""Tipo de cambio USD→EUR (UX-08) con caché de 24 h y stale si la fuente cae."""
 import logging
 import time
 

@@ -35,7 +35,7 @@ def _inventory_http_error(exc: Exception) -> HTTPException:
         if exc.status == 403:
             return HTTPException(status_code=403, detail="Inventory is private")
         if exc.status is not None:
-            logger.error("steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
+            logger.error("[inventory] steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
     return http_error_for(exc, timeout_status=504)
 
 

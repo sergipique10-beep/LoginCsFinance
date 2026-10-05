@@ -1,4 +1,4 @@
-"""Perfil de Steam del usuario (GET /me), con caché de 23 h (CLEAN-11)."""
+"""Perfil de Steam del usuario (GET /me), con caché de 23 h."""
 import time
 
 import httpx
@@ -22,7 +22,7 @@ async def get_profile(client: httpx.AsyncClient, steam_id: str) -> Fetched[dict]
     data = adapt_profile(await steam_client.profile(client, steam_id))   # forma rara → UnexpectedPayload
     profile = _map_profile(data, steam_id)
     if data is None:
-        # 200 sin perfil: campos vacíos SIN cachear (CAL-14: antes se guardaban 23 h).
+        # 200 sin perfil: campos vacíos SIN cachear (CAL-14: un perfil en blanco no vale 23 h).
         return degraded("profile", "empty_body", "empty", profile)
     _profile_cache.put(steam_id, profile, now)
     return Fetched(profile)

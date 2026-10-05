@@ -45,7 +45,7 @@ async def seed_tracked() -> int:
 
 async def lookup_item(client: httpx.AsyncClient, name: str) -> SteamItem | None:
     """GET /item?market_hash_name=<name> vía el limiter compartido: el item como modelo
-    interno (CLEAN-18; antes el dict crudo), o None si la respuesta no trae ninguno.
+    interno, o None si la respuesta no trae ninguno.
     Público: lo usan alerts/ (creación y tick) además de `capture`."""
     await _history_limiter.acquire()
     data = await steam_client.item(client, name)
