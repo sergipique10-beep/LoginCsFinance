@@ -1,6 +1,6 @@
 """Validadores de VALOR de steam/ (CLEAN-14): un campo del payload → su tipo, o None.
-Las reglas de plausibilidad y de rankings (CLEAN-12) viven en `domain/rules.py` desde
-CLEAN-17; aquí no se decide nada sobre un ítem, solo qué es y qué no es un número.
+Las reglas de plausibilidad y de rankings (CLEAN-12) y `canonical_price` (CLEAN-18) viven en
+`domain/rules.py`; aquí no se decide nada sobre un ítem, solo qué es y qué no es un número.
 """
 from collections.abc import Mapping
 from typing import Any
@@ -47,18 +47,6 @@ def as_str(value: Any, *, field: str = "", source: str = "", op: str = "") -> st
     if isinstance(value, _CONTAINER):
         raise InvalidField(source, op, field, value)
     return value if isinstance(value, str) else str(value)
-
-
-def canonical_price(item: Mapping[str, Any]) -> float | None:
-    """Precio canónico: pricelatestsell → pricelatest → pricemedian (primero > 0).
-
-    Sobre el dict crudo de `/item`: lo consumen price_capture y alerts, que pasan al
-    modelo interno en la Fase 5 del refactor (price_capture_service)."""
-    for key in ("pricelatestsell", "pricelatest", "pricemedian"):
-        v = as_float(item.get(key), field=key, source="steamwebapi", op="item")
-        if v is not None and v > 0:
-            return v
-    return None
 
 
 def has_price(point: Mapping[str, Any]) -> bool:

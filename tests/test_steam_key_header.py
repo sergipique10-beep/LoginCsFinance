@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from steam import price_capture
+from steam.services import price_capture_service as price_capture
 from steam.services import pricing_service, providers_service
 from steam.api import steam_client
 from steam.errors import UpstreamError
@@ -44,7 +44,7 @@ async def test_key_goes_in_header_and_never_reaches_logs(caplog):
         await pricing_service.fetch_history_for_item(client, "AK-47 | Redline (Field-Tested)")
         await pricing_service._fetch_market_price_lookup(client, "csfloat")
         await providers_service.fetch_market_providers(client)
-        await price_capture._lookup_item(client, "AK-47 | Redline (Field-Tested)")
+        await price_capture.lookup_item(client, "AK-47 | Redline (Field-Tested)")
 
     assert len(seen) == 4
     for req in seen:
@@ -59,7 +59,7 @@ async def test_http_error_with_url_does_not_leak_key(caplog):
     caplog.set_level(logging.DEBUG)
     async with _client([], status=500) as client:
         with pytest.raises(UpstreamError) as exc_info:
-            await price_capture._lookup_item(client, "X")
+            await price_capture.lookup_item(client, "X")
     logging.getLogger("uvicorn.error").warning("[test] %s", exc_info.value)
     assert FAKE_KEY not in caplog.text
 

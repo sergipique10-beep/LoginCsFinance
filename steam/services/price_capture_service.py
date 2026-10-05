@@ -17,14 +17,16 @@ import httpx
 from settings import PRICE_LOOKUP_CAP, PRICE_DAILY_BUDGET
 from steam.api import steam_client
 from steam.api.steam_client import _history_limiter
-from steam.domain.validators import canonical_price
+from steam.adapters.steam_adapter import adapt_item
+from steam.domain.models import SteamItem
+from steam.domain.rules import canonical_price
 from steam.errors import QuotaExhausted
 from steam.errors.handling import DEGRADABLE, log_degraded, reason_of
 from steam import price_history_repo as repo
 
 logger = logging.getLogger("uvicorn.error")
 
-_SEED_PATH = Path(__file__).parent / "data" / "tracked_seed.json"
+_SEED_PATH = Path(__file__).resolve().parent.parent / "data" / "tracked_seed.json"   # steam/data/
 
 
 def _load_seed() -> list[str]:
@@ -41,11 +43,14 @@ async def seed_tracked() -> int:
     return len(names)
 
 
-async def _lookup_item(client: httpx.AsyncClient, name: str) -> dict:
-    """GET /item?market_hash_name=<name> vía el limiter compartido. Devuelve el item."""
+async def lookup_item(client: httpx.AsyncClient, name: str) -> SteamItem | None:
+    """GET /item?market_hash_name=<name> vía el limiter compartido: el item como modelo
+    interno (CLEAN-18; antes el dict crudo), o None si la respuesta no trae ninguno.
+    Público: lo usan alerts/ (creación y tick) además de `capture`."""
     await _history_limiter.acquire()
     data = await steam_client.item(client, name)
-    return data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
+    raw = data[0] if isinstance(data, list) and data else data
+    return adapt_item(raw) if isinstance(raw, dict) and raw else None
 
 
 async def capture(client: httpx.AsyncClient) -> dict:
@@ -91,7 +96,7 @@ async def capture(client: httpx.AsyncClient) -> dict:
     for name in names:
         intentadas.append(name)
         try:
-            item = await _lookup_item(client, name)
+            item = await lookup_item(client, name)
         except QuotaExhausted as exc:
             # Inútil seguir: cada llamada será otro 402 hasta el reset mensual.
             errors += 1
@@ -111,7 +116,7 @@ async def capture(client: httpx.AsyncClient) -> dict:
             skipped += 1
             continue
 
-        volume = item.get("sold24h")
+        volume = item.sold_24h if item is not None else None
         rows.append({
             "market_hash_name": name,
             "date": today,

@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from alerts import service
-from steam import price_capture
+from steam.adapters.steam_adapter import adapt_item
+from steam.services import price_capture_service as price_capture
 
 
 def _alert(id, name, direction, threshold, steam_id="u1"):
@@ -26,9 +27,9 @@ def _prepare(monkeypatch, alerts, prices, tokens=None, total_active=None, cached
         v = prices[name]
         if isinstance(v, Exception):
             raise v
-        return v
+        return adapt_item(v)
     lookup_mock = AsyncMock(side_effect=lookup)
-    monkeypatch.setattr(price_capture, "_lookup_item", lookup_mock)
+    monkeypatch.setattr(price_capture, "lookup_item", lookup_mock)
     # PERF-09: sin precio cacheado por defecto → se ejercita el lookup como antes.
     monkeypatch.setattr(service, "_cached_prices", AsyncMock(return_value=dict(cached or {})))
 
@@ -196,7 +197,7 @@ def _prepare_create(monkeypatch, *, active=0, duplicate=False, tracked=True, ite
     monkeypatch.setattr(service.price_history_repo, "is_tracked", AsyncMock(return_value=tracked))
     register = AsyncMock()
     monkeypatch.setattr(service.price_history_repo, "register_tracked", register)
-    monkeypatch.setattr(price_capture, "_lookup_item", AsyncMock(return_value=item or {}))
+    monkeypatch.setattr(price_capture, "lookup_item", AsyncMock(return_value=adapt_item(item) if item else None))
     monkeypatch.setattr(service, "_cached_prices", AsyncMock(return_value=dict(cached or {})))
     create = AsyncMock(return_value={"id": 7})
     monkeypatch.setattr(service.repo, "create", create)
@@ -321,7 +322,7 @@ async def test_create_uses_cached_price_and_skips_lookup(monkeypatch):
 
     await service.create_alert(MagicMock(), "u1", "AK", "below", 10.0)
 
-    price_capture._lookup_item.assert_not_awaited()
+    price_capture.lookup_item.assert_not_awaited()
     register.assert_awaited_once()
     create.assert_awaited_once()
 
@@ -329,7 +330,7 @@ async def test_create_uses_cached_price_and_skips_lookup(monkeypatch):
 @pytest.mark.asyncio
 async def test_create_reports_price_unavailable_when_quota_is_exhausted(monkeypatch):
     _prepare_create(monkeypatch, tracked=False)
-    monkeypatch.setattr(price_capture, "_lookup_item", AsyncMock(side_effect=QuotaExhausted("402")))
+    monkeypatch.setattr(price_capture, "lookup_item", AsyncMock(side_effect=QuotaExhausted("402")))
 
     with pytest.raises(service.PriceUnavailable):
         await service.create_alert(MagicMock(), "u1", "AK", "below", 10.0)

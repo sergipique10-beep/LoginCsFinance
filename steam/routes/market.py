@@ -11,7 +11,7 @@ from ..errors.handling import SOURCE_ERRORS, http_error_for
 from ..services import fx_service
 from ..services import cap_history_service, market_service, rankings_service
 from ..services import providers_service
-from steam.price_capture import capture as price_capture_run
+from ..services.price_capture_service import capture as price_capture_run
 
 router = APIRouter()
 

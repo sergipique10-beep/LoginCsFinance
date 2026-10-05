@@ -39,6 +39,18 @@ def test_ranking_eligible(price, sold, min_sold, ok):
     assert rules.ranking_eligible(adapt_item({"pricelatestsell": price, "sold24h": sold}), min_sold) is ok
 
 
+@pytest.mark.parametrize("raw, price", [
+    ({"pricelatestsell": 5, "pricelatest": 7}, 5.0),
+    ({"pricelatestsell": 0, "pricelatest": "7.5"}, 7.5),
+    ({"pricelatestsell": "x", "pricemedian": 3}, 3.0),
+    ({}, None),
+])
+def test_canonical_price(raw, price):
+    """Sobre el modelo interno desde CLEAN-18 (antes, el dict crudo de /item)."""
+    assert rules.canonical_price(adapt_item(raw)) == price
+    assert rules.canonical_price(None) is None
+
+
 def test_turnover_es_precio_por_unidades():
     assert rules.turnover({"priceLatest": 28.0, "sold24h": 30}) == 840.0
     assert rules.turnover({}) == 0 and rules.turnover({"priceLatest": None, "sold24h": None}) == 0

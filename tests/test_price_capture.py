@@ -3,8 +3,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from steam import price_capture
-from steam.domain.validators import canonical_price
+from steam.adapters.steam_adapter import adapt_item
+
+from steam.services import price_capture_service as price_capture
+from steam.domain.rules import canonical_price
 from steam.api import steam_client
 
 
@@ -22,19 +24,19 @@ def _sin_supabase(monkeypatch):
 
 
 def test_canonical_price_prefers_latestsell():
-    assert canonical_price(
-        {"pricelatestsell": 43.15, "pricelatest": 41.35, "pricemedian": 42.71}
+    assert canonical_price(adapt_item(
+        {"pricelatestsell": 43.15, "pricelatest": 41.35, "pricemedian": 42.71})
     ) == 43.15
 
 
 def test_canonical_price_falls_back_when_zero():
-    assert canonical_price(
-        {"pricelatestsell": 0, "pricelatest": 0, "pricemedian": 42.71}
+    assert canonical_price(adapt_item(
+        {"pricelatestsell": 0, "pricelatest": 0, "pricemedian": 42.71})
     ) == 42.71
 
 
 def test_canonical_price_none_when_all_missing():
-    assert canonical_price({}) is None
+    assert canonical_price(adapt_item({})) is None and canonical_price(None) is None
 
 
 @pytest.mark.asyncio
@@ -72,8 +74,8 @@ async def test_capture_snapshots_and_marks(monkeypatch):
     monkeypatch.setattr(price_capture.repo, "upsert_prices", upsert)
     monkeypatch.setattr(price_capture.repo, "mark_captured", mark)
     # el lookup por-nombre devuelve un item con precio y volumen
-    monkeypatch.setattr(price_capture, "_lookup_item",
-                        AsyncMock(return_value={"pricelatestsell": 43.15, "sold24h": 69}))
+    monkeypatch.setattr(price_capture, "lookup_item",
+                        AsyncMock(return_value=adapt_item({"pricelatestsell": 43.15, "sold24h": 69})))
 
     out = await price_capture.capture(MagicMock())
 
@@ -93,8 +95,8 @@ async def test_capture_skips_item_without_price(monkeypatch):
     upsert = AsyncMock()
     monkeypatch.setattr(price_capture.repo, "upsert_prices", upsert)
     monkeypatch.setattr(price_capture.repo, "mark_captured", AsyncMock())
-    monkeypatch.setattr(price_capture, "_lookup_item",
-                        AsyncMock(return_value={"pricelatestsell": 0}))
+    monkeypatch.setattr(price_capture, "lookup_item",
+                        AsyncMock(return_value=adapt_item({"pricelatestsell": 0})))
 
     out = await price_capture.capture(MagicMock())
 
@@ -127,8 +129,8 @@ class TestTroceado:
         monkeypatch.setattr(price_capture.repo, "upsert_prices", AsyncMock())
         monkeypatch.setattr(price_capture.repo, "mark_captured", mark)
         monkeypatch.setattr(
-            price_capture, "_lookup_item",
-            lookup or AsyncMock(return_value={"pricelatestsell": 1.0}),
+            price_capture, "lookup_item",
+            lookup or AsyncMock(return_value=adapt_item({"pricelatestsell": 1.0})),
         )
         return fetch, mark
 
@@ -191,7 +193,7 @@ async def test_capture_counts_errors(monkeypatch):
                         AsyncMock(return_value=["X | Y (Field-Tested)"]))
     monkeypatch.setattr(price_capture.repo, "upsert_prices", AsyncMock())
     monkeypatch.setattr(price_capture.repo, "mark_captured", AsyncMock())
-    monkeypatch.setattr(price_capture, "_lookup_item",
+    monkeypatch.setattr(price_capture, "lookup_item",
                         AsyncMock(side_effect=SourceUnavailable("boom")))
 
     out = await price_capture.capture(MagicMock())
@@ -214,7 +216,7 @@ async def test_lookup_raises_quota_exhausted_on_402(monkeypatch):
     client.get = AsyncMock(return_value=httpx.Response(402, text='{"status":402,"message":"monthly limit"}'))
 
     with pytest.raises(QuotaExhausted):
-        await price_capture._lookup_item(client, "AK")
+        await price_capture.lookup_item(client, "AK")
 
 
 @pytest.mark.asyncio
@@ -225,8 +227,8 @@ async def test_capture_aborts_batch_on_quota_exhausted(monkeypatch):
     upsert, mark = AsyncMock(), AsyncMock()
     monkeypatch.setattr(price_capture.repo, "upsert_prices", upsert)
     monkeypatch.setattr(price_capture.repo, "mark_captured", mark)
-    lookup = AsyncMock(side_effect=[{"pricelatest": 5}, QuotaExhausted("402"), {"pricelatest": 7}])
-    monkeypatch.setattr(price_capture, "_lookup_item", lookup)
+    lookup = AsyncMock(side_effect=[adapt_item({"pricelatest": 5}), QuotaExhausted("402"), adapt_item({"pricelatest": 7})])
+    monkeypatch.setattr(price_capture, "lookup_item", lookup)
 
     out = await price_capture.capture(MagicMock())
 
@@ -258,8 +260,8 @@ class TestPresupuestoDiario:
         monkeypatch.setattr(price_capture.repo, "fetch_tracked", fetch)
         monkeypatch.setattr(price_capture.repo, "upsert_prices", AsyncMock())
         monkeypatch.setattr(price_capture.repo, "mark_captured", AsyncMock())
-        lookup = AsyncMock(return_value={"pricelatestsell": 1.0})
-        monkeypatch.setattr(price_capture, "_lookup_item", lookup)
+        lookup = AsyncMock(return_value=adapt_item({"pricelatestsell": 1.0}))
+        monkeypatch.setattr(price_capture, "lookup_item", lookup)
         return fetch, lookup
 
     @pytest.mark.asyncio

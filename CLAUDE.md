@@ -220,6 +220,9 @@ LoginCsFinance/
                     #   _ENRICH_BATCH, _TRENDING_STALE_DAYS, _ITEMS_FETCH_MAX
       cap_history_service.py # capture_cap_snapshot (/internal/cap-tick, línea [steam-cache]),
                     #   get_cap_history + _downsample, _CAP_TF_MAP, _CAP_BUCKET_MAP, _CAP_FIELDS
+      price_capture_service.py # ex steam/price_capture.py (CLEAN-18): seed_tracked, capture (el
+                    #   price-tick) y lookup_item(client, name) → SteamItem | None (público: lo usa
+                    #   alerts/); rules.canonical_price decide el precio sobre el modelo
       inventory_service.py #   fetch_fresh_inventory(track=): la ruta registra en tracked_skins, el chat no;
                     #   get_inventory(client, steam_id, force=, origin=) → Fetched[Inventory] con la
                     #   degradación 429/402/410 (PERF-14, CAL-13): caché, snapshot, _retry_inventory
@@ -362,7 +365,7 @@ La predicción es **determinista, no la hace el LLM**: se expone como tool y el 
 - **Gate**: si el backtest dice que **no supera a naive**, la confianza se fuerza a `"baja"` sea cual sea el R². La cifra se sigue devolviendo, pero declarada como poco fiable — el system prompt obliga al agente a advertirlo. En un random walk el modelo pierde contra naive y el gate salta (verificado en `tests/test_predict_trend.py`).
 - **Fuente histórica** (`predict/service.py:_historico`): prioriza la serie propia de `precios_historicos` (≥20 puntos); si aún no hay suficientes o Supabase falla, cae a `pricing.fetch_history_for_item` (CSFloat, 35 días, con limiter y caché). Ambas devuelven la misma forma `[{date, price, volume}]`.
 
-## Captura de precios por-skin (`steam/price_capture.py`)
+## Captura de precios por-skin (`steam/services/price_capture_service.py`)
 
 Tablas `tracked_skins` (qué seguimos) y `precios_historicos` (la serie) — SQL en `docs/sql/precios_historicos.sql`, y la cola priorizada (columnas `last_seen`/`inventory_seen_at` + vista `price_tick_queue`) en `docs/sql/tracked_skins_prioridad.sql`. **Ojo: hay que ejecutarlos en Supabase; si la tabla no existe, la predicción cae silenciosamente a CSFloat, y sin la vista el price-tick falla.**
 

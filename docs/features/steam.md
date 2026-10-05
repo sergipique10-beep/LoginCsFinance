@@ -46,7 +46,6 @@ files:
   - steam/mappers/profile_mapper.py
   - steam/mappers/provider_mapper.py
   - steam/mappers/row_mapper.py
-  - steam/price_capture.py
   - steam/price_history_repo.py
   - steam/rankings_repo.py
   - steam/router.py
@@ -61,6 +60,7 @@ files:
   - steam/services/inventory_service.py
   - steam/services/market_service.py
   - steam/services/news_service.py
+  - steam/services/price_capture_service.py
   - steam/services/pricing_service.py
   - steam/services/profile_service.py
   - steam/services/providers_service.py

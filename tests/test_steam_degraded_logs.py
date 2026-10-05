@@ -153,14 +153,14 @@ async def test_registro_en_tracked_skins_best_effort(steam_api, http, lines, mon
 
 async def test_price_tick_lookup_caido_deja_linea(http, lines, monkeypatch):
     from unittest.mock import AsyncMock
-    from steam import price_capture
+    from steam.services import price_capture_service as price_capture
     from steam.errors import SourceUnavailable
     monkeypatch.setattr(price_capture.repo, "count_captured_on", AsyncMock(return_value=0))
     monkeypatch.setattr(price_capture.repo, "count_pending", AsyncMock(return_value=1))
     monkeypatch.setattr(price_capture.repo, "fetch_tracked", AsyncMock(return_value=["AK"]))
     monkeypatch.setattr(price_capture.repo, "upsert_prices", AsyncMock())
     monkeypatch.setattr(price_capture.repo, "mark_captured", AsyncMock())
-    monkeypatch.setattr(price_capture, "_lookup_item", AsyncMock(side_effect=SourceUnavailable("down")))
+    monkeypatch.setattr(price_capture, "lookup_item", AsyncMock(side_effect=SourceUnavailable("down")))
     assert (await price_capture.capture(http))["errors"] == 1
     assert lines("price_capture") == [("unavailable", "empty")]
 
