@@ -15,6 +15,7 @@ from steam.errors import (
     SourceTimeout, SourceUnavailable, UnexpectedPayload,
     UpstreamError,
 )
+from steam.utils.dates import hour_floor
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -109,7 +110,7 @@ async def capture_cap_snapshot(client: httpx.AsyncClient) -> dict:
 
     # Floor al inicio de la hora: la PK es `ts`, así que varias capturas dentro
     # de la misma hora colapsan en una sola fila (upsert idempotente).
-    hour_ts = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    hour_ts = hour_floor(datetime.now(timezone.utc))
 
     point = {
         "ts": hour_ts.isoformat().replace("+00:00", "Z"),

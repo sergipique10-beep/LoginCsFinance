@@ -5,6 +5,7 @@ from typing import Any
 from steam.domain.models import HistoryPoint
 from steam.domain.validators import as_float, as_int, as_str
 from steam.errors import UNEXPECTED_FORMAT, UnexpectedPayload
+from steam.utils.dates import iso_day
 
 
 def require_list(raw: Any, *, source: str, op: str) -> list:
@@ -41,7 +42,7 @@ def history_points(raw: Any, volume_key: str, *, source: str, op: str) -> list[H
         if not price:
             continue
         points.append({
-            "date": (as_str(p.get("createdat"), field="createdat", source=source, op=op) or "")[:10],
+            "date": iso_day(as_str(p.get("createdat"), field="createdat", source=source, op=op)),
             "price": price,
             "volume": as_int(p.get(volume_key), field=volume_key, source=source, op=op) or 0,
         })

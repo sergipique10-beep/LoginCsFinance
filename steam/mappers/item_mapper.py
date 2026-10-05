@@ -1,12 +1,13 @@
 """Mapper de items de steamwebapi (/items, /inventory, /item) a `SkinCard`, y los
 deltas de precio. Puro: sin HTTP, sin caché, sin fallback silencioso."""
-from datetime import date, timedelta
+from datetime import timedelta
 
 from steam.domain.catalog import weapon_category
 from steam.domain.liquidity import compute_liquidity
 from steam.domain.models import SkinCard, SteamItem
 from steam.domain.normalizers import normalize_image_url
 from steam.domain.rules import plausible_ratio
+from steam.utils import dates
 
 
 # ── Inventory mappers ─────────────────────────────────────────────────────────
@@ -19,7 +20,7 @@ def _delta_from_history(pts: list, days: int, latest: float) -> float | None:
     """
     if not pts or not latest:
         return None
-    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    cutoff = (dates.today() - timedelta(days=days)).isoformat()
     past = [p for p in pts if p["date"] <= cutoff]
     if not past:
         return None

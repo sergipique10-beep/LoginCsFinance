@@ -243,7 +243,7 @@ Cada punto quita **un** `xfail(strict=True)`; el test afirma el comportamiento c
 
 ## Fase 6 — Limpieza final (CLEAN-19)
 
-### Tarea 6.1 — `steam/utils/`
+### Tarea 6.1 — `steam/utils/` — [x]
 - `strings.py` (`_clean_news_content` — `news_mapper` lo re-exporta para `rag/ingest.py:14` y `notifications/service.py:14`, que no se tocan —, `lower_key`), `dates.py` (`iso_day`, `hour_floor`, `today` inyectable para que `_delta_from_history` deje de depender del reloj en tests), `urls.py`.
 
 ### Tarea 6.2 — Comentarios y logs

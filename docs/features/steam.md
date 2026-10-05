@@ -66,6 +66,8 @@ files:
   - steam/services/providers_service.py
   - steam/services/rankings_service.py
   - steam/utils/__init__.py
+  - steam/utils/dates.py
+  - steam/utils/strings.py
   - steam/utils/urls.py
 ---
 
