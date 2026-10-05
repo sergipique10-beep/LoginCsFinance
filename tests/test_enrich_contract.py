@@ -56,7 +56,7 @@ def test_enrich_images_from_cache_mutates_and_returns_same_list(monkeypatch):
 
 
 def test_enrich_images_from_cache_returns_list_with_empty_cache(monkeypatch):
-    monkeypatch.setattr(catalog, "_item_image_cache", {})
+    monkeypatch.setattr(catalog.catalog_cache, "images", {})
     items = [{"name": "AK"}]
 
     assert catalog.enrich_images_from_cache(items) is items

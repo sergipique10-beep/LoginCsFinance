@@ -14,6 +14,10 @@ files:
   - steam/api/__init__.py
   - steam/cache/__init__.py
   - steam/cache/base_cache.py
+  - steam/cache/history_cache.py
+  - steam/cache/image_cache.py
+  - steam/cache/market_cache.py
+  - steam/cache/user_cache.py
   - steam/cache/policy.py
   - steam/api/buff_client.py
   - steam/api/csfloat_client.py

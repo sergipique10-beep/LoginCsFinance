@@ -4,7 +4,7 @@ import time
 
 import httpx
 
-from stores import _news_cache
+from steam.cache.user_cache import _news_cache
 from steam.adapters.news_adapter import adapt_news
 from steam.api import news_client
 from steam.errors.handling import DEGRADABLE, log_degraded, reason_of

@@ -12,9 +12,10 @@ from typing import Any, TypeVar
 import httpx
 
 from settings import TRENDING_TRACK_TOP
-from stores import (
+from steam.cache import stats_all
+from steam.cache.history_cache import _topmovers_raw_cache
+from steam.cache.market_cache import (
     _item_price_cache, _market_index_cache, _market_prices_cache, _search_cache,
-    _topmovers_raw_cache,
 )
 from steam.cap_history_repo import fetch_range, insert_snapshot
 from steam.adapters.steam_adapter import adapt_items, adapt_market_index
@@ -618,6 +619,10 @@ async def capture_cap_snapshot(client: httpx.AsyncClient) -> dict:
 
     await insert_snapshot(point)
     logger.info("[cap-tick] snapshot saved: %s = %.4f", point["ts"], point["priceindex"])
+    # Observabilidad de las cachés (CLEAN-16): una línea por caché cada hora, sin endpoint.
+    for name, st in stats_all().items():
+        logger.info("[steam-cache] name=%s entries=%d hits=%d misses=%d stale_served=%d",
+                    name, st["entries"], st["hits"], st["misses"], st["stale_served"])
     return {"ok": True, "ts": point["ts"], "priceindex": point["priceindex"]}
 
 

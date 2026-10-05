@@ -10,11 +10,7 @@ from fastapi.responses import JSONResponse
 from settings import (
     INVENTORY_429_MAX_RETRIES, INVENTORY_429_BACKOFF_BASE, INVENTORY_429_BACKOFF_CAP,
 )
-from stores import (
-    INVENTORY_REFRESH_COOLDOWN,
-    _inventory_cache,
-    _inventory_refresh_cooldown,
-)
+from steam.cache.user_cache import _inventory_cache, _inventory_refresh_cooldown
 from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
 from ..domain.models import Fetched
@@ -206,9 +202,8 @@ async def refresh_inventory(request: Request, user: dict = Depends(require_jwt))
     steam_id: str = user["sub"]
 
     now = time.monotonic()
-    cooldown_start = _inventory_refresh_cooldown.get(steam_id)
-    if cooldown_start and now - cooldown_start < INVENTORY_REFRESH_COOLDOWN:
-        remaining = int(INVENTORY_REFRESH_COOLDOWN - (now - cooldown_start))
+    if _inventory_refresh_cooldown.fresh(steam_id, now) is not None:
+        remaining = int(_inventory_refresh_cooldown.ttl - (now - _inventory_refresh_cooldown[steam_id][1]))
         raise HTTPException(status_code=429, detail=f"Refresh cooldown active — retry in {remaining}s")
 
     if steam_id in _retry_tasks and (snap := await _snapshot_response(steam_id)):
@@ -221,7 +216,7 @@ async def refresh_inventory(request: Request, user: dict = Depends(require_jwt))
     if fetched.status == "error":
         return await _no_inventory(steam_id, fetched.reason or "unknown")
     await _store(steam_id, fetched.data, now)
-    _inventory_refresh_cooldown[steam_id] = now
+    _inventory_refresh_cooldown.put(steam_id, True, now)
     return fetched.data
 
 

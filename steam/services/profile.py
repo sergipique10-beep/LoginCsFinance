@@ -3,7 +3,7 @@ import time
 
 import httpx
 
-from stores import _profile_cache
+from steam.cache.user_cache import _profile_cache
 from steam.adapters.steam_adapter import adapt_profile
 from steam.api import steam_client
 from steam.domain.models import Fetched

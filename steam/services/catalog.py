@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 import httpx
 
-from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
+from steam.cache.image_cache import catalog_cache
 from steam.adapters.static_catalog_adapter import adapt_catalog_source
 from steam.api import static_catalog_client
 from steam.errors.handling import DEGRADABLE, log_degraded, reason_of
@@ -32,22 +32,18 @@ def cache_images(items: Sequence[SteamItem]) -> None:
     for item in items:
         if not item.image:
             continue
-        for key in (item.market_hash_name, item.market_name):
-            if key:
-                _item_image_cache[key] = item.image
+        catalog_cache.register([k for k in (item.market_hash_name, item.market_name) if k], item.image)
 
 
 def enrich_images_from_cache(items: list) -> list:
     """Rellena `image` desde el catálogo estático. **Muta** los items en sitio y
     devuelve la misma lista (CLEAN-05: mismo contrato que enrich_market_prices)."""
-    if not _item_image_cache:
+    if not catalog_cache:
         return items
     for item in items:
         if not item.get("image"):
-            candidates = image_lookup_candidates(item.get("name", ""), item.get("itemType"))
-            item["image"] = next(
-                (img for key in candidates if (img := _item_image_cache.get(key))), "",
-            )
+            item["image"] = catalog_cache.image_for(
+                image_lookup_candidates(item.get("name", ""), item.get("itemType")))
     return items
 
 
@@ -57,11 +53,7 @@ def _rarity_of(entry: CatalogEntry) -> tuple[str, str] | None:
 
 
 def _register_keys(keys: list[str], entry: CatalogEntry, image: str) -> None:
-    rarity = _rarity_of(entry)
-    for key in keys:
-        _item_image_cache[key] = image
-        if rarity:
-            _item_rarity_cache[key] = rarity
+    catalog_cache.register(keys, image, _rarity_of(entry))
 
 
 def _register_skin(entry: CatalogEntry) -> None:
@@ -81,9 +73,9 @@ def rarity_from_cache(name: str) -> tuple[str, str] | None:
     """Rareza de un market_hash_name según el catálogo estático (UX-39). Sirve para
     payloads que no la traen, como topmovers. None si el ítem no está en el catálogo
     (p. ej. los slabs de stickers): quien pinta decide qué hacer sin ella."""
-    found = _item_rarity_cache.get(name)
+    found = catalog_cache.rarity_for(name)
     if not found and (base := without_souvenir(name)) is not None:
-        found = _item_rarity_cache.get(base)
+        found = catalog_cache.rarity_for(base)
     return found
 
 
@@ -94,8 +86,7 @@ _image_cache_lock = asyncio.Lock()
 
 def _image_cache_fresh(now: float) -> bool:
     # CAL-08: tras un fallo total, backoff corto en vez de reintentar en cada petición.
-    return (_image_cache_meta.fresh("catalog", now) is not None
-            or _image_cache_meta.in_backoff("catalog", now))
+    return catalog_cache.is_fresh_or_backoff(now)
 
 
 async def fetch_static_images(client: httpx.AsyncClient) -> None:
@@ -131,7 +122,7 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
         ("patches",   _STATIC_PATCHES_URL),
     ]
 
-    total_before = len(_item_image_cache)
+    total_before = len(catalog_cache)
     fetched: dict[str, int] = {}
 
     for label, url in sources_with_wears:
@@ -156,14 +147,14 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
     # fuente (GitHub caído en el arranque de Render), no se estampa: se reintenta
     # pasado IMAGE_FAIL_TTL en vez de pasar 23 h con `image: ""`.
     if not fetched:
-        _image_cache_meta.mark_failed("catalog", now)
-        logger.warning("[image-cache] all sources failed; retry in %ds", IMAGE_FAIL_TTL)
+        catalog_cache.mark_failed(now)
+        logger.warning("[image-cache] all sources failed; retry in %ds", catalog_cache.meta.fail_ttl)
         log_degraded("catalog", "all_sources_failed", "empty")
         return
-    _image_cache_meta.put("catalog", len(_item_image_cache), now)
+    catalog_cache.mark_loaded(now)
     logger.info(
         "[image-cache] loaded %d total entries (%+d new) — sources: %s",
-        len(_item_image_cache),
-        len(_item_image_cache) - total_before,
+        len(catalog_cache),
+        len(catalog_cache) - total_before,
         fetched,
     )

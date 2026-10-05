@@ -9,7 +9,8 @@ from functools import partial
 
 import httpx
 
-from stores import HISTORY_EMPTY_TTL, _item_history_cache, _market_lookup_cache
+from steam.cache.history_cache import _item_history_cache
+from steam.cache.market_cache import _market_lookup_cache
 from steam.adapters import buff_adapter, csfloat_adapter
 from steam.adapters.steam_adapter import adapt_legacy_history, adapt_price_rows
 from steam.api import MARKET_CLIENTS, csfloat_client, steam_client
@@ -39,7 +40,7 @@ async def fetch_history_for_item(
     now = time.monotonic()
     # Un vacío (fallo o sin datos) vale 5 min, no 23 h: evita tormentas de reintentos
     # sin dejar fuera durante un día una skin que vuelve a tener histórico.
-    hit = _item_history_cache.fresh(cache_key, now, empty_ttl=HISTORY_EMPTY_TTL)
+    hit = _item_history_cache.fresh(cache_key, now, empty_ttl=_item_history_cache.empty_ttl)
     if hit is not None:
         return Fetched(hit)
     if limiter_timeout is None:

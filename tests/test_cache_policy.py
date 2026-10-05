@@ -136,3 +136,45 @@ def test_stores_reexporta_los_ttl_de_policy():
     assert stores.HISTORY_EMPTY_TTL == policy.ITEM_HISTORY.empty_ttl == 300
     assert stores.SEARCH_CACHE_TTL == policy.SEARCH.ttl == 300
     assert stores.TtlCache is TtlCache
+
+
+# ── CLEAN-16 (3.2): instancias por dominio, registro y CatalogCache ───────────
+
+def test_registro_de_caches_y_stats_all():
+    import steam.cache as cache
+    from steam.cache import history_cache, market_cache, user_cache
+    from steam.cache.image_cache import catalog_cache
+    assert cache.ALL_CACHES["item_history"] is history_cache._item_history_cache
+    assert cache.ALL_CACHES["search"] is market_cache._search_cache
+    assert cache.ALL_CACHES["inventory"] is user_cache._inventory_cache
+    assert cache.ALL_CACHES["image_catalog"] is catalog_cache
+    assert set(cache.stats_all()) == set(cache.ALL_CACHES)
+    market_cache._search_cache.put("market:x", [1], now=0.0)
+    catalog_cache.register(["AK"], "https://img")
+    cache.clear_all()
+    assert not market_cache._search_cache and not catalog_cache
+    assert all(st["entries"] == 0 for st in cache.stats_all().values())
+
+
+def test_stores_alias_son_las_mismas_instancias():
+    from steam.cache.image_cache import catalog_cache
+    from steam.cache.market_cache import _search_cache
+    assert stores._search_cache is _search_cache
+    assert stores._item_image_cache is catalog_cache.images and stores._image_cache_meta is catalog_cache.meta
+
+
+def test_catalog_cache():
+    from steam.cache.image_cache import CatalogCache
+    c = CatalogCache()
+    assert not c and not c.is_fresh_or_backoff(now=0.0)
+    c.register(["AK-47 | Redline (Field-Tested)", "AK-47 | Redline"], "https://img/ak", ("Classified", "d32ce6"))
+    c.register(["Sticker | X"], "https://img/st")
+    assert len(c) == 3 and c.image_for(["nada", "AK-47 | Redline"]) == "https://img/ak"
+    assert c.image_for(["nada"]) == "" and c.rarity_for("Sticker | X") is None
+    assert c.rarity_for("AK-47 | Redline") == ("Classified", "d32ce6")
+    c.mark_loaded(now=0.0)
+    assert c.is_fresh_or_backoff(now=1.0) and c.stats()["entries"] == 3 and c.stats()["rarities"] == 2
+    c.mark_failed(now=10.0)
+    assert c.is_fresh_or_backoff(now=20.0) and not c.is_fresh_or_backoff(now=1e9)
+    c.clear()
+    assert len(c) == 0 and not c.is_fresh_or_backoff(now=20.0)
