@@ -83,24 +83,44 @@ LoginCsFinance/
     router.py       # APIRouter: /auth/steam, /auth/steam/callback, /auth/token,
                     #            /auth/dev-token, /auth/refresh, /auth/logout
                     # Note: /auth/dev-token gated by settings.DEV_TOKEN_ENABLED (DEBUG and ENV != production)
-  steam/
-    degraded.py     # Log de degradaciones (CLEAN-12): log_degraded(flow, reason, served) y
-                    #   reason_of(exc). Ver «Log de degradaciones (steam-degraded)»
-    errors.py       # Errores tipados de las fuentes (CLEAN-06): UpstreamError (status,
+  steam/            # Refactor hacia el árbol objetivo (CLEAN-13..19): plan y diagnóstico en
+                    #   docs/superpowers/{plans,specs}/2026-10-04-steam-refactor-arbol-objetivo*
+    errors/         # Paquete (CLEAN-14); `from steam.errors import X` re-exporta todo
+      domain_errors.py # Errores tipados de las fuentes (CLEAN-06): UpstreamError (status,
                     #   body_excerpt, retry_after) y sus hijas QuotaExhausted (402),
                     #   RateLimited (429), SourceTimeout (→504), SourceUnavailable (→502);
-                    #   InvalidPayload (200 ilegible, NO hereda de UpstreamError); HistoryBusy
-    clients/          # Una función por endpoint externo: devuelve el JSON del 200 o lanza el
-                    #   error tipado. Sin caché, sin fallback, sin normalizar (CLEAN-06/07)
-      http.py         # get_json (transporte común + mapeo a errores), parse_retry_after
-      static_catalog.py # fetch_source: un JSON de ByMykel/CSGO-API (15 s); exige lista
-      fx.py           # latest_usd_eur: frankfurter (10 s)
-      steam_news.py   # get_news (Steam News, timeout del cliente), fetch_og_image (4 s, "" si falla)
-      steamwebapi.py  # Cliente único de steamwebapi (CLEAN-06): STEAM_WEB_API/STEAM_MARKET_API,
-                    #   steam_auth_headers, _history_limiter, y una función por endpoint
-                    #   (items, item, inventory, profile, market_index, market_prices,
-                    #   market_history, legacy_history, info_markets). Devuelve el JSON del
-                    #   200 tal cual o lanza el error tipado; no parsea nada
+                    #   InvalidPayload (200 ilegible, NO hereda de UpstreamError); HistoryBusy;
+                    #   UnexpectedPayload (forma inesperada) e InvalidField (campo con tipo
+                    #   imposible: source/operation/field/value), que hereda de ella
+      handling.py     # ex degraded.py: log_degraded(flow, reason, served) y reason_of(exc).
+                    #   Ver «Log de degradaciones (steam-degraded)»
+    api/            # ex clients/ (CLEAN-14). Una función por endpoint externo: devuelve el
+                    #   JSON del 200 o lanza el error tipado. Sin caché, sin fallback, sin
+                    #   normalizar (CLEAN-06/07). MARKET_CLIENTS: módulo por mercado
+      http.py         # get_json / get_text (transporte común + mapeo a errores), parse_retry_after
+      static_catalog_client.py # fetch_source: un JSON de ByMykel/CSGO-API (15 s); exige lista
+      fx_client.py    # latest_usd_eur: frankfurter (10 s)
+      news_client.py  # get_news (Steam News), fetch_og_image (4 s; lanza el error tipado, el
+                    #   "" lo decide services/news con su motivo)
+      csfloat_client.py / buff_client.py # history / prices sobre /market/{market} con el
+                    #   mercado fijo; delegan en steam_client
+      steam_client.py # ex steamwebapi.py. Cliente único de steamwebapi (CLEAN-06):
+                    #   STEAM_WEB_API/STEAM_MARKET_API, steam_auth_headers, _history_limiter, y
+                    #   una función por endpoint (items, item, inventory, profile, market_index,
+                    #   market_prices, market_history, legacy_history, info_markets). Devuelve
+                    #   el JSON del 200 tal cual o lanza el error tipado; no parsea nada
+    adapters/       # JSON crudo → modelo interno validado (CLEAN-14). Entrada Any, salida
+                    #   dataclass de domain/models, errores UnexpectedPayload / InvalidField.
+                    #   Sin HTTP, caché, log ni fallback. Campo ausente o no convertible = None
+      _common.py      #   require_list, require_dict, mappings, history_points (HistoryPoint, única impl.)
+      steam_adapter.py #  adapt_item/adapt_items/adapt_inventory, adapt_profile, adapt_market_index
+                    #   (gainer sin markethashname → descartado, `dropped_movers`),
+                    #   adapt_price_rows, adapt_legacy_history
+      csfloat_adapter.py / buff_adapter.py # adapt_history
+      news_adapter.py #   adapt_news (sin appnews/newsitems = [], contrato), adapt_news_entry
+      static_catalog_adapter.py # adapt_catalog_source(raw, label=)
+      provider_adapter.py # adapt_markets (la cadena de alias del logo vive aquí)
+      fx_adapter.py   #   adapt_rates (estricto: una tasa como string es anomalía)
     domain/
       names.py        # Reglas de nombres (CLEAN-10): image_lookup_candidates, catalog_keys_for_skin,
                     #   without_souvenir, is_sticker_slab, skin_base. Los prefijos «StatTrak™ »,
@@ -113,20 +133,30 @@ LoginCsFinance/
                     #   SkinCard (_map_item) ⊂ MoverItem (+_change24h interno), RankingRow,
                     #   MarketIndexPoint, NewsItem, MarketProvider, HistoryPoint.
                     #   tests/test_steam_models.py ata sus claves a los tests de contrato.
-                    #   Fetched[T] (CLEAN-12): data + status (ok|partial|stale|error) + reason
-      validators.py   # Reglas de plausibilidad (CLEAN-12), las que ya había: plausible_ratio
-                    #   (10×), plausible_fx_rate (0,5–2,0), ranking_eligible (MIN_RANKING_PRICE,
-                    #   MIN_SOLD_*), canonical_price, has_price
-    mappers/        # Mappers puros, uno por dominio (sin HTTP, sin caché, sin fallback):
-      items.py        #   _map_item, _inline_delta, _safe_delta, _delta_from_history,
+                    #   Fetched[T] (CLEAN-12): data + status (ok|partial|stale|error) + reason.
+                    #   Modelos INTERNOS (CLEAN-14, dataclasses frozen, NO contrato): SteamItem
+                    #   (.name, .latest_price), PriceQuote, Variant, TopMover, IndexPoint,
+                    #   MarketIndexData, ProfileData, NewsEntry, CatalogEntry, ProviderInfo,
+                    #   PriceRow, FxRates. None = «no vino / no convertible»; 0 = cero
+      validators.py   # Validadores de valor (CLEAN-14): as_float/as_int/as_bool/as_str (None si
+                    #   falta; InvalidField si el tipo es imposible). Reglas de plausibilidad
+                    #   (CLEAN-12): plausible_ratio (10×), plausible_fx_rate (0,5–2,0),
+                    #   ranking_eligible(SteamItem, MIN_SOLD_*), canonical_price (dict de /item,
+                    #   hasta la Fase 5), has_price
+    mappers/        # Mappers puros: modelo interno → TypedDict de salida (sin HTTP, caché, fallback):
+      item_mapper.py  #   _map_item(SteamItem), _inline_delta, _safe_delta, _delta_from_history,
                     #   _resolve_phase, _normalize_image
-      movers.py       #   _map_topmovers_item, _build_movers_from_topmovers, _MOVERS_LIMIT
-      market_index.py #   _map_market_index_point
-      news.py         #   _map_news_item, _clean_news_content, is_readable_news
-      rows.py         #   _row_to_item, _to_row (filas de market_trending / market_movers)
-    liquidity.py    # Liquidity Score (0-100): compute_liquidity. Puro, sin deps internas.
+      movers_mapper.py #  _map_topmovers_item(TopMover), _build_movers_from_topmovers, _MOVERS_LIMIT
+      market_index_mapper.py # _map_market_index_point(IndexPoint)
+      news_mapper.py  #   _map_news_item(NewsEntry), _clean_news_content (lo importan rag/ y
+                    #   notifications/), is_readable_news(NewsEntry)
+      profile_mapper.py #  _map_profile(ProfileData | None, steam_id)
+      provider_mapper.py # _build_providers(list[ProviderInfo]) → steam, csfloat, buff
+      row_mapper.py   #   _row_to_item, _to_row (filas de market_trending / market_movers)
+    liquidity.py    # Liquidity Score (0-100): compute_liquidity(SteamItem). Puro.
     services/       # Orquestación, una responsabilidad por módulo (CLEAN-11). Sin FastAPI:
-                    #   lanzan los errores de steam/errors.py y las rutas los traducen a HTTP.
+                    #   lanzan los errores de steam/errors/ y las rutas los traducen a HTTP.
+                    #   Reciben el JSON de api/ y lo pasan por adapters/ antes de mapear.
                     #   Entre módulos se llaman vía el módulo (`catalog.fetch_static_images`)
                     #   para que un test pueda sustituirlos en un solo sitio.
       catalog.py      #   catálogo ByMykel: fetch_static_images (lock PERF-18, backoff CAL-08),
@@ -149,7 +179,7 @@ LoginCsFinance/
                     #   insert_snapshot (upsert by ts), fetch_range (rows since cutoff).
                     #   supabase-py is sync → calls wrapped in asyncio.to_thread.
     routes/         # APIRouters finos (registered in routes/__init__.py): auth, rate limit,
-                    #   llamar al service y traducir errores a HTTP. No importan steam.clients
+                    #   llamar al service y traducir errores a HTTP. No importan steam.api
                     #   (guardia en tests/test_steam_layers.py)
       items.py      #   /me, /inventory (+ degradación ante 429/402, PERF-14), /item/history
       market.py     #   /market/movers, /market/items, /market/trending, /market/index,
@@ -173,15 +203,18 @@ LoginCsFinance/
 **Dependency order** (no circular imports):
 
 ```
-settings.py, stores.py, middleware.py, steam/liquidity.py, steam/errors.py,
+settings.py, stores.py, middleware.py, steam/errors/*  ← nothing internal
 steam/domain/models.py  ← nothing internal
+steam/domain/*          ← steam/domain, steam/errors (catalog → models, names → catalog)
+steam/liquidity.py      ← steam/domain/models
 auth/service.py         ← stores, settings
 auth/router.py          ← auth/service, stores, settings
-steam/clients/*         ← steam/errors, settings (solo steamwebapi)
-steam/domain/*          ← steam/domain (catalog → models, names → catalog)
-steam/mappers/*         ← steam/domain, steam/liquidity
-steam/services/*        ← steam/clients, steam/domain, steam/errors, steam/mappers, stores,
-                          repos de Supabase (rankings, cap_history, price_history)
+steam/api/*             ← steam/errors, settings (solo steam_client)
+steam/adapters/*        ← steam/domain, steam/errors (nunca api, mappers, services, stores)
+steam/mappers/*         ← steam/domain, steam/liquidity (nunca adapters, services, stores)
+steam/services/*        ← steam/api, steam/adapters, steam/domain, steam/errors, steam/mappers,
+                          stores, repos de Supabase (rankings, cap_history, price_history)
+                          (reglas comprobadas por AST en tests/test_steam_layers.py)
 steam/cap_history_repo.py ← settings (+ supabase)
 steam/routes/*          ← steam/services, steam/errors, steam/domain, stores,
                           settings, auth/service (require_jwt only)
@@ -204,7 +237,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/auth/logout` | cookie | Revokes JTI, clears cookie |
 | DELETE | `/me` | Bearer (+cookie/body refresh) | **Borrado de cuenta (LAUNCH-04)**: borra `device_tokens`, `price_alerts`, `portfolio_history`, `inventory_snapshots` (PERF-14) y **todos** sus `refresh_tokens` (SEC-11) del SteamID, vacía sus cachés en memoria, revoca el refresh y limpia la cookie. Idempotente. Es la URL de borrado que exige Google Play, vía botón en Perfil |
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
-| GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers/items.py:_map_item` + enrichment below). **Ante un 429 de steamwebapi (PERF-14)** devuelve el último snapshot con las cabeceras `X-Inventory-Stale: 1` y `X-Inventory-Captured-At` (ISO-8601); el cuerpo sigue siendo la lista. Ver «Degradación ante 429» |
+| GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers/item_mapper.py:_map_item` + enrichment below). **Ante un 429 de steamwebapi (PERF-14)** devuelve el último snapshot con las cabeceras `X-Inventory-Stale: 1` y `X-Inventory-Captured-At` (ISO-8601); el cuerpo sigue siendo la lista. Ver «Degradación ante 429» |
 | POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio en `stores.py`). |
 | GET | `/market/movers` | Bearer | Top gainers/losers 24 h (hot & cold), servido del snapshot de `market_movers`. |
 | GET | `/market/items` | Bearer | **Búsqueda** por nombre — `?q=` es obligatorio (400 si falta). No es un listado. |
@@ -239,13 +272,13 @@ steamwebapi responses are transformed in `steam/mappers/` before being returned:
 - `_delta_from_history(pts, days, latest)` — computes % price change vs. N days ago from a history list. Used by `pricing.enrich_prices`.
 - `_map_market_index_point(point)` — time-series points → `{ date, price, change, volume }`
 - `_map_news_item(item, index, image_url)` — Steam news items → normalized shape; `featured: true` for index 0; includes `content` excerpt via `_clean_news_content`
-- `steam_news.fetch_og_image(client, url)` (`steam/clients/steam_news.py`) — async OG image scraper used by `/news/cs2`
+- `news_client.fetch_og_image(client, url)` (`steam/api/news_client.py`) — async OG image scraper used by `/news/cs2`; lanza el error tipado y `services/news._og_image` decide el `""` con su motivo
 
-**Price deltas** (`_inline_delta` in `steam/mappers/items.py`): deltas are computed from the **`pricereal` family** (`pricereal` vs `pricereal24h/7d/30d`). Do **not** use `pricelatestsell24h/7d/30d` — steamwebapi returns those identical to `pricelatestsell` for every item, so any delta derived from them is always `None` → `"N/A"` badges everywhere. `_inline_delta` also discards historical values more than 10× away from the current price (the API occasionally returns garbage, e.g. `pricereal30d=0.22` for a $17.57 skin → +7886%). `None` means no sales data and renders as `"N/A"`.
+**Price deltas** (`_inline_delta` in `steam/mappers/item_mapper.py`): deltas are computed from the **`pricereal` family** (`pricereal` vs `pricereal24h/7d/30d`). Do **not** use `pricelatestsell24h/7d/30d` — steamwebapi returns those identical to `pricelatestsell` for every item, so any delta derived from them is always `None` → `"N/A"` badges everywhere. `_inline_delta` also discards historical values more than 10× away from the current price (the API occasionally returns garbage, e.g. `pricereal30d=0.22` for a $17.57 skin → +7886%). `None` means no sales data and renders as `"N/A"`.
 
 **History-derived enrichment** (`enrich_prices` in `steam/services/pricing.py`): fires one concurrent `csfloat/history` call per item and overwrites the deltas with history-derived values. Cached per item in `_item_history_cache`. Used by `/market/*` (trending, movers) only — **not** by `/inventory`, which would need one API call per item and blow the 18/60s limiter. Inventory therefore relies entirely on `_inline_delta`.
 
-**Rate limiting** (`_history_limiter`, `steam/clients/steamwebapi.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched **in one pass** must fit one window — de ahí `_MOVERS_LIMIT` ≤18 y `_ENRICH_BATCH = 18`.
+**Rate limiting** (`_history_limiter`, `steam/api/steam_client.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched **in one pass** must fit one window — de ahí `_MOVERS_LIMIT` ≤18 y `_ENRICH_BATCH = 18`.
 
 **Cuáles son los costes de verdad** — solo una llamada escala con el número de items:
 
@@ -279,7 +312,7 @@ Tablas `tracked_skins` (qué seguimos) y `precios_historicos` (la serie) — SQL
 - **Lo gastado hoy se cuenta en la BD** (`count_captured_on(hoy)`: skins con `last_captured = hoy`, intentadas con éxito o sin él). Sin estado en memoria: el tope aguanta varios lotes y reinicios de Render.
 - **Si la población no cabe, entra por prioridad** (vista `price_tick_queue`): 0 alerta activa, 1 vista en un inventario en 30 días, 2 el resto (trending, seed). Dentro de cada prioridad, LRU por `last_captured`. Lo que no cabe sale en la respuesta como `fuera_de_presupuesto` y el workflow deja un `::warning::`.
 - **Poda blanda, nunca DELETE.** Una skin que nadie registra en 30 días (y sin alerta) sale de la vista, pero su fila y su serie siguen: un DELETE dispararía el `CASCADE` de abajo. `register_tracked` refresca `last_seen` (y `inventory_seen_at` si viene de `/inventory`) en cada registro; `source` guarda solo el **primer** origen y no sirve para priorizar.
-- **Techo sin tocar código:** 42 lotes de `PRICE_LOOKUP_CAP` en 350 min de job ≈ 6 300 skins/día, que es también lo que da el limiter de 18 req/min. Por encima hay que tocar el limiter (`steam/clients/steamwebapi.py`) y el workflow.
+- **Techo sin tocar código:** 42 lotes de `PRICE_LOOKUP_CAP` en 350 min de job ≈ 6 300 skins/día, que es también lo que da el limiter de 18 req/min. Por encima hay que tocar el limiter (`steam/api/steam_client.py`) y el workflow.
 - Los precios de los rankings **no** sirven como fuente gratis para la serie: `market_trending.price_latest` se desvía una mediana del 18 % del precio canónico de `/item` (medido el 30-09).
 
 **Es la única relación declarada del esquema**: `precios_historicos.market_hash_name` → `tracked_skins.market_hash_name`, `ON DELETE CASCADE`. Formaliza lo que el código ya hacía — `capture()` inserta solo nombres que acaba de leer de `tracked_skins` — y cubre la ventana entre esa lectura y el upsert, que dura minutos por el `_history_limiter`. ⚠️ **Con `CASCADE`, cualquier limpieza que se añada a `tracked_skins` se lleva su serie histórica por delante.** Por eso la poda de PERF-11 es **blanda** (la vista `price_tick_queue` deja fuera a las skins sin actividad, sin borrarlas): una serie histórica no se recupera, y la skin puede volver a aparecer en un inventario.
@@ -302,7 +335,7 @@ Dos invariantes del troceado, ambos load-bearing:
 
 `POST /internal/price-tick` (cron diario, `.github/workflows/price-tick.yml`) recorre la cola `price_tick_queue` **por prioridad y, dentro de ella, menos-recientemente-capturadas primero** (`last_captured` asc, nulls primero) hasta `min(PRICE_LOOKUP_CAP, presupuesto restante)`, hace lookup por-nombre vía el `_history_limiter` compartido, y hace upsert idempotente por `(market_hash_name, date)`. Best-effort: un fallo por skin no aborta la corrida. El seed inicial sale de `steam/data/tracked_seed.json`.
 
-**Dónde vive**: solo en `/inventory` y `/market/items` (search) — los dos endpoints que sirven la salida de `_map_item`. **`/market/trending` y `/market/movers` NO lo llevan**: sirven snapshots de Supabase vía `_row_to_item` (`steam/mappers/rows.py`), que no lo transporta.
+**Dónde vive**: solo en `/inventory` y `/market/items` (search) — los dos endpoints que sirven la salida de `_map_item`. **`/market/trending` y `/market/movers` NO lo llevan**: sirven snapshots de Supabase vía `_row_to_item` (`steam/mappers/row_mapper.py`), que no lo transporta.
 
 ⚠️ **`liquidity_breakdown` NO puede añadirse a las tablas de ranking sin tocar el frontend a la vez.** El detail sheet (`skin-detail-sheet.component.ts`) detecta "esto es un snapshot pobre, pide el item completo a `/market/price`" con `liquidityBreakdown === undefined`, y es la única señal que le queda: el snapshot ya transporta volumen (`sold24h`, `offerVolume`, `hoursToSold`, `priceReal`, `steamUrl` — se añadieron para arreglar el `"Vol: undefined/24h"` que salía en todas las tarjetas). Si `_row_to_item` empieza a emitir `liquidityBreakdown`, el sheet deja de enriquecer **en silencio** y el bloque de liquidez queda vacío para siempre. El invariante está protegido por `tests/test_steam_contract_rows.py::test_no_emite_liquidity_breakdown` (antes, un self-check `python -m steam.market_rows`; CAL-09).
 
@@ -397,7 +430,7 @@ la cuota compartida de steamwebapi. Sigue siendo en memoria y single-worker (CAL
 **402 de steamwebapi (cuota mensual agotada) nunca es un 429** (SEC-16): `/market/items`,
 `/market/price`, `/market/index` y `/market/prices` sirven su caché aunque esté caducada
 (stale-on-402 en `steam/services/market.py`); sin caché, `503` con
-`detail: UPSTREAM_QUOTA_DETAIL` (`{"code": "upstream_quota", ...}`, en `steam/errors.py`).
+`detail: UPSTREAM_QUOTA_DETAIL` (`{"code": "upstream_quota", ...}`, en `steam/errors/domain_errors.py`).
 El front reconoce `code` y muestra su propio aviso: no comparar el texto.
 
 **`/item/history` pasa por `_history_limiter`** (SEC-16) con espera máxima de 3 s
@@ -482,7 +515,7 @@ The CS2 price-index history is **persisted in a dedicated Supabase Postgres proj
 | `BASE_URL` | `http://localhost:8000` | Must be reachable by Steam for the OpenID callback (use ngrok in local dev) |
 | `FRONTEND_URL` | `http://localhost:4200` | CORS origin and post-login redirect target |
 | `JWT_SECRET` | `change-this-secret` | Signs all tokens. Startup warns if default or < 32 chars. Use `secrets.token_urlsafe(48)` to generate. |
-| `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. Viaja en la cabecera `X-Api-Key` vía `steam_auth_headers()` (`steam/clients/steamwebapi.py`), **nunca** en la query (SEC-13): una URL con la clave acaba en los logs. Solo en llamadas a steamwebapi, nunca como cabecera por defecto del cliente compartido. |
+| `STEAM_API_KEY` | *(empty)* | Required for `/me`, `/inventory`, `/market/index`, `/item/history`. Startup warns if empty. Viaja en la cabecera `X-Api-Key` vía `steam_auth_headers()` (`steam/api/steam_client.py`), **nunca** en la query (SEC-13): una URL con la clave acaba en los logs. Solo en llamadas a steamwebapi, nunca como cabecera por defecto del cliente compartido. |
 | `LEETIFY_API_KEY` | *(empty)* | Clave de la API pública de Leetify (SEC-09). Sin ella `/me/stats*` da 503. También en Render. |
 | `STEAM_GAME` | `cs2` | Game ID passed to the steamwebapi.com inventory endpoint |
 | `INVENTORY_429_MAX_RETRIES` / `_BACKOFF_BASE` / `_BACKOFF_CAP` | `4` / `5` s / `120` s | Reintento en segundo plano del inventario tras un 429 (PERF-14) |

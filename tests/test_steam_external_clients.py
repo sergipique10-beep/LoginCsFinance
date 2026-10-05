@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from steam.clients import fx, static_catalog, steam_news
+from steam.api import fx_client, news_client, static_catalog_client
 from steam.errors import InvalidPayload, SourceTimeout, SourceUnavailable, UpstreamError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,7 +32,7 @@ def _client(status=200, *, json=None, content=None, exc=None, seen=None):
 async def test_catalogo_devuelve_la_lista():
     seen: list[httpx.Request] = []
     async with _client(json=[{"name": "x"}], seen=seen) as c:
-        assert await static_catalog.fetch_source(c, "https://raw.githubusercontent.com/a.json") == [{"name": "x"}]
+        assert await static_catalog_client.fetch_source(c, "https://raw.githubusercontent.com/a.json") == [{"name": "x"}]
     assert seen[0].extensions["timeout"]["read"] == 15.0
     assert "X-Api-Key" not in seen[0].headers   # la clave de steamwebapi no sale de su cliente
 
@@ -47,7 +47,7 @@ async def test_catalogo_devuelve_la_lista():
 async def test_catalogo_errores(kwargs, error):
     async with _client(**kwargs) as c:
         with pytest.raises(error):
-            await static_catalog.fetch_source(c, "https://raw.githubusercontent.com/a.json")
+            await static_catalog_client.fetch_source(c, "https://raw.githubusercontent.com/a.json")
 
 
 # ── FX ────────────────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ async def test_catalogo_errores(kwargs, error):
 async def test_fx_pide_usd_eur_a_frankfurter():
     seen: list[httpx.Request] = []
     async with _client(json={"rates": {"EUR": 0.9}}, seen=seen) as c:
-        assert await fx.latest_usd_eur(c) == {"rates": {"EUR": 0.9}}
+        assert await fx_client.latest_usd_eur(c) == {"rates": {"EUR": 0.9}}
     (req,) = seen
     assert req.url.host == "api.frankfurter.dev"
     assert dict(req.url.params) == {"base": "USD", "symbols": "EUR"}
@@ -65,7 +65,7 @@ async def test_fx_pide_usd_eur_a_frankfurter():
 async def test_fx_status_no_200():
     async with _client(503) as c:
         with pytest.raises(UpstreamError) as info:
-            await fx.latest_usd_eur(c)
+            await fx_client.latest_usd_eur(c)
     assert info.value.status == 503
 
 
@@ -74,7 +74,7 @@ async def test_fx_status_no_200():
 async def test_news_pide_a_steam_con_el_timeout_del_cliente():
     seen: list[httpx.Request] = []
     async with _client(json={"appnews": {}}, seen=seen) as c:
-        assert await steam_news.get_news(c, 15) == {"appnews": {}}
+        assert await news_client.get_news(c, 15) == {"appnews": {}}
     (req,) = seen
     assert req.url.path == "/ISteamNews/GetNewsForApp/v2/"
     assert dict(req.url.params) == {"appid": "730", "count": "15", "format": "json"}
@@ -89,13 +89,13 @@ async def test_news_pide_a_steam_con_el_timeout_del_cliente():
 async def test_news_errores(kwargs, error):
     async with _client(**kwargs) as c:
         with pytest.raises(error):
-            await steam_news.get_news(c, 5)
+            await news_client.get_news(c, 5)
 
 
 async def test_og_image_timeout_y_redirecciones():
     seen: list[httpx.Request] = []
     async with _client(content=b'<meta property="og:image" content="https://img/a.jpg">', seen=seen) as c:
-        assert await steam_news.fetch_og_image(c, "https://news/x") == "https://img/a.jpg"
+        assert await news_client.fetch_og_image(c, "https://news/x") == "https://img/a.jpg"
     assert seen[0].extensions["timeout"]["read"] == 4.0
     assert seen[0].headers["User-Agent"] == "Mozilla/5.0"
 
@@ -117,3 +117,23 @@ def test_mappers_no_importa_httpx():
             for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
         }
         assert "httpx" not in imported, path.name
+
+
+# ── CLEAN-14: clientes por mercado y get_text ─────────────────────────────────
+
+async def test_csfloat_y_buff_delegan_en_los_endpoints_de_mercado():
+    from steam.api import MARKET_CLIENTS, buff_client, csfloat_client
+    seen: list[httpx.Request] = []
+    async with _client(json=[], seen=seen) as c:
+        await csfloat_client.history(c, "AK", "2026-09-01", "2026-10-01", timeout=30.0)
+        await buff_client.prices(c, {"format": "json"}, timeout=30.0)
+    assert seen[0].url.path.endswith("/market/csfloat/history")
+    assert seen[1].url.path.endswith("/market/buff/prices")
+    assert set(MARKET_CLIENTS) == {"csfloat", "buff"}
+
+
+async def test_og_image_404_lanza_upstream_error():
+    from steam.errors import UpstreamError
+    async with _client(status=404) as c:
+        with pytest.raises(UpstreamError):
+            await news_client.fetch_og_image(c, "https://news/x")

@@ -17,7 +17,7 @@ del lote — si crece hasta volver a rozar el corte de Render, vuelve el 502 y c
 """
 
 from settings import PRICE_LOOKUP_CAP
-from steam.clients.steamwebapi import _history_limiter
+from steam.api.steam_client import _history_limiter
 
 # Cota superior observada del corte de Render free. No es un valor documentado:
 # sale de que 11 min pasaban y 22 no. Se toma el extremo conservador.

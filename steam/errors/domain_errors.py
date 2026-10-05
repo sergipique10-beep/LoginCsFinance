@@ -1,6 +1,6 @@
 """Errores tipados de las fuentes externas de steam/ (CLEAN-06).
 
-El cliente (`steam/clients/steamwebapi.py`) traduce cada respuesta a uno de estos;
+El cliente (`steam/api/steam_client.py`) traduce cada respuesta a uno de estos;
 quien llama decide qué HTTP devolver. Antes vivían repartidos: `QuotaExhausted` en
 price_capture, `SteamRateLimited` en routes/items y `HistoryBusy` en services.
 """
@@ -88,6 +88,25 @@ class UnexpectedPayload(Exception):
     Aparte de `InvalidPayload` (JSON ilegible) porque hoy cada uno da un status
     distinto: este 502, aquel 500 (CAL-14).
     """
+
+
+class InvalidField(UnexpectedPayload):
+    """Un campo del payload tiene un tipo imposible (CLEAN-14): un dict donde va un
+    número, una lista donde va un string. Lo lanzan los validadores de valor
+    (`domain/validators.py`) desde los adapters. Un campo **ausente** o un string no
+    numérico no es esto: eso es `None` en el modelo interno.
+
+    Hereda de `UnexpectedPayload` para que las rutas lo traduzcan igual (502) y
+    `reason_of` lo distinga (`invalid_field`).
+    """
+
+    def __init__(self, source: str, operation: str, field: str, value: object):
+        super().__init__(f"{source}.{operation}: field {field!r} has invalid type "
+                         f"{type(value).__name__} ({str(value)[:80]})")
+        self.source = source
+        self.operation = operation
+        self.field = field
+        self.value = value
 
 
 # SEC-16: cuerpo del 503 cuando steamwebapi da 402 (cuota MENSUAL agotada, reset el

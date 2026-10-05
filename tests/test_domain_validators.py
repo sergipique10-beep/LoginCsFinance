@@ -26,7 +26,8 @@ def test_plausible_fx_rate(rate, ok):
     (None, None, v.MIN_SOLD_TRENDING, False),
 ])
 def test_ranking_eligible(price, sold, min_sold, ok):
-    assert v.ranking_eligible({"pricelatestsell": price, "sold24h": sold}, min_sold) is ok
+    from steam.adapters.steam_adapter import adapt_item
+    assert v.ranking_eligible(adapt_item({"pricelatestsell": price, "sold24h": sold}), min_sold) is ok
 
 
 @pytest.mark.parametrize("item, price", [

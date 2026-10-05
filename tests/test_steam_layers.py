@@ -5,6 +5,8 @@ por un service.
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -33,8 +35,41 @@ def test_services_no_importan_fastapi():
 def test_rutas_no_importan_los_clientes():
     offenders = [
         p.name for p in (ROOT / "steam" / "routes").glob("*.py")
-        if any(m.startswith("steam.clients") for m in _imports(p))
+        if any(m.startswith(("steam.clients", "steam.api")) for m in _imports(p))
     ]
+    assert offenders == []
+
+
+# CLEAN-13: el orden de dependencias de CLAUDE.md, capa por capa. Cada entrada es
+# (directorio, prefijos de `steam.` que NO puede importar). `stores` es la caché de la
+# raíz: solo services/routes/cache pueden tocarla.
+FORBIDDEN = {
+    "domain":   ("steam.mappers", "steam.services", "steam.clients", "steam.api", "steam.adapters",
+                 "steam.cache", "steam.routes", "stores"),
+    "mappers":  ("steam.services", "steam.clients", "steam.api", "steam.adapters", "steam.cache",
+                 "steam.routes", "stores"),
+    "adapters": ("steam.mappers", "steam.services", "steam.clients", "steam.api", "steam.cache",
+                 "steam.routes", "stores"),
+    "api":      ("steam.mappers", "steam.services", "steam.adapters", "steam.cache", "steam.routes",
+                 "steam.domain", "stores"),
+    "clients":  ("steam.mappers", "steam.services", "steam.adapters", "steam.cache", "steam.routes",
+                 "steam.domain", "stores"),
+    "cache":    ("steam.mappers", "steam.services", "steam.clients", "steam.api", "steam.adapters",
+                 "steam.routes", "steam.domain"),
+}
+
+
+@pytest.mark.parametrize("layer", sorted(FORBIDDEN))
+def test_orden_de_dependencias(layer):
+    folder = ROOT / "steam" / layer
+    if not folder.is_dir():
+        pytest.skip(f"steam/{layer} aún no existe")
+    offenders = sorted(
+        f"{p.name} → {m}"
+        for p in folder.glob("*.py")
+        for m in _imports(p)
+        if any(m == bad or m.startswith(bad + ".") for bad in FORBIDDEN[layer])
+    )
     assert offenders == []
 
 

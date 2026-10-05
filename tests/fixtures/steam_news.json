@@ -1,0 +1,27 @@
+{
+  "appnews": {
+    "appid": 730,
+    "newsitems": [
+      {
+        "gid": "1",
+        "title": "Release Notes",
+        "url": "https://news/1",
+        "contents": "<p>Fixed things</p> [url=https://x]link[/url]",
+        "date": 1700000000,
+        "author": "Valve",
+        "feedlabel": "Community Announcements",
+        "feedname": "steam_community_announcements"
+      },
+      {
+        "gid": "2",
+        "title": "Обновление",
+        "url": "https://news/2",
+        "contents": "",
+        "date": 1700000500,
+        "author": "",
+        "feedlabel": "HLTV",
+        "feedname": "hltv_rss"
+      }
+    ]
+  }
+}

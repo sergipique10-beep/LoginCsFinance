@@ -15,8 +15,8 @@ from pathlib import Path
 import httpx
 
 from settings import PRICE_LOOKUP_CAP, PRICE_DAILY_BUDGET
-from steam.clients import steamwebapi
-from steam.clients.steamwebapi import _history_limiter
+from steam.api import steam_client
+from steam.api.steam_client import _history_limiter
 from steam.domain.validators import canonical_price
 from steam.errors import QuotaExhausted
 from steam import price_history_repo as repo
@@ -43,7 +43,7 @@ async def seed_tracked() -> int:
 async def _lookup_item(client: httpx.AsyncClient, name: str) -> dict:
     """GET /item?market_hash_name=<name> vía el limiter compartido. Devuelve el item."""
     await _history_limiter.acquire()
-    data = await steamwebapi.item(client, name)
+    data = await steam_client.item(client, name)
     return data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
 
 

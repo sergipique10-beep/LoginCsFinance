@@ -1,0 +1,127 @@
+[
+  {
+    "id": "730_ak47_redline_ft",
+    "markethashname": "AK-47 | Redline (Field-Tested)",
+    "marketname": "AK-47 | Redline (Field-Tested)",
+    "slug": "ak-47-redline-field-tested",
+    "weapontype": "Rifle",
+    "itemtype": "ak-47",
+    "itemname": "Redline",
+    "image": "https://community.akamai.steamstatic.com/economy/image/ak47redline",
+    "rarity": "Classified",
+    "color": "d32ce6",
+    "bordercolor": "d32ce6",
+    "quality": "Normal",
+    "isstattrak": false,
+    "issouvenir": false,
+    "isstar": false,
+    "tag5": "Field-Tested",
+    "minfloat": 0.1,
+    "maxfloat": 0.7,
+    "paintindex": 282,
+    "variants": [],
+    "pricelatestsell": 20.0,
+    "pricelatest": 20.5,
+    "pricemedian": 19.8,
+    "pricereal": 19.0,
+    "pricereal24h": 18.0,
+    "pricereal7d": 17.5,
+    "pricereal30d": 16.0,
+    "pricesafe": 19.5,
+    "pricemin": 18.0,
+    "pricemax": 22.0,
+    "prices": [
+      {
+        "market": "steam",
+        "price": 20.0,
+        "quantity": 120
+      },
+      {
+        "market": "csfloat",
+        "price": 18.9,
+        "quantity": 40
+      },
+      {
+        "market": "buff",
+        "price": 18.2,
+        "quantity": 65
+      }
+    ],
+    "sold24h": 50,
+    "sold7d": 300,
+    "sold30d": 1200,
+    "soldtotal": 90000,
+    "offervolume": 800,
+    "buyordervolume": 150,
+    "buyorderprice": 18.5,
+    "hourstosold": 3.5,
+    "marketable": true,
+    "tradable": true,
+    "markettradablerestriction": 7,
+    "steamurl": "https://steamcommunity.com/market/listings/730/AK-47%20%7C%20Redline%20%28Field-Tested%29"
+  },
+  {
+    "id": "730_karambit_doppler_fn",
+    "markethashname": "★ StatTrak™ Karambit | Doppler (Factory New)",
+    "marketname": "★ StatTrak™ Karambit | Doppler (Factory New)",
+    "slug": "karambit-doppler-factory-new",
+    "itemtype": "karambit",
+    "itemname": "Doppler",
+    "image": "/economy/image/karambitdoppler",
+    "rarity": "Covert",
+    "color": "eb4b4b",
+    "bordercolor": "eb4b4b",
+    "quality": "StatTrak™",
+    "isstattrak": true,
+    "issouvenir": false,
+    "isstar": true,
+    "exterior": "Factory New",
+    "minfloat": 0.0,
+    "maxfloat": 0.08,
+    "paintindex": 418,
+    "variants": [
+      {
+        "paintindex": 418,
+        "phase": "Phase 2"
+      },
+      {
+        "paintindex": 419,
+        "phase": "Phase 3"
+      }
+    ],
+    "pricelatestsell": 1500.0,
+    "pricereal": 1480.0,
+    "pricereal24h": 1470.0,
+    "pricereal7d": null,
+    "pricereal30d": 0.22,
+    "prices": [
+      {
+        "market": "steam",
+        "price": 1500.0
+      }
+    ],
+    "sold24h": null,
+    "sold7d": 4,
+    "sold30d": 15,
+    "soldtotal": 200,
+    "offervolume": 30,
+    "buyordervolume": 0,
+    "buyorderprice": 0,
+    "hourstosold": 0,
+    "marketable": true,
+    "tradable": true,
+    "steamurl": null
+  },
+  {
+    "id": "730_slab",
+    "markethashname": "Sticker Slab | Katowice 2014",
+    "marketname": "Sticker Slab | Katowice 2014",
+    "itemtype": "Sticker Slab",
+    "itemname": "Katowice 2014",
+    "image": "",
+    "pricelatestsell": 50.0,
+    "pricereal": 49.0,
+    "sold24h": 2,
+    "prices": []
+  }
+]

@@ -10,7 +10,9 @@ from types import SimpleNamespace
 import pytest
 
 from steam.routes import market
-from steam.mappers.movers import _build_movers_from_topmovers
+from steam.adapters.static_catalog_adapter import adapt_catalog_source
+from steam.adapters.steam_adapter import adapt_market_index
+from steam.mappers.movers_mapper import _build_movers_from_topmovers
 from steam.services.catalog import _register_flat, _register_skin, rarity_from_cache as _rarity_from_cache
 from stores import (
     _image_cache_meta, _item_image_cache, _item_rarity_cache, _market_index_cache, _topmovers_raw_cache,
@@ -63,8 +65,8 @@ def catalogo():
     import time
     saved = (dict(_item_image_cache), dict(_item_rarity_cache), dict(_image_cache_meta))
     _item_image_cache.clear(); _item_rarity_cache.clear()
-    _register_flat(STICKER)
-    _register_skin(SKIN)
+    _register_flat(adapt_catalog_source([STICKER], label="stickers")[0])
+    _register_skin(adapt_catalog_source([SKIN], label="skins")[0])
     _image_cache_meta.put("catalog", 1)
     yield
     for store, old in zip((_item_image_cache, _item_rarity_cache, _image_cache_meta), saved):
@@ -116,6 +118,7 @@ def test_change24h_es_un_porcentaje_no_un_importe():
         assert -100 <= loser["change24h"] < 0
     assert any(abs(l["change24h"]) > l["price"] for l in TOPMOVERS["losers"])
 
-    movers = _build_movers_from_topmovers(TOPMOVERS["gainers"], TOPMOVERS["losers"])
+    mi = adapt_market_index({"history": [], "topmovers": TOPMOVERS})
+    movers = _build_movers_from_topmovers(mi.gainers, mi.losers)
     assert movers["hot"][0]["name"] == "Sticker | Run Boost Lift Kits"
     assert movers["cold"][0]["name"] == "Souvenir Charm | Cologne 2026 Highlight | MATYS ACE"

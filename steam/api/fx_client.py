@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from steam.clients.http import get_json
+from steam.api.http import get_json
 
 # El host .app redirige 301 a .dev, asi que se apunta directo a .dev.
 _FX_API = "https://api.frankfurter.dev/v1/latest"

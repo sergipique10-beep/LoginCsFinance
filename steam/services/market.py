@@ -17,19 +17,19 @@ from stores import (
     _topmovers_raw_cache,
 )
 from steam.cap_history_repo import fetch_range, insert_snapshot
-from steam.clients import steamwebapi
-from steam.degraded import log_degraded, reason_of
-from steam.domain.models import Fetched, RankedCard, SkinCard
+from steam.adapters.steam_adapter import adapt_items, adapt_market_index
+from steam.api import steam_client
+from steam.errors.handling import log_degraded, reason_of
+from steam.domain.models import Fetched, RankedCard, SkinCard, SteamItem, TopMover
 from steam.domain.names import is_sticker_slab, skin_base
 from steam.domain.validators import MIN_SOLD_MOVERS, MIN_SOLD_TRENDING, ranking_eligible
 from steam.errors import (
-    UNEXPECTED_FORMAT, QuotaExhausted, SourceTimeout, SourceUnavailable, UnexpectedPayload,
-    UpstreamError,
+    QuotaExhausted, SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
 )
-from steam.mappers.items import _map_item
-from steam.mappers.market_index import _map_market_index_point
-from steam.mappers.movers import _MOVERS_LIMIT, _build_movers_from_topmovers, _map_topmovers_item
-from steam.mappers.rows import _row_to_item, _to_row
+from steam.mappers.item_mapper import _map_item
+from steam.mappers.market_index_mapper import _map_market_index_point
+from steam.mappers.movers_mapper import _MOVERS_LIMIT, _build_movers_from_topmovers, _map_topmovers_item
+from steam.mappers.row_mapper import _row_to_item, _to_row
 from steam.rankings_repo import movers_repo, trending_repo
 from steam.services import catalog, pricing
 
@@ -168,16 +168,16 @@ async def search_items(client: httpx.AsyncClient, query: str, *, max: int, selec
     """La búsqueda en /items, una sola implementación para /market/items, /market/price
     y las dos tools del chat. Cada llamador conserva su `max`, su `select` y qué hace
     con un cuerpo que no es lista (CAL-14 decidirá si se unifican)."""
-    return await steamwebapi.items(client, search=query, max=max, select=select)
+    return await steam_client.items(client, search=query, max=max, select=select)
 
 
 async def _ranking_items(client: httpx.AsyncClient, tag: str,
-                         fallback_label: str) -> tuple[list | None, str | None]:
+                         fallback_label: str) -> tuple[list[SteamItem] | None, str | None]:
     """Fuente principal de movers y trending: /items por unidades vendidas. Devuelve
     (items, None), o (None, motivo) si no responde o no es una lista; entonces se cae
     a topmovers."""
     try:
-        data = await steamwebapi.items(
+        data = await steam_client.items(
             client, sort_by="soldZa", max=_ITEMS_FETCH_MAX, select=_MOVERS_SELECT,
         )
     except (SourceTimeout, SourceUnavailable) as exc:
@@ -185,29 +185,23 @@ async def _ranking_items(client: httpx.AsyncClient, tag: str,
     except UpstreamError as exc:
         logger.warning("[%s] /items returned %s — falling back to %s", tag, exc.status, fallback_label)
         return None, reason_of(exc)
-    if isinstance(data, list):
-        return data, None
-    logger.warning("[%s] /items returned unexpected type: %s", tag, type(data).__name__)
-    return None, "unexpected_format"
+    try:
+        return adapt_items(data), None
+    except UnexpectedPayload as exc:
+        logger.warning("[%s] /items returned unexpected payload: %s", tag, exc)
+        return None, "unexpected_format"
 
 
 async def _topmovers(client: httpx.AsyncClient, tag: str, now: float, *,
-                     log_sample: bool) -> tuple[list, list] | None:
+                     log_sample: bool) -> tuple[tuple[TopMover, ...], tuple[TopMover, ...]] | None:
     """Respaldo: topmovers de market-index. Se usa lo último cacheado, tenga la edad que
     tenga (CAL-12); si no hay nada, se pide market-index ahora para llenarlo."""
     raw_topmovers = _topmovers_raw_cache.stale("latest")
     if not raw_topmovers:
         try:
-            mi_data = await steamwebapi.market_index(client, timeout=15.0)
-            if isinstance(mi_data, dict):
-                tm = mi_data.get("topmovers", {})
-                gainers = tm.get("gainers", [])
-                losers  = tm.get("losers", [])
-                if log_sample and gainers:
-                    logger.info("[%s] topmovers gainer keys: %s", tag, list(gainers[0].keys()))
-                    logger.info("[%s] topmovers gainer sample: %s", tag, gainers[0])
-                _topmovers_raw_cache.put("latest", (gainers, losers), now)
-                raw_topmovers = (gainers, losers)
+            mi = adapt_market_index(await steam_client.market_index(client, timeout=15.0))
+            _topmovers_raw_cache.put("latest", (mi.gainers, mi.losers), now)
+            raw_topmovers = (mi.gainers, mi.losers)
         except Exception as exc:
             # Un status distinto de 200 se salta en silencio, como antes del cliente.
             if not (isinstance(exc, UpstreamError) and exc.status is not None):
@@ -229,10 +223,9 @@ async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
     if data is not None:
         catalog.cache_images(data)
         mapped = []
-        for raw in data:
-            if (ranking_eligible(raw, MIN_SOLD_MOVERS)
-                    and not is_sticker_slab(raw.get("marketname") or "")):
-                mapped.append(_map_item(raw))
+        for item in data:
+            if ranking_eligible(item, MIN_SOLD_MOVERS) and not is_sticker_slab(item.market_name or ""):
+                mapped.append(_map_item(item))
         # Ordenar por turnover (precio × unidades), no por precio suelto: mide
         # qué mueve dinero de verdad. Cap at 20 (= _MOVERS_LIMIT * 2): exactly
         # the number of items displayed, and safe within the Starter plan's
@@ -302,9 +295,9 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
     if data is not None:
         catalog.cache_images(data)
         result = []
-        for raw in data:
-            if ranking_eligible(raw, MIN_SOLD_TRENDING):
-                result.append(_map_item(raw))
+        for item in data:
+            if ranking_eligible(item, MIN_SOLD_TRENDING):
+                result.append(_map_item(item))
         # Por relevancia (turnover = precio × unidades) y luego se reparte entre
         # categorías. Antes se ordenaba por categoría primero (`_category_rank`, ya
         # borrado), lo que agotaba "Rifle" antes de llegar a ninguna otra; y ordenar
@@ -330,10 +323,10 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
     raw_topmovers = await _topmovers(client, "market-trending", now, log_sample=False)
     if raw_topmovers:
         gainers, losers = raw_topmovers
-        combined = gainers + losers
+        combined = (*gainers, *losers)
         if combined:
             await catalog.fetch_static_images(client)
-            result = [_map_topmovers_item(item) for item in combined]
+            result = [_map_topmovers_item(mover) for mover in combined]
             catalog.enrich_images_from_cache(result)
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_FALLBACK_LIMIT]
             result = await pricing.enrich_market_prices(client, result)
@@ -384,14 +377,13 @@ async def search_market(client: httpx.AsyncClient, query: str) -> Fetched[list[S
         data = await search_items(client, query, max=_SEARCH_LIMIT, select=_MOVERS_SELECT)
     except QuotaExhausted as exc:
         return _stale_or_raise("search", _search_cache.stale(cache_key), exc)
-    if not isinstance(data, list):
-        raise UnexpectedPayload(UNEXPECTED_FORMAT)
+    items = adapt_items(data)   # cuerpo no lista → UnexpectedPayload
 
-    catalog.cache_images(data)
+    catalog.cache_images(items)
     result = [
-        _map_item(raw) for raw in data
-        if float(raw.get("pricelatestsell") or 0) > 0
-        and not is_sticker_slab(raw.get("marketname") or raw.get("market_hash_name") or "")
+        _map_item(item) for item in items
+        if (item.price_latest_sell or 0) > 0
+        and not is_sticker_slab(item.market_name or item.market_hash_name or "")
     ][:_SEARCH_LIMIT]
 
     await catalog.fetch_static_images(client)
@@ -416,21 +408,16 @@ async def get_item_full(client: httpx.AsyncClient, query: str) -> Fetched[SkinCa
         data = await search_items(client, query, max=_SEARCH_LIMIT, select=_MOVERS_SELECT)
     except QuotaExhausted as exc:
         return _stale_or_raise("item_price", _item_price_cache.stale(cache_key), exc)
-    if not isinstance(data, list):
-        raise UnexpectedPayload(UNEXPECTED_FORMAT)
+    items = adapt_items(data)   # cuerpo no lista → UnexpectedPayload
 
     # steamwebapi /items?search es fuzzy: nos quedamos con el match exacto por
     # markethashname (el nombre canónico en inglés, el mismo que manda el frontend).
-    raw = next(
-        (r for r in data
-         if (r.get("markethashname") or r.get("marketname") or "").lower() == cache_key),
-        None,
-    )
-    if raw is None:
+    match = next((i for i in items if i.name.lower() == cache_key), None)
+    if match is None:
         return Fetched(None)
 
-    catalog.cache_images([raw])
-    item = _map_item(raw)
+    catalog.cache_images([match])
+    item = _map_item(match)
     (item,) = await pricing.enrich_prices(client, [item])
     (item,) = await pricing.enrich_market_prices(client, [item])
     await catalog.fetch_static_images(client)
@@ -449,7 +436,7 @@ async def get_market_index(client: httpx.AsyncClient, tf: str) -> Fetched[dict]:
         return Fetched(hit)
 
     try:
-        data = await steamwebapi.market_index(client)
+        data = await steam_client.market_index(client)
     except QuotaExhausted as exc:
         logger.warning("[market-index] daily limit reached (402)")
         return _stale_or_raise("market_index", _market_index_cache.stale(cache_key), exc)
@@ -459,59 +446,33 @@ async def get_market_index(client: httpx.AsyncClient, tf: str) -> Fetched[dict]:
         logger.error("[market-index] steamwebapi returned %s | body: %s", exc.status, exc.body_excerpt[:500])
         raise
 
-    if isinstance(data, list):
-        raw_points = data
-        top = None
-        turnover24h = 0.0
-        sold24h = 0
-    elif isinstance(data, dict):
-        history = data.get("history", [])
-        if isinstance(history, list):
-            raw_points = history
-        elif isinstance(history, dict):
-            raw_points = history.get("priceindex", [])
-            if not isinstance(raw_points, list):
-                logger.error("[market-index] 'priceindex' unexpected type: %s", type(raw_points).__name__)
-                raise UnexpectedPayload(UNEXPECTED_FORMAT)
-        else:
-            logger.error("[market-index] 'history' unexpected type: %s | sample: %s", type(history).__name__, str(history)[:200])
-            raise UnexpectedPayload(UNEXPECTED_FORMAT)
-
-        topmovers = data.get("topmovers", {})
-        gainers = topmovers.get("gainers", [])
-        losers  = topmovers.get("losers", [])
-        top = gainers[0] if gainers else None
-        if gainers:
-            logger.info("[market-index] topmovers gainer keys: %s", list(gainers[0].keys()))
-            logger.info("[market-index] topmovers gainer sample: %s", gainers[0])
-        _topmovers_raw_cache.put("latest", (gainers, losers), now)
-        turnover24h = float(data.get("turnover24h") or 0)
-        sold24h = int(data.get("sold24h") or 0)
-    else:
-        logger.error("[market-index] unexpected top-level type: %s", type(data).__name__)
-        raise UnexpectedPayload(UNEXPECTED_FORMAT)
+    mi = adapt_market_index(data)   # forma inesperada → UnexpectedPayload
+    if mi.dropped_movers:
+        log_degraded("market_index", "invalid_field", "fallback")   # gainers sin nombre, descartados
+    _topmovers_raw_cache.put("latest", (mi.gainers, mi.losers), now)
+    top = mi.gainers[0] if mi.gainers else None
 
     # UX-39: topmovers no trae la rareza; sale del catálogo estático (23 h, sin cuota).
     rarity = None
     if top:
         await catalog.fetch_static_images(client)
-        rarity = catalog.rarity_from_cache(top["markethashname"])
+        rarity = catalog.rarity_from_cache(top.item.name)
 
     result = {
-        "turnover24h": turnover24h,
-        "sold24h": sold24h,
+        "turnover24h": mi.turnover_24h or 0.0,
+        "sold24h": mi.sold_24h or 0,
         # UX-35: no es «el más activo» sino el que más ha subido de precio en 24 h
         # (gainers[0]); change24h es ese porcentaje. El nombre del campo se conserva
         # por contrato con el front.
         "hottestItem": {
-            "name": top["markethashname"] if top else "—",
-            "change24h": float(top["change24h"]) if top else 0.0,
+            "name": top.item.name if top else "—",
+            "change24h": (top.change_24h or 0.0) if top else 0.0,
             # UX-38: el precio pone el porcentaje en contexto (+450 % de 0,17 $).
-            "price": float(top["price"]) if top and top.get("price") is not None else None,
+            "price": top.item.price if top else None,
             "rarity": rarity[0] if rarity else None,
             "rarityColor": rarity[1] if rarity else None,
         },
-        "history": [_map_market_index_point(p) for p in raw_points],
+        "history": [_map_market_index_point(p) for p in mi.history],
     }
     _market_index_cache.put(cache_key, result, now)
     return Fetched(result)
@@ -533,7 +494,7 @@ async def get_market_prices(client: httpx.AsyncClient, market: str, name: str | 
         params["currency"] = currency
 
     try:
-        data = await steamwebapi.market_prices(client, market, params, timeout=15.0)
+        data = await steam_client.market_prices(client, market, params, timeout=15.0)
     except QuotaExhausted as exc:
         return _stale_or_raise("market_prices", _market_prices_cache.stale(cache_key), exc)
 
@@ -618,23 +579,17 @@ async def get_cap_history(tf: str) -> list[dict]:
 async def capture_cap_snapshot(client: httpx.AsyncClient) -> dict:
     """/internal/cap-tick: guarda un snapshot horario del índice de precio."""
     try:
-        data = await steamwebapi.market_index(client, timeout=15.0)
+        data = await steam_client.market_index(client, timeout=15.0)
     except (SourceTimeout, SourceUnavailable):
         raise
     except UpstreamError as exc:
         logger.warning("[cap-tick] market-index returned %s", exc.status)
         raise
 
-    if not isinstance(data, dict):
-        raise UnexpectedPayload(UNEXPECTED_FORMAT)
-
-    price_index = data.get("priceindex")
-    if price_index is None:
+    mi = adapt_market_index(data)   # forma inesperada → UnexpectedPayload
+    if mi.price_index is None:
         logger.warning("[cap-tick] 'priceindex' missing from response")
         raise UnexpectedPayload("'priceindex' missing from Steam response")
-
-    def _num(value):
-        return float(value) if value is not None else None
 
     # Floor al inicio de la hora: la PK es `ts`, así que varias capturas dentro
     # de la misma hora colapsan en una sola fila (upsert idempotente).
@@ -642,10 +597,10 @@ async def capture_cap_snapshot(client: httpx.AsyncClient) -> dict:
 
     point = {
         "ts": hour_ts.isoformat().replace("+00:00", "Z"),
-        "priceindex": float(price_index or 0),
-        "realpriceindex": _num(data.get("realpriceindex")),
-        "buyorderpriceindex": _num(data.get("buyorderpriceindex")),
-        "turnover24h": _num(data.get("turnover24h")),
+        "priceindex": mi.price_index,
+        "realpriceindex": mi.real_price_index,
+        "buyorderpriceindex": mi.buy_order_price_index,
+        "turnover24h": mi.turnover_24h,
     }
 
     await insert_snapshot(point)

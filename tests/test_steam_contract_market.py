@@ -19,7 +19,7 @@ from stores import (
     _market_providers_cache, _search_cache, _topmovers_raw_cache,
 )
 from tests.test_steam_contract_rows import ITEM_KEYS as ROW_ITEM_KEYS, SAMPLE
-from steam.mappers.rows import _to_row
+from steam.mappers.row_mapper import _to_row
 
 NAME = "AK-47 | Redline (Field-Tested)"
 RAW = {
@@ -193,7 +193,6 @@ def test_index_402_sirve_cache_caducada_o_503(steam_api, client, monkeypatch):
     assert resp.json() == bueno
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 def test_index_gainer_sin_nombre_no_es_500(steam_api, client):
     steam_api.on("market-index/cs2", json={"history": [], "topmovers": {"gainers": [{"price": 1}]}})
     resp = client.get("/market/index")

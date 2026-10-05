@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 
 from settings import STEAM_API_KEY, STEAM_GAME
-from steam.clients.http import FollowRedirects, Timeout, get_json
+from steam.api.http import FollowRedirects, Timeout, get_json
 
 STEAM_WEB_API = "https://www.steamwebapi.com/steam/api"
 STEAM_MARKET_API = "https://www.steamwebapi.com/market"

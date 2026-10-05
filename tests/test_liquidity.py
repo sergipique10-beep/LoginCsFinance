@@ -3,10 +3,17 @@
 Todos los pesos salen de esa pregunta. Un score que midiera "salud del mercado"
 tendría otros. Ver docs/superpowers/specs/2026-07-14-liquidity-score-design.md.
 """
-from steam.liquidity import compute_liquidity
-from steam.mappers.items import _map_item
-from steam.mappers.movers import _map_topmovers_item
+from steam.adapters.steam_adapter import adapt_item
+from steam.domain.models import TopMover
+from steam.liquidity import compute_liquidity as _compute_liquidity
+from steam.mappers.item_mapper import _map_item
+from steam.mappers.movers_mapper import _map_topmovers_item
 from steam.services.market import _MOVERS_SELECT
+
+
+def compute_liquidity(raw: dict):
+    """Los tests describen el payload crudo; el score recibe el modelo interno."""
+    return _compute_liquidity(adapt_item(raw))
 
 
 # Ítem de alta rotación: se vende mucho, hay una montaña de compradores esperando,
@@ -218,7 +225,7 @@ def test_borde_exacto_de_cobertura_minima():
 
 
 def test_map_item_expone_el_score_y_el_desglose():
-    item = _map_item(ITEM_LIQUIDO)
+    item = _map_item(adapt_item(ITEM_LIQUIDO))
 
     assert item["liquidityScore"] == 67.83
     assert item["liquidityBreakdown"]["velocity"]["value"] == 0.7834
@@ -230,11 +237,9 @@ def test_topmovers_no_inventa_un_score():
     El mapper los pone en 0 duro. Calcular el score ahí daría un número que diría
     "ilíquido" cuando la verdad es "no hay datos".
     """
-    item = _map_topmovers_item({
-        "markethashname": "AK-47 | Redline (Field-Tested)",
-        "price": 1.50,
-        "change24h": 0.03,
-    })
+    item = _map_topmovers_item(TopMover(
+        adapt_item({"markethashname": "AK-47 | Redline (Field-Tested)", "price": 1.50}), 0.03,
+    ))
 
     assert item["liquidityScore"] is None
     assert item["liquidityBreakdown"] is None

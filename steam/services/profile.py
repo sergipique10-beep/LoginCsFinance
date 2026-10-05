@@ -4,8 +4,10 @@ import time
 import httpx
 
 from stores import _profile_cache
-from steam.clients import steamwebapi
-from steam.degraded import log_degraded
+from steam.adapters.steam_adapter import adapt_profile
+from steam.api import steam_client
+from steam.errors.handling import log_degraded
+from steam.mappers.profile_mapper import _map_profile
 
 
 async def get_profile(client: httpx.AsyncClient, steam_id: str) -> dict:
@@ -14,20 +16,11 @@ async def get_profile(client: httpx.AsyncClient, steam_id: str) -> dict:
     if profile is not None:
         return profile if "steam64_id" in profile else {**profile, "steam64_id": steam_id}
 
-    data = await steamwebapi.profile(client, steam_id)
-    if isinstance(data, list):
-        data = data[0] if data else {}
-    if not data:
-        # 200 sin perfil: se sirven campos vacíos y se cachean 23 h, como antes.
+    data = adapt_profile(await steam_client.profile(client, steam_id))   # forma rara → UnexpectedPayload
+    profile = _map_profile(data, steam_id)
+    if data is None:
+        # 200 sin perfil: campos vacíos SIN cachear (CAL-14: antes se guardaban 23 h).
         log_degraded("profile", "empty_body", "empty")
-
-    profile = {
-        "userName":       data.get("personaname", ""),
-        "avatarUrl":      data.get("avatarfull", ""),
-        "avatarThumbUrl": data.get("avatarmedium") or data.get("avatarfull", ""),
-        "profileUrl":     data.get("profileurl", ""),
-        "isOnline":       data.get("personastate", 0) != 0,
-        "steam64_id":     steam_id,
-    }
+        return profile
     _profile_cache.put(steam_id, profile, now)
     return profile

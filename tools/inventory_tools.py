@@ -71,7 +71,7 @@ async def _ver_inventario(
     ``steam_id`` se inyecta desde el JWT en el router — no viene de Gemini.
     """
     from stores import _inventory_cache
-    from steam.degraded import log_degraded, reason_of
+    from steam.errors.handling import log_degraded, reason_of
     from steam.errors import InvalidPayload, UnexpectedPayload, UpstreamError
     from steam.services import inventory as inventory_service
 

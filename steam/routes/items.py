@@ -17,7 +17,7 @@ from stores import (
 )
 from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
-from ..degraded import log_degraded, reason_of
+from ..errors.handling import log_degraded, reason_of
 from ..errors import (
     UPSTREAM_QUOTA_DETAIL, UPSTREAM_RATE_LIMIT_DETAIL, HistoryBusy, QuotaExhausted, RateLimited,
     SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,

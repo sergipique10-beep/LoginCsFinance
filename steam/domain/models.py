@@ -1,4 +1,6 @@
-"""Formas de salida de steam/ (CLEAN-08): el contrato JSON con el front escrito como tipo.
+"""Modelos de steam/: los TypedDict de salida (CLEAN-08) y los modelos internos (CLEAN-14).
+
+Salida: el contrato JSON con el front escrito como tipo.
 
 `TypedDict` y no `dataclass` porque las rutas devuelven dicts y el contrato son esos
 dicts: anotar no cambia el JSON. Las claves son exactamente las que fijan los tests de
@@ -157,3 +159,177 @@ class Fetched(Generic[T]):
     data: T
     status: FetchStatus = "ok"
     reason: str | None = None
+
+
+# ── Modelos internos (CLEAN-14) ────────────────────────────────────────────────
+# Lo que los adapters (`steam/adapters/`) construyen a partir del JSON crudo de cada
+# fuente, ya con tipos: `None` significa «el campo no vino o no era convertible», y
+# `0` significa cero. Son dataclasses inmutables y NO son contrato con el front: los
+# mappers los convierten a los TypedDict de arriba.
+
+
+@dataclass(frozen=True)
+class PriceQuote:
+    """Un precio por mercado dentro de `prices[]` de steamwebapi."""
+    market: str | None
+    price: float | None
+    quantity: int | None
+
+
+@dataclass(frozen=True)
+class Variant:
+    """Una variante de `variants[]` (fases de Doppler)."""
+    paint_index: int | None
+    phase: str | None
+
+
+@dataclass(frozen=True)
+class SteamItem:
+    """Un item de steamwebapi (`/items`, `/inventory`, `/item`, gainers de topmovers).
+
+    `name` es `markethashname` (canónico, en inglés) o, si falta, `marketname`.
+    `latest_price` es la cadena que ya usaban `_map_item` y el Liquidity Score:
+    pricelatestsell → price → lowestprice → priceusd (el primero > 0), o None.
+    """
+    id: str | None
+    asset_id: str | None
+    market_hash_name: str | None
+    market_name: str | None
+    slug: str | None
+    weapon_type: str | None
+    item_type: str | None
+    item_name: str | None
+    image: str | None
+    rarity: str | None
+    color: str | None
+    border_color: str | None
+    quality: str | None
+    is_stattrak: bool | None
+    is_souvenir: bool | None
+    is_star: bool | None
+    exterior: str | None
+    float_value: float | None
+    float_min: float | None
+    float_max: float | None
+    paint_index: int | None
+    variants: tuple[Variant, ...]
+    price_latest_sell: float | None
+    price: float | None
+    lowest_price: float | None
+    price_usd: float | None
+    price_latest: float | None
+    price_median: float | None
+    price_real: float | None
+    price_real_24h: float | None
+    price_real_7d: float | None
+    price_real_30d: float | None
+    price_safe: float | None
+    price_min: float | None
+    price_max: float | None
+    prices: tuple[PriceQuote, ...]
+    sold_24h: int | None
+    sold_7d: int | None
+    sold_30d: int | None
+    sold_total: int | None
+    offer_volume: int | None
+    buy_order_volume: int | None
+    buy_order_price: float | None
+    hours_to_sold: float | None
+    marketable: bool | None
+    tradable: bool | None
+    trade_lock_days: Any
+    steam_url: str | None
+
+    @property
+    def name(self) -> str:
+        return self.market_hash_name or self.market_name or ""
+
+    @property
+    def latest_price(self) -> float | None:
+        for value in (self.price_latest_sell, self.price, self.lowest_price, self.price_usd):
+            if value:
+                return value
+        return None
+
+
+@dataclass(frozen=True)
+class TopMover:
+    """Un gainer/loser de `topmovers` en `/market-index/cs2`: el item y su variación
+    24 h en PORCENTAJE (UX-35)."""
+    item: SteamItem
+    change_24h: float | None
+
+
+@dataclass(frozen=True)
+class IndexPoint:
+    ts: str
+    value: float | None
+    change: float | None
+    volume: int | None
+
+
+@dataclass(frozen=True)
+class MarketIndexData:
+    """`/market-index/cs2`: la serie, los topmovers y los agregados del día."""
+    history: tuple[IndexPoint, ...]
+    gainers: tuple[TopMover, ...]
+    losers: tuple[TopMover, ...]
+    turnover_24h: float | None
+    sold_24h: int | None
+    price_index: float | None
+    real_price_index: float | None
+    buy_order_price_index: float | None
+    dropped_movers: int = 0   # topmovers sin `markethashname`, descartados por el adapter
+
+
+@dataclass(frozen=True)
+class ProfileData:
+    persona_name: str | None
+    avatar_full: str | None
+    avatar_medium: str | None
+    profile_url: str | None
+    persona_state: int | None
+
+
+@dataclass(frozen=True)
+class NewsEntry:
+    gid: str | None
+    title: str | None
+    url: str | None
+    contents: str | None
+    date: int | None
+    author: str | None
+    feed_label: str | None
+    feed_name: str | None
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    """Una entrada del catálogo de ByMykel (skins/knives con `wears`, el resto plano)."""
+    name: str | None
+    market_hash_name: str | None
+    image: str | None
+    rarity_name: str | None
+    rarity_color: str | None    # hex sin '#'
+    wears: tuple[str, ...]
+    stattrak: bool
+
+
+@dataclass(frozen=True)
+class ProviderInfo:
+    """Un mercado de `/info/markets`: `id` en minúsculas (id → key → name)."""
+    id: str
+    name: str | None
+    logo: str | None
+
+
+@dataclass(frozen=True)
+class PriceRow:
+    """Una fila de `/market/{market}/prices`: nombre y precio > 0."""
+    name: str
+    price: float
+
+
+@dataclass(frozen=True)
+class FxRates:
+    eur: float | None

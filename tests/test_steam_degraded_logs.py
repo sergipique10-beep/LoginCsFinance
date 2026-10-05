@@ -10,7 +10,7 @@ import time
 import httpx
 import pytest
 
-from steam import degraded
+from steam.errors import handling as degraded
 from steam.services import catalog, market as market_service, pricing
 from steam.services import providers as providers_service
 from stores import _item_history_cache, _item_price_cache, _market_lookup_cache, _search_cache
@@ -178,7 +178,7 @@ def test_noticia_sin_og_image(steam_api, client, lines):
         {"gid": "2", "title": "B", "url": "", "contents": "", "date": 0},
     ]}})
     client.get("/news/cs2")
-    assert lines("news_image") == [("og_image", "empty")]   # la que no tiene url no cuenta
+    assert lines("news_image") == [("http_404", "empty")]   # la que no tiene url no cuenta
 
 
 def test_sin_degradacion_no_hay_linea(steam_api, client, lines):

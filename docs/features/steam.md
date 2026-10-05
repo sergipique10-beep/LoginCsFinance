@@ -2,27 +2,41 @@
 feature: steam
 files:
   - steam/cap_history_repo.py
-  - steam/clients/__init__.py
-  - steam/clients/fx.py
-  - steam/clients/http.py
-  - steam/clients/static_catalog.py
-  - steam/clients/steam_news.py
-  - steam/clients/steamwebapi.py
-  - steam/degraded.py
+  - steam/adapters/__init__.py
+  - steam/adapters/_common.py
+  - steam/adapters/buff_adapter.py
+  - steam/adapters/csfloat_adapter.py
+  - steam/adapters/fx_adapter.py
+  - steam/adapters/news_adapter.py
+  - steam/adapters/provider_adapter.py
+  - steam/adapters/static_catalog_adapter.py
+  - steam/adapters/steam_adapter.py
+  - steam/api/__init__.py
+  - steam/api/buff_client.py
+  - steam/api/csfloat_client.py
+  - steam/api/fx_client.py
+  - steam/api/http.py
+  - steam/api/news_client.py
+  - steam/api/static_catalog_client.py
+  - steam/api/steam_client.py
   - steam/domain/__init__.py
   - steam/domain/catalog.py
   - steam/domain/models.py
   - steam/domain/names.py
   - steam/domain/validators.py
-  - steam/errors.py
+  - steam/errors/__init__.py
+  - steam/errors/domain_errors.py
+  - steam/errors/handling.py
   - steam/inventory_snapshot_repo.py
   - steam/liquidity.py
   - steam/mappers/__init__.py
-  - steam/mappers/items.py
-  - steam/mappers/market_index.py
-  - steam/mappers/movers.py
-  - steam/mappers/news.py
-  - steam/mappers/rows.py
+  - steam/mappers/item_mapper.py
+  - steam/mappers/market_index_mapper.py
+  - steam/mappers/movers_mapper.py
+  - steam/mappers/news_mapper.py
+  - steam/mappers/profile_mapper.py
+  - steam/mappers/provider_mapper.py
+  - steam/mappers/row_mapper.py
   - steam/price_capture.py
   - steam/price_history_repo.py
   - steam/rankings_repo.py
@@ -78,7 +92,7 @@ aceptada), *UX-46* (hacerla visible al usuario, necesita al front) o el issue de
 
 **Log** (CLEAN-12): las degradaciones que el cliente no ve dejan una línea
 `[steam-degraded] flow=<flow> reason=<reason> served=<stale|empty|fallback|error> last_hour=<n>`
-(`steam/degraded.py`), una por fila con algo en la última columna;
+(`steam/errors/handling.py`), una por fila con algo en la última columna;
 `tests/test_steam_degraded_logs.py` provoca cada una. Las que ya se ven (cabecera, `code`,
 `stale` en el cuerpo, 5xx) no llevan línea. Fuera a propósito: los mappers (una línea
 por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
@@ -91,11 +105,11 @@ por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
 | Inventario | 410 / 411 | `[]` guardado en caché y snapshot | invisible | CAL-13 | `inventory` · `http_410`/`http_411` |
 | Inventario | JSON inválido | 500 | 500 | CAL-14 | — |
 | Perfil `/me` | 402 / 429 | 502 | sin `code` | CAL-14 | — |
-| Perfil `/me` | campos ausentes | perfil en blanco cacheado 23 h | invisible | CAL-14 | `profile` · `empty_body` (cuerpo vacío) |
+| Perfil `/me` | 200 sin perfil | perfil en blanco **sin cachear** | invisible | resuelto (CLEAN-14) | `profile` · `empty_body` |
 | Histórico (enriquecimiento) | fallo de csfloat/history | `[]` 5 min; deltas de `_inline_delta` | invisible | conservar | `history` · `reason_of(exc)` |
 | `/item/history` | ventana llena / 429 | stale, o 503 + `Retry-After` | `code: upstream_rate_limit` | conservar (SEC-16) | `item_history` · `rate_limit` (solo stale) |
 | `/item/history` | 402 | `200 []` sin cachear | invisible | CAL-14 | `item_history` · `quota` |
-| `/item/history` | cuerpo no lista | `[]` cacheado 23 h | invisible | CAL-14 | `item_history` · `unexpected_format` |
+| `/item/history` | cuerpo no lista | `200 []` **sin cachear** | invisible | resuelto (CLEAN-14); el 502 es Fase 2 | `item_history` · `unexpected_format` |
 | Lookup CSFloat/Buff | fallo | stale o `{}`, backoff 5 min | precios a `null` | conservar (PERF-17) | `market_lookup` · motivo o `backoff` |
 | Proveedores | fallo | stale o `_FALLBACK_PROVIDERS` | invisible | conservar (PERF-17) | `providers` · motivo o `backoff` |
 | FX | fallo / tasa fuera de 0,5–2,0 | última tasa o ninguna | `stale` en el cuerpo | conservar (UX-08) | — |
@@ -108,10 +122,10 @@ por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
 | Búsqueda | caché compartida con el chat | hasta 10 items sin liquidez | invisible | CAL-11 | — |
 | `/market/index` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_index` · `quota` (solo stale) |
 | `/market/prices` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_prices` · `quota` (solo stale) |
-| `/market/index` | top sin `markethashname`/`change24h` | `KeyError` → 500 | 500 | CAL-14 | — |
+| `/market/index` | gainer sin `markethashname` / sin `change24h` | se descarta / `0.0` | invisible | resuelto (CLEAN-14) | `market_index` · `invalid_field` (solo al descartar) |
 | Catálogo de imágenes | todas las fuentes caídas | backoff 5 min, `image: ""` | invisible | conservar (CAL-08) | `catalog` · `all_sources_failed` |
 | Noticias | JSON que no es dict | 500 | 500 | CAL-14 | — |
-| Noticias | og:image falla | `imageUrl: ""` | invisible | conservar | `news_image` · `og_image` (solo con URL) |
+| Noticias | og:image falla o la página no lo trae | `imageUrl: ""` | invisible | conservar | `news_image` · `reason_of(exc)` o `no_og_tag` (solo con URL) |
 | Chat: precio / búsqueda | 402 / 429 | "error al ejecutar" | genérico | CAL-14 | — |
 | Chat: inventario | cualquier error | `[]` | parece vacío | CAL-14 | `chat_inventory` · `reason_of(exc)` |
 | Mappers | campos ausentes | `0`, `"Base Grade"`, `True`… | invisible | UX-46 | — |

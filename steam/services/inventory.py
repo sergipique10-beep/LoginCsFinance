@@ -6,10 +6,10 @@ import logging
 
 import httpx
 
-from steam.clients import steamwebapi
+from steam.adapters.steam_adapter import adapt_inventory
+from steam.api import steam_client
 from steam.domain.models import SkinCard
-from steam.errors import UNEXPECTED_FORMAT, UnexpectedPayload
-from steam.mappers.items import _map_item
+from steam.mappers.item_mapper import _map_item
 from steam.services import catalog, pricing
 
 logger = logging.getLogger("uvicorn.error")
@@ -19,16 +19,13 @@ async def fetch_fresh_inventory(client: httpx.AsyncClient, steam_id: str, *, tra
     """El inventario mapeado y enriquecido (precios CSFloat/Buff e imágenes).
 
     - Los errores del cliente suben tal cual (la ruta trata el 410/411 como inventario
-      vacío y el chat como fallo; CAL-13). Un cuerpo que no es lista → `UnexpectedPayload`.
+      vacío y el chat como fallo; CAL-13). Un cuerpo que no es lista → `UnexpectedPayload`
+      (lo lanza el adapter).
     - `track`: registrar los nombres en `tracked_skins` para la captura diaria. Lo hace
       la ruta y no el chat; es la diferencia que había entre las dos descargas.
     """
-    data = await steamwebapi.inventory(client, steam_id)
-    if not isinstance(data, list):
-        logger.error("steamwebapi /inventory unexpected format: %.500s", data)
-        raise UnexpectedPayload(UNEXPECTED_FORMAT)
-
-    items = [_map_item(item) for item in data]
+    data = await steam_client.inventory(client, steam_id)
+    items = [_map_item(item) for item in adapt_inventory(data)]   # cuerpo no lista → UnexpectedPayload
     items = await pricing.enrich_market_prices(client, items)
     catalog.enrich_images_from_cache(items)
 

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from steam.mappers.rows import _to_row
+from steam.mappers.row_mapper import _to_row
 from steam.rankings_repo import movers_repo, trending_repo
 from tests.test_steam_contract_market import NAME, RAW, SKIN_CARD_KEYS
 from tests.test_steam_contract_rows import SAMPLE

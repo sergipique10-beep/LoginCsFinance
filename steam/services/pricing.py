@@ -10,16 +10,21 @@ from functools import partial
 import httpx
 
 from stores import HISTORY_EMPTY_TTL, _item_history_cache, _market_lookup_cache
-from steam.clients import steamwebapi
-from steam.clients.steamwebapi import _history_limiter
+from steam.adapters import buff_adapter, csfloat_adapter
+from steam.adapters.steam_adapter import adapt_legacy_history, adapt_price_rows
+from steam.api import MARKET_CLIENTS, csfloat_client, steam_client
+from steam.api.steam_client import _history_limiter
 from steam.domain import catalog as domain_catalog
-from steam.degraded import log_degraded, reason_of
+from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import Fetched, HistoryPoint
-from steam.domain.validators import has_price
 from steam.errors import (
-    HistoryBusy, QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UpstreamError,
+    HistoryBusy, QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UnexpectedPayload,
+    UpstreamError,
 )
-from steam.mappers.items import _delta_from_history
+from steam.mappers.item_mapper import _delta_from_history
+
+# El adapter del histórico de cada mercado con histórico (`HISTORY_MARKETS`).
+_HISTORY_ADAPTERS = {"csfloat": csfloat_adapter.adapt_history, "buff": buff_adapter.adapt_history}
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -46,10 +51,8 @@ async def fetch_history_for_item(
         now = time.monotonic()  # limiter may have blocked; refresh for cache stamps
         today = date.today()
         try:
-            raw = await steamwebapi.market_history(
-                client, "csfloat", name,
-                (today - timedelta(days=35)).isoformat(), today.isoformat(),
-                timeout=30.0,
+            raw = await csfloat_client.history(
+                client, name, (today - timedelta(days=35)).isoformat(), today.isoformat(), timeout=30.0,
             )
         except (SourceTimeout, SourceUnavailable):
             raise   # red: lo registra el except genérico de abajo, como antes
@@ -58,22 +61,13 @@ async def fetch_history_for_item(
             log_degraded("history", reason_of(exc), "empty")
             _item_history_cache.put(cache_key, [], now)
             return []
-        if not isinstance(raw, list):
-            logger.warning("[item-history] %s → unexpected format: %s", name, str(raw)[:200])
+        try:
+            pts = csfloat_adapter.adapt_history(raw)
+        except UnexpectedPayload as exc:
+            logger.warning("[item-history] %s → unexpected format: %s", name, exc)
             log_degraded("history", "unexpected_format", "empty")
             _item_history_cache.put(cache_key, [], now)
             return []
-        pts = sorted(
-            [
-                {
-                    "date":   p.get("createdat", "")[:10],
-                    "price":  float(p.get("price") or 0),
-                    "volume": int(p.get("quantity") or 0),
-                }
-                for p in raw if has_price(p)
-            ],
-            key=lambda p: p["date"],
-        )
         logger.info("[item-history] %s → %d points (csfloat)", name, len(pts))
         _item_history_cache.put(cache_key, pts, now)
         return pts
@@ -102,7 +96,7 @@ async def enrich_prices(
 
     histories = await asyncio.gather(*[fetch(it["name"]) for it in items])
     result = []
-    for item, pts in zip(items, histories):
+    for item, pts in zip(items, histories, strict=True):
         if pts:
             # Use the most recent point in the CSFloat history as "current" price so
             # we compare CSFloat vs CSFloat (same market). Using priceLatest (Steam)
@@ -138,22 +132,19 @@ async def _fetch_market_price_lookup(client: httpx.AsyncClient, market: str) -> 
         return _lookup_stale(market, "backoff")
     try:
         try:
-            data = await steamwebapi.market_prices(client, market, {"format": "json"}, timeout=30.0)
+            data = await MARKET_CLIENTS[market].prices(client, {"format": "json"}, timeout=30.0)
         except (SourceTimeout, SourceUnavailable):
             raise
         except UpstreamError as exc:
             logger.warning("[market-lookup] %s returned %s", market, exc.status)
             _market_lookup_cache.mark_failed(market, now)
             return _lookup_stale(market, reason_of(exc))
-        if not isinstance(data, list):
+        try:
+            rows = adapt_price_rows(data, market=market)
+        except UnexpectedPayload:
             _market_lookup_cache.mark_failed(market, now)
             return _lookup_stale(market, "unexpected_format")
-        lookup: dict[str, float] = {}
-        for item in data:
-            name = item.get("market_hash_name") or item.get("markethashname") or item.get("name")
-            price = item.get("price") or item.get("value") or 0
-            if name and price:
-                lookup[name] = float(price)
+        lookup: dict[str, float] = {r.name: r.price for r in rows}
         _market_lookup_cache.put(market, lookup, now)
         logger.info("[market-lookup] %s: %d prices loaded", market, len(lookup))
         return lookup
@@ -181,7 +172,7 @@ async def get_item_history(client: httpx.AsyncClient, name: str, interval: str, 
 
     Pasa por `_history_limiter` con espera máxima `limiter_timeout` (SEC-16). Ventana
     llena o 429 → la caché caducada si la hay; si no, `HistoryBusy` / `RateLimited`.
-    Un 402 da `[]` sin cachear (CAL-14).
+    Un 402 da `[]` sin cachear (CAL-14); un cuerpo ilegible también, sin cachear.
     """
     market = market.lower() if market else None
     days = max(1, min(days, 365))  # el frontend pide por timeframe; acotar el rango
@@ -196,13 +187,13 @@ async def get_item_history(client: httpx.AsyncClient, name: str, interval: str, 
     if market in domain_catalog.HISTORY_MARKETS:
         today = date.today()
         fetch = partial(
-            steamwebapi.market_history,
-            client, market, name, (today - timedelta(days=days)).isoformat(), today.isoformat(),
+            MARKET_CLIENTS[market].history,
+            client, name, (today - timedelta(days=days)).isoformat(), today.isoformat(),
         )
-        volume_key = "quantity"
+        adapt = _HISTORY_ADAPTERS[market]
     else:
-        fetch = partial(steamwebapi.legacy_history, client, name, interval)
-        volume_key = "sold"
+        fetch = partial(steam_client.legacy_history, client, name, interval)
+        adapt = adapt_legacy_history
 
     try:
         await asyncio.wait_for(_history_limiter.acquire(), timeout=limiter_timeout)
@@ -227,21 +218,11 @@ async def get_item_history(client: httpx.AsyncClient, name: str, interval: str, 
             return Fetched(stale, "stale", "rate_limit")
         raise
 
-    if not isinstance(data, list):
+    try:
+        points: list[HistoryPoint] = adapt(data)
+    except UnexpectedPayload:
+        # Sin cachear (CAL-14: antes un `[]` por cuerpo ilegible se guardaba 23 h).
         log_degraded("item_history", "unexpected_format", "empty")
-    raw = data if isinstance(data, list) else []
-    points: list[HistoryPoint] = sorted(
-        [
-            {
-                "date":   p.get("createdat", "")[:10],
-                "price":  float(p.get("price") or 0),
-                "volume": int(p.get(volume_key) or 0),
-            }
-            for p in raw if has_price(p)
-        ],
-        key=lambda p: p["date"],
-    )
+        return Fetched([], "error", "unexpected_format")
     _item_history_cache.put(cache_key, points, now)
-    if not isinstance(data, list):
-        return Fetched(points, "error", "unexpected_format")   # CAL-14: y se cachea 23 h
     return Fetched(points)

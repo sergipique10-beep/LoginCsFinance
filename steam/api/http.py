@@ -24,9 +24,9 @@ def parse_retry_after(value: str | None) -> float | None:
         return None
 
 
-async def get_json(client: httpx.AsyncClient, url: str, params: dict | None = None, *,
-                   headers: dict | None = None, timeout: Timeout = httpx.USE_CLIENT_DEFAULT,
-                   follow_redirects: FollowRedirects = httpx.USE_CLIENT_DEFAULT) -> Any:
+async def _get_200(client: httpx.AsyncClient, url: str, params: dict | None, *,
+                   headers: dict | None, timeout: Timeout, follow_redirects: FollowRedirects) -> httpx.Response:
+    """El GET con la respuesta 200, o el error tipado (red, 402, 429, otro status)."""
     try:
         resp = await client.get(url, headers=headers, params=params,
                                 timeout=timeout, follow_redirects=follow_redirects)
@@ -38,14 +38,31 @@ async def get_json(client: httpx.AsyncClient, url: str, params: dict | None = No
     # ponytail: solo 200 es éxito, como comprobaban casi todos los llamadores; un
     # 2xx distinto no se ha visto nunca en estas fuentes.
     if resp.status_code == 200:
-        try:
-            return resp.json()
-        except ValueError as exc:
-            raise InvalidPayload(resp.text[:BODY_EXCERPT]) from exc
-
+        return resp
     excerpt = resp.text[:BODY_EXCERPT]
     if resp.status_code == 402:
         raise QuotaExhausted(excerpt)
     if resp.status_code == 429:
         raise RateLimited(parse_retry_after(resp.headers.get("Retry-After")), excerpt)
     raise UpstreamError(resp.status_code, excerpt)
+
+
+async def get_json(client: httpx.AsyncClient, url: str, params: dict | None = None, *,
+                   headers: dict | None = None, timeout: Timeout = httpx.USE_CLIENT_DEFAULT,
+                   follow_redirects: FollowRedirects = httpx.USE_CLIENT_DEFAULT) -> Any:
+    resp = await _get_200(client, url, params, headers=headers, timeout=timeout,
+                          follow_redirects=follow_redirects)
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise InvalidPayload(resp.text[:BODY_EXCERPT]) from exc
+
+
+async def get_text(client: httpx.AsyncClient, url: str, *, headers: dict | None = None,
+                   timeout: Timeout = httpx.USE_CLIENT_DEFAULT,
+                   follow_redirects: FollowRedirects = httpx.USE_CLIENT_DEFAULT) -> str:
+    """El cuerpo de un 200 como texto (páginas HTML: el og:image de las noticias).
+    Mismos errores tipados que `get_json` (CLEAN-14)."""
+    resp = await _get_200(client, url, None, headers=headers, timeout=timeout,
+                          follow_redirects=follow_redirects)
+    return resp.text

@@ -6,11 +6,13 @@ import time
 import httpx
 
 from stores import _market_providers_cache
-from steam.clients import steamwebapi
+from steam.adapters.provider_adapter import adapt_markets
+from steam.api import steam_client
 from steam.domain import catalog as domain_catalog
-from steam.degraded import log_degraded, reason_of
+from steam.errors.handling import log_degraded, reason_of
 from steam.domain.models import Fetched, MarketProvider
-from steam.errors import SourceTimeout, SourceUnavailable, UpstreamError
+from steam.errors import SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError
+from steam.mappers.provider_mapper import _build_providers
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -34,39 +36,19 @@ async def fetch_market_providers(client: httpx.AsyncClient) -> Fetched[list[Mark
         return _providers_stale("backoff")
     try:
         try:
-            data = await steamwebapi.info_markets(client)
+            data = await steam_client.info_markets(client)
         except (SourceTimeout, SourceUnavailable):
             raise
         except UpstreamError as exc:
             logger.warning("[market-providers] info/markets returned %s", exc.status)
             _market_providers_cache.mark_failed("providers", now)
             return _providers_stale(reason_of(exc))
-        if not isinstance(data, list):
+        try:
+            markets = adapt_markets(data)
+        except UnexpectedPayload:
             _market_providers_cache.mark_failed("providers", now)
             return _providers_stale("unexpected_format")
-
-        if data:
-            logger.info("[market-providers] sample keys: %s", list(data[0].keys()))
-
-        lookup: dict[str, MarketProvider] = {}
-        for m in data:
-            mid = (m.get("id") or m.get("key") or m.get("name") or "").lower()
-            if mid in domain_catalog.PROVIDER_IDS:
-                api_logo = (
-                    m.get("logo") or m.get("logoUrl") or m.get("logo_url") or
-                    m.get("image") or m.get("imageUrl") or m.get("image_url") or
-                    m.get("icon") or m.get("iconUrl") or m.get("icon_url") or
-                    m.get("thumbnail") or ""
-                )
-                lookup[mid] = {
-                    "id":      mid,
-                    "name":    m.get("name") or mid.capitalize(),
-                    "logoUrl": api_logo or domain_catalog.KNOWN_LOGOS.get(mid, ""),
-                }
-
-        providers: list[MarketProvider] = [{"id": "steam", "name": "Steam", "logoUrl": domain_catalog.STEAM_FAVICON}]
-        for pid in ("csfloat", "buff"):
-            providers.append(lookup.get(pid) or domain_catalog.fallback_provider(pid))
+        providers = _build_providers(markets)
 
         _market_providers_cache.put("providers", providers, now)
         logger.info("[market-providers] loaded %d providers", len(providers))

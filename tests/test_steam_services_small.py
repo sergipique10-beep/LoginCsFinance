@@ -61,8 +61,9 @@ async def test_perfil_lista_vacia_y_cache(fake, http):
     fake.on("api/profile", json=[])
     profile = await profile_service.get_profile(http, "765")
     assert profile["steam64_id"] == "765" and profile["userName"] == "" and profile["isOnline"] is False
+    # CAL-14 (CLEAN-14): un 200 sin perfil no se cachea, así que la segunda llamada vuelve a pedirlo.
     assert await profile_service.get_profile(http, "765") == profile
-    assert len(fake.hits("api/profile")) == 1
+    assert len(fake.hits("api/profile")) == 2
 
 
 # ── noticias ──────────────────────────────────────────────────────────────────

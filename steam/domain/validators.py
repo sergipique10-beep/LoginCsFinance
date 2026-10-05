@@ -3,9 +3,56 @@ código, reunidas con nombre y test; ninguna es nueva. Endurecerlas (p. ej. trat
 precio implausible como inválido) cambia lo que ve el usuario: es UX-46.
 """
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import TypeIs
+
+from steam.errors import InvalidField
+
+if TYPE_CHECKING:
+    from steam.domain.models import SteamItem
+
+# ── Validadores de valor (CLEAN-14) ───────────────────────────────────────────
+# Sustituyen a `float(x or 0)` / `int(x or 0)` en los adapters. La regla: un campo
+# ausente, vacío o no convertible es `None` (no `0`, no `""`); un valor de un tipo
+# imposible (un dict donde va un número) es `InvalidField`, porque eso ya no es un
+# dato sucio sino otra forma de payload. `0` y `False` son datos y se conservan.
+
+_CONTAINER = (dict, list, tuple, set)
+
+
+def as_float(value: Any, *, field: str = "", source: str = "", op: str = "") -> float | None:
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    if isinstance(value, _CONTAINER):
+        raise InvalidField(source, op, field, value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def as_int(value: Any, *, field: str = "", source: str = "", op: str = "") -> int | None:
+    number = as_float(value, field=field, source=source, op=op)
+    return None if number is None else int(number)
+
+
+def as_bool(value: Any, *, field: str = "", source: str = "", op: str = "") -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, _CONTAINER):
+        raise InvalidField(source, op, field, value)
+    return bool(value)
+
+
+def as_str(value: Any, *, field: str = "", source: str = "", op: str = "") -> str | None:
+    """None si falta; los números se admiten como texto (ids); un contenedor es inválido."""
+    if value is None:
+        return None
+    if isinstance(value, _CONTAINER):
+        raise InvalidField(source, op, field, value)
+    return value if isinstance(value, str) else str(value)
+
 
 # Un precio histórico fuera de este rango respecto al actual es basura de la API
 # (visto: pricereal30d=0.22 para una skin de 17.57 → +7886%), no un movimiento real.
@@ -36,21 +83,19 @@ def plausible_fx_rate(rate: Any) -> TypeIs[float]:
     return isinstance(rate, (int, float)) and FX_MIN < rate < FX_MAX
 
 
-def ranking_eligible(raw: Mapping[str, Any], min_sold: int) -> bool:
-    """Precio y ventas mínimos de un item crudo de /items para entrar en un ranking."""
-    latest = float(raw.get("pricelatestsell") or 0)
-    volume = int(raw.get("sold24h") or 0)
-    return latest >= MIN_RANKING_PRICE and volume >= min_sold
+def ranking_eligible(item: "SteamItem", min_sold: int) -> bool:
+    """Precio y ventas mínimos de un item de /items para entrar en un ranking."""
+    return (item.price_latest_sell or 0) >= MIN_RANKING_PRICE and (item.sold_24h or 0) >= min_sold
 
 
 def canonical_price(item: Mapping[str, Any]) -> float | None:
-    """Precio canónico: pricelatestsell → pricelatest → pricemedian (primero > 0)."""
+    """Precio canónico: pricelatestsell → pricelatest → pricemedian (primero > 0).
+
+    Sobre el dict crudo de `/item`: lo consumen price_capture y alerts, que pasan al
+    modelo interno en la Fase 5 del refactor (price_capture_service)."""
     for key in ("pricelatestsell", "pricelatest", "pricemedian"):
-        try:
-            v = float(item.get(key) or 0)
-        except (TypeError, ValueError):
-            v = 0
-        if v > 0:
+        v = as_float(item.get(key), field=key, source="steamwebapi", op="item")
+        if v is not None and v > 0:
             return v
     return None
 
