@@ -32,9 +32,9 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from settings import ALERTS_LOOKUP_CAP, ALERTS_MAX_PER_USER
-from steam import price_capture
+from steam.services import price_capture_service
 from steam import price_history_repo
-from steam.domain.validators import canonical_price
+from steam.domain.rules import canonical_price
 from steam.errors import QuotaExhausted
 from steam.rankings_repo import movers_repo, trending_repo
 from notifications import repo as notif_repo
@@ -146,12 +146,12 @@ async def create_alert(
         price = (await _cached_prices([market_hash_name])).get(market_hash_name)
         if price is None:
             try:
-                item = await price_capture._lookup_item(http_client, market_hash_name)
+                item = await price_capture_service.lookup_item(http_client, market_hash_name)
             except QuotaExhausted:
                 raise PriceUnavailable("Precio no disponible ahora mismo, inténtalo más tarde")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[alerts] lookup falló para %r: %s", market_hash_name, exc)
-                item = {}
+                item = None
             price = canonical_price(item)
         if price is None:
             raise UnknownItem(f"No se encontró la skin {market_hash_name!r}")
@@ -209,7 +209,7 @@ async def _evaluate_alerts(http_client: httpx.AsyncClient) -> dict:
         if name in prices or not _lookup_due(alerts, name):
             continue
         try:
-            item = await price_capture._lookup_item(http_client, name)
+            item = await price_capture_service.lookup_item(http_client, name)
         except QuotaExhausted as exc:
             errors += 1
             quota_exhausted = True

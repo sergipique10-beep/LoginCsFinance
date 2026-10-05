@@ -6,9 +6,9 @@ import pytest
 
 from steam.domain.models import Fetched
 from steam.errors import UnexpectedPayload
-from steam.services import inventory as inventory_service
-from steam.services import news as news_service
-from steam.services import profile as profile_service
+from steam.services import inventory_service
+from steam.services import news_service
+from steam.services import profile_service
 from tests.test_steam_contract_market import NAME, RAW
 
 

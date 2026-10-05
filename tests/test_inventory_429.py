@@ -13,7 +13,7 @@ import pytest
 
 from steam.domain.models import Fetched
 from steam.errors import QuotaExhausted, StorageError
-from steam.routes import items as items_routes
+from steam.services import inventory_service
 from steam.errors import RateLimited
 from stores import _inventory_cache
 from tests.conftest import SNAPSHOT_DB, STEAM_ID
@@ -26,26 +26,26 @@ FRESH = [{"name": "AWP | Asiimov"}]
 @pytest.fixture(autouse=True)
 def _clean_state():
     _inventory_cache.clear()   # los tests sin `client` no pasan por su limpieza
-    items_routes._retry_tasks.clear()
-    items_routes._recent_429.clear()
+    inventory_service._retry_tasks.clear()
+    inventory_service._recent_429.clear()
     yield
-    items_routes._retry_tasks.clear()
-    items_routes._recent_429.clear()
+    inventory_service._retry_tasks.clear()
+    inventory_service._recent_429.clear()
 
 
 def _rate_limited(monkeypatch, retry_after=3.0):
-    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory",
+    monkeypatch.setattr(inventory_service, "_fetch_fresh_inventory",
                         AsyncMock(side_effect=RateLimited(retry_after)))
     schedule = MagicMock()
-    monkeypatch.setattr(items_routes, "_schedule_retry", schedule)
+    monkeypatch.setattr(inventory_service, "_schedule_retry", schedule)
     return schedule
 
 
 def _quota_exhausted(monkeypatch):
-    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory",
+    monkeypatch.setattr(inventory_service, "_fetch_fresh_inventory",
                         AsyncMock(side_effect=QuotaExhausted("402")))
     schedule = MagicMock()
-    monkeypatch.setattr(items_routes, "_schedule_retry", schedule)
+    monkeypatch.setattr(inventory_service, "_schedule_retry", schedule)
     return schedule
 
 
@@ -90,7 +90,7 @@ def test_429_without_snapshot_keeps_the_error_but_still_schedules_retry(client, 
 
 
 def test_fresh_read_stores_snapshot(client, monkeypatch):
-    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", AsyncMock(return_value=Fetched(FRESH)))
+    monkeypatch.setattr(inventory_service, "_fetch_fresh_inventory", AsyncMock(return_value=Fetched(FRESH)))
 
     resp = client.get("/inventory")
 
@@ -100,8 +100,8 @@ def test_fresh_read_stores_snapshot(client, monkeypatch):
 
 
 def test_snapshot_failure_never_breaks_a_good_read(client, monkeypatch):
-    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", AsyncMock(return_value=Fetched(FRESH)))
-    monkeypatch.setattr(items_routes.inventory_snapshot_repo, "save",
+    monkeypatch.setattr(inventory_service, "_fetch_fresh_inventory", AsyncMock(return_value=Fetched(FRESH)))
+    monkeypatch.setattr(inventory_service.inventory_snapshot_repo, "save",
                         AsyncMock(side_effect=StorageError("supabase caído")))
 
     assert client.get("/inventory").json() == FRESH
@@ -111,8 +111,8 @@ def test_no_new_steam_call_while_a_retry_is_in_flight(client, monkeypatch):
     """Cada GET extra mientras hay límite sería otro 429: se sirve el snapshot sin llamar."""
     SNAPSHOT_DB[STEAM_ID] = (SNAP_ITEMS, SNAP_AT)
     fetch = AsyncMock(return_value=Fetched(FRESH))
-    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", fetch)
-    items_routes._retry_tasks[STEAM_ID] = MagicMock()
+    monkeypatch.setattr(inventory_service, "_fetch_fresh_inventory", fetch)
+    inventory_service._retry_tasks[STEAM_ID] = MagicMock()
 
     resp = client.get("/inventory")
 
@@ -152,7 +152,7 @@ def _request_returning(response):
 def test_fetch_maps_429_with_retry_after():
     req = _request_returning(httpx.Response(429, headers={"Retry-After": "7"}))
     with pytest.raises(RateLimited) as exc:
-        asyncio.run(items_routes._fetch_fresh_inventory(req, STEAM_ID))
+        asyncio.run(inventory_service._fetch_fresh_inventory(req.app.state.http_client, STEAM_ID))
     assert exc.value.retry_after == 7.0
 
 
@@ -160,26 +160,26 @@ def test_fetch_maps_429_without_or_with_garbage_retry_after():
     for headers in ({}, {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}):
         req = _request_returning(httpx.Response(429, headers=headers))
         with pytest.raises(RateLimited) as exc:
-            asyncio.run(items_routes._fetch_fresh_inventory(req, STEAM_ID))
+            asyncio.run(inventory_service._fetch_fresh_inventory(req.app.state.http_client, STEAM_ID))
         assert exc.value.retry_after is None
 
 
 def test_fetch_maps_402_to_quota_exhausted():
     req = _request_returning(httpx.Response(402))
     with pytest.raises(QuotaExhausted):
-        asyncio.run(items_routes._fetch_fresh_inventory(req, STEAM_ID))
+        asyncio.run(inventory_service._fetch_fresh_inventory(req.app.state.http_client, STEAM_ID))
 
 
 # ── backoff ──────────────────────────────────────────────────────────────────
 
 def test_backoff_grows_is_capped_and_respects_retry_after(monkeypatch):
-    monkeypatch.setattr(items_routes, "INVENTORY_429_BACKOFF_BASE", 5.0)
-    monkeypatch.setattr(items_routes, "INVENTORY_429_BACKOFF_CAP", 120.0)
+    monkeypatch.setattr(inventory_service, "INVENTORY_429_BACKOFF_BASE", 5.0)
+    monkeypatch.setattr(inventory_service, "INVENTORY_429_BACKOFF_CAP", 120.0)
 
     for attempt, exp in ((0, 5), (1, 10), (2, 20), (10, 120)):
         for _ in range(50):
-            assert exp / 2 <= items_routes._backoff(attempt, None) <= exp
-    assert items_routes._backoff(0, 45.0) >= 45.0       # Retry-After manda sobre el backoff
+            assert exp / 2 <= inventory_service._backoff(attempt, None) <= exp
+    assert inventory_service._backoff(0, 45.0) >= 45.0       # Retry-After manda sobre el backoff
 
 
 # ── el reintento en sí ───────────────────────────────────────────────────────
@@ -190,11 +190,11 @@ def _run_retry(monkeypatch, side_effects, retries=4):
     async def fake_sleep(s):
         sleeps.append(s)
 
-    monkeypatch.setattr(items_routes.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(items_routes, "INVENTORY_429_MAX_RETRIES", retries)
+    monkeypatch.setattr(inventory_service.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(inventory_service, "INVENTORY_429_MAX_RETRIES", retries)
     fetch = AsyncMock(side_effect=side_effects)
-    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", fetch)
-    asyncio.run(items_routes._retry_inventory(object(), STEAM_ID, 2.0))
+    monkeypatch.setattr(inventory_service, "_fetch_fresh_inventory", fetch)
+    asyncio.run(inventory_service._retry_inventory(object(), STEAM_ID, 2.0))
     return fetch, sleeps
 
 

@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from steam.errors import InvalidPayload, QuotaExhausted, RateLimited, SourceUnavailable, UnexpectedPayload
-from steam.services import news as news_service
+from steam.services import news_service
 
 NEWS = {"appnews": {"newsitems": [
     {"gid": "1", "title": "Release Notes", "url": "", "contents": "", "date": 0},

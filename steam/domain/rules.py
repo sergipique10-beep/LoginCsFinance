@@ -72,6 +72,17 @@ def ranking_eligible(item: SteamItem, min_sold: int) -> bool:
     return (item.price_latest_sell or 0) >= MIN_RANKING_PRICE and (item.sold_24h or 0) >= min_sold
 
 
+def canonical_price(item: SteamItem | None) -> float | None:
+    """Precio canónico de un item de /item: pricelatestsell → pricelatest → pricemedian
+    (el primero > 0). None si no hay item o ningún precio."""
+    if item is None:
+        return None
+    for value in (item.price_latest_sell, item.price_latest, item.price_median):
+        if value is not None and value > 0:
+            return value
+    return None
+
+
 def turnover(item: Mapping[str, Any]) -> float:
     """Facturación 24h estimada de una tarjeta: precio × unidades vendidas.
 

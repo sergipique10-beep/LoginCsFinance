@@ -8,7 +8,7 @@ valores históricos reales y coinciden con lo que muestran otros trackers.
 """
 from steam.adapters.steam_adapter import adapt_item
 from steam.mappers.item_mapper import _map_item as _map_card
-from steam.services.market import _MOVERS_SELECT
+from steam.services.rankings_service import _MOVERS_SELECT
 
 
 def _map_item(raw: dict):

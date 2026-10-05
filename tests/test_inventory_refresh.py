@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 from steam.domain.models import Fetched
 from stores import INVENTORY_REFRESH_COOLDOWN, _inventory_cache
-from steam.routes import items as items_routes
+from steam.services import inventory_service
 from tests.conftest import STEAM_ID
 
 FRESH_ITEMS = [{"name": "AK-47 | Redline"}]
@@ -10,13 +10,13 @@ FRESH_ITEMS = [{"name": "AK-47 | Redline"}]
 
 def _patch_fetch(monkeypatch, items=FRESH_ITEMS):
     mock = AsyncMock(return_value=Fetched(items))
-    monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", mock)
+    monkeypatch.setattr(inventory_service, "_fetch_fresh_inventory", mock)
     return mock
 
 
 def _freeze_time(monkeypatch, start=1000.0):
     fake_now = [start]
-    monkeypatch.setattr(items_routes.time, "monotonic", lambda: fake_now[0])
+    monkeypatch.setattr(inventory_service.time, "monotonic", lambda: fake_now[0])
     return fake_now
 
 
@@ -69,7 +69,7 @@ def test_refresh_allowed_again_after_cooldown_expires(client, monkeypatch):
 def test_get_inventory_still_uses_23h_cache_unaffected_by_refresh_endpoint(client, monkeypatch):
     fake_now = _freeze_time(monkeypatch)
     _patch_fetch(monkeypatch)
-    fetch_mock = items_routes._fetch_fresh_inventory
+    fetch_mock = inventory_service._fetch_fresh_inventory
 
     first = client.get("/inventory")
     second = client.get("/inventory")

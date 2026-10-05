@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from steam.services import catalog
+from steam.services import catalog_service
 from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
 
 N_SOURCES = 7
@@ -45,7 +45,7 @@ def _clean_cache():
 async def test_total_failure_does_not_stamp_ts():
     client = _FakeClient(status=500)
 
-    await catalog.fetch_static_images(client)
+    await catalog_service.fetch_static_images(client)
 
     assert client.calls == N_SOURCES
     assert "catalog" not in _image_cache_meta
@@ -53,27 +53,27 @@ async def test_total_failure_does_not_stamp_ts():
 
 async def test_total_failure_backs_off_then_retries():
     client = _FakeClient(status=500)
-    await catalog.fetch_static_images(client)
+    await catalog_service.fetch_static_images(client)
 
-    await catalog.fetch_static_images(client)           # dentro del backoff: no pide
+    await catalog_service.fetch_static_images(client)           # dentro del backoff: no pide
     assert client.calls == N_SOURCES
 
     # Pasado el backoff, la siguiente llamada reintenta las siete descargas.
     _image_cache_meta.mark_failed("catalog", now=time.monotonic() - IMAGE_FAIL_TTL - 1)
-    await catalog.fetch_static_images(client)
+    await catalog_service.fetch_static_images(client)
     assert client.calls == 2 * N_SOURCES
 
 
 async def test_one_source_ok_stamps_ts():
-    client = _FakeClient(status=500, ok_urls=(catalog._STATIC_SKINS_URL,))
+    client = _FakeClient(status=500, ok_urls=(catalog_service._STATIC_SKINS_URL,))
 
-    await catalog.fetch_static_images(client)
+    await catalog_service.fetch_static_images(client)
 
     assert "catalog" in _image_cache_meta
     assert not _image_cache_meta.in_backoff("catalog")
     assert _item_image_cache["AK-47 | Redline"] == "https://img/x.png"
 
-    await catalog.fetch_static_images(client)           # TTL largo: no vuelve a pedir
+    await catalog_service.fetch_static_images(client)           # TTL largo: no vuelve a pedir
     assert client.calls == N_SOURCES
 
 
@@ -98,13 +98,13 @@ class _SlowClient(_FakeClient):
 def _fresh_lock(monkeypatch):
     # Cada test corre en su propio event loop: un Lock que ya esperó en otro loop
     # quedaría ligado a él.
-    monkeypatch.setattr(catalog, "_image_cache_lock", asyncio.Lock())
+    monkeypatch.setattr(catalog_service, "_image_cache_lock", asyncio.Lock())
 
 
 async def test_concurrent_reload_downloads_once():
-    client = _SlowClient(status=200, ok_urls=(catalog._STATIC_SKINS_URL,))
+    client = _SlowClient(status=200, ok_urls=(catalog_service._STATIC_SKINS_URL,))
 
-    await asyncio.gather(*[catalog.fetch_static_images(client) for _ in range(5)])
+    await asyncio.gather(*[catalog_service.fetch_static_images(client) for _ in range(5)])
 
     assert client.calls == N_SOURCES          # 7, no 35
     assert "catalog" in _image_cache_meta
@@ -113,25 +113,25 @@ async def test_concurrent_reload_downloads_once():
 async def test_concurrent_total_failure_downloads_once():
     client = _SlowClient(status=500)
 
-    await asyncio.gather(*[catalog.fetch_static_images(client) for _ in range(5)])
+    await asyncio.gather(*[catalog_service.fetch_static_images(client) for _ in range(5)])
 
     assert client.calls == N_SOURCES          # el backoff también se respeta tras el lock
 
 
 async def test_cancelled_loader_releases_lock_and_leaves_no_stamp():
     gate = asyncio.Event()
-    client = _SlowClient(gate=gate, status=200, ok_urls=(catalog._STATIC_SKINS_URL,))
+    client = _SlowClient(gate=gate, status=200, ok_urls=(catalog_service._STATIC_SKINS_URL,))
 
-    task = asyncio.create_task(catalog.fetch_static_images(client))
+    task = asyncio.create_task(catalog_service.fetch_static_images(client))
     await asyncio.sleep(0)                    # el loader coge el lock y se bloquea en la descarga
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert not catalog._image_cache_lock.locked()
+    assert not catalog_service._image_cache_lock.locked()
     assert "catalog" not in _image_cache_meta
     assert not _image_cache_meta.in_backoff("catalog")
 
     gate.set()
-    await asyncio.wait_for(catalog.fetch_static_images(client), timeout=1)
+    await asyncio.wait_for(catalog_service.fetch_static_images(client), timeout=1)
     assert "catalog" in _image_cache_meta

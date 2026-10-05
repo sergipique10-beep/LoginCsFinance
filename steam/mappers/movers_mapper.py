@@ -1,14 +1,9 @@
-"""Mapper de topmovers (`/market-index/cs2`) y el ranking hot/cold de respaldo que se
-construye con él cuando /items no responde."""
-import logging
-from collections.abc import Sequence
+"""Mapper de topmovers (`/market-index/cs2`). El ranking hot/cold de respaldo que se
+construye con él cuando /items no responde vive en `services/rankings_service.py` (CLEAN-18)."""
 
 from steam.domain.catalog import weapon_category
 from steam.domain.models import MoverItem, TopMover
 from steam.domain.normalizers import normalize_image_url
-from steam.domain.rules import is_sticker_slab
-
-logger = logging.getLogger("uvicorn.error")
 
 # Items por lado (hot y cold) del ranking de movers.
 _MOVERS_LIMIT = 10
@@ -74,18 +69,3 @@ def _map_topmovers_item(mover: TopMover) -> MoverItem:
         "steamUrl":       None,
         "_change24h":     mover.change_24h or 0.0,
     }
-
-
-def _build_movers_from_topmovers(gainers: Sequence[TopMover],
-                                 losers: Sequence[TopMover]) -> dict[str, list[MoverItem]] | None:
-    if not gainers and not losers:
-        return None
-    hot  = [_map_topmovers_item(g) for g in gainers if not is_sticker_slab(g.item)][:_MOVERS_LIMIT]
-    cold = [_map_topmovers_item(m) for m in losers  if not is_sticker_slab(m.item)][:_MOVERS_LIMIT]
-    logger.info("[market-movers] topmovers raw: gainers=%d losers=%d | after_filter: hot=%d cold=%d",
-                len(gainers), len(losers), len(hot), len(cold))
-    hot  = sorted(hot,  key=lambda x: x["_change24h"], reverse=True)
-    cold = sorted(cold, key=lambda x: x["_change24h"])
-    for item in hot + cold:
-        del item["_change24h"]
-    return {"hot": hot, "cold": cold}

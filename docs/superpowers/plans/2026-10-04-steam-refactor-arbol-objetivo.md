@@ -222,19 +222,19 @@ Cada punto quita **un** `xfail(strict=True)`; el test afirma el comportamiento c
 
 ## Fase 5 — Services por responsabilidad (CLEAN-18)
 
-### Tarea 5.1 — Renombrar a `*_service.py`
+### Tarea 5.1 — Renombrar a `*_service.py` — [x]
 - `git mv` de los 8 services; actualizar `main.py:21`, `tools/`, `predict/service.py:41`, tests con monkeypatch por string (`steam.services.pricing.fetch_history_for_item` → `steam.services.pricing_service.…`, `main.fetch_static_images` se mantiene porque `main.py` lo importa por nombre).
 
-### Tarea 5.2 — Partir `market_service.py` (753 líneas)
+### Tarea 5.2 — Partir `market_service.py` (753 líneas) — [x]
 - `rankings_service.py`: `compute_movers`, `compute_trending`, `_ranking_items`, `_topmovers`, `get_movers`, `get_trending`, `capture_movers`, `capture_trending`, `enrich_trending`, `_build_movers_from_topmovers` (desde el mapper), constantes `_MOVERS_SELECT` (con `prices`, load-bearing), `_TRENDING_*`, `_ENRICH_BATCH`.
 - `cap_history_service.py`: `capture_cap_snapshot`, `get_cap_history`, `_downsample`, `_parse_ts`, `_CAP_TF_MAP`, `_CAP_BUCKET_MAP`, `_CAP_FIELDS`.
 - `market_service.py` conserva búsqueda, `get_item_full`, `get_market_index`, `get_market_prices`, `_stale_or_raise`.
 - `routes/market.py` cambia solo los módulos a los que llama. Tests: `tests/test_cap_history_downsample.py`, `tests/test_movers_tick_vacio.py`, `tests/test_market_signal_filter.py`, `tests/test_market_turnover.py`, `tests/test_trending_track_top.py`.
 
-### Tarea 5.3 — `inventory_service` absorbe el 429
+### Tarea 5.3 — `inventory_service` absorbe el 429 — [x]
 - Mover de `routes/items.py:79-177` a `inventory_service.py`: `_retry_inventory`, `_retry_tasks`, `_backoff`, `_schedule_retry`, `_store` (snapshot), `_log_429` (→ usa `log_degraded("inventory","rate_limit","stale")` además de la línea `[inventory-429]`, que se conserva por los `grep` documentados). La ruta queda en: auth, rate limit, llamar `inventory_service.get_inventory(client, steam_id, force=)`, poner cabeceras `X-Inventory-Stale`/`X-Inventory-Captured-At` según `Fetched.status/reason`. Tests `tests/test_inventory_429.py` (16) y `tests/test_inventory_refresh.py` cambian solo el objetivo del monkeypatch.
 
-### Tarea 5.4 — `price_capture_service`
+### Tarea 5.4 — `price_capture_service` — [x]
 - `git mv steam/price_capture.py steam/services/price_capture_service.py`; `_lookup_item` → `lookup_item` público (usa `steam_adapter.adapt_item`); `alerts/service.py:34,145,190` y `main.py:106` cambian el import. `tests/test_price_capture.py`, `tests/test_price_cap_timeout.py`, `tests/test_alerts_service.py` idem.
 
 **Salida de fase**: ningún fichero de `steam/services/` > 400 líneas; `routes/items.py` < 100 líneas; `grep -rn "_lookup_item" alerts/` → 0.
@@ -403,4 +403,41 @@ Por fase, además:
   `WeaponCategory`, pero `weapon_category()` devuelve `.value` por la misma razón del punto «Igual».
 - **Pendiente para la Fase 5:** `canonical_price` y `price_capture._lookup_item` siguen sobre el dict
   crudo de `/item` (5.4); `stores.py` conserva los alias a las cachés (Fase 6); `capture_trending`
+  sigue purgando sin fuentes (decisión del dueño del contrato).
+
+### Fase 5 (CLEAN-18, commits `884a8f3`..HEAD)
+- **Movido:** los 8 services a `*_service.py` (`git mv`); `steam/price_capture.py` →
+  `steam/services/price_capture_service.py`; de `services/market_service.py` (665 líneas) a
+  `rankings_service.py` (rankings, topmovers, `get_movers/get_trending` y los tres ticks; 400 líneas) y
+  `cap_history_service.py` (`capture_cap_snapshot`, `get_cap_history`, `_downsample`, `_CAP_*`; 128);
+  `_build_movers_from_topmovers` del mapper a `rankings_service`; de `routes/items.py` (240 → 99 líneas)
+  a `inventory_service.py`: `_retry_inventory`, `_retry_tasks`, `_recent_429`, `_backoff`,
+  `_schedule_retry`, `_store`, `_log_429`, snapshot y degradación (`get_inventory`);
+  `canonical_price` de `validators` a `domain/rules.py`.
+- **Nuevo:** `inventory_service.get_inventory(client, steam_id, force=, origin=) → Fetched[Inventory]`
+  (`Inventory(items, captured_at)`); `price_capture_service.lookup_item(client, name) → SteamItem | None`
+  (público, vía `adapt_item`); `log_degraded("inventory", rate_limit|quota, "stale")` al servir el
+  snapshot por 429/402, además de la línea `[inventory-429]` (se conserva por los `grep` documentados).
+- **Igual:** el contrato JSON y los status de todas las rutas (`tests/test_steam_contract_*` sin tocar);
+  cabeceras `X-Inventory-Stale` / `X-Inventory-Captured-At`; 429 con `detail` de texto y 503
+  `upstream_quota` sin snapshot; el 403 «Inventory is private»; el cooldown del refresh (sigue en la
+  ruta: es política de la petición); el seed, el presupuesto y el troceado del price-tick.
+- **Riesgo reducido:** ningún fichero de `steam/services/` pasa de 400 líneas; `routes/items.py` solo
+  autentica, traduce y pone cabeceras (`grep -c "" steam/routes/items.py` → 99); la degradación del
+  inventario es testeable sin FastAPI (devuelve `Fetched`, no lanza `HTTPException`);
+  `grep -rn "_lookup_item" alerts/` → **0** y alerts/ ya no recibe el dict crudo de `/item`
+  (`canonical_price(SteamItem | None)`), con lo que la deuda consciente de las Fases 1–4 queda pagada.
+- **Prueba:** DoD en verde en los cuatro commits (1013 tests, cobertura 91 %; ruff 71, mypy 56, sin
+  cambios, sin `--bless`).
+- **Desvíos respecto al plan:** (1) `fetch_fresh_inventory(client, steam_id, track=)` se queda como
+  función pública para el chat y `_fetch_fresh_inventory(client, steam_id)` es su envoltorio con
+  `track=True` (es el nombre que los 16 tests de `test_inventory_429.py` sustituyen; solo cambia el
+  módulo objetivo, como pedía el plan). (2) `_MOVERS_SELECT` vive en `rankings_service` y
+  `market_service` lo importa de allí (búsqueda y `get_item_full` piden el mismo `select`); el plan lo
+  situaba en rankings y no decía de dónde lo leería la búsqueda. (3) El cooldown de `/inventory/refresh`
+  no entra en el service: responde 429 con los segundos restantes, que es HTTP. (4) El `_SEED_PATH`
+  del seed sube un nivel (`steam/data/tracked_seed.json` sigue donde estaba).
+- **Pendiente para la Fase 6:** `stores.py` conserva los alias a las cachés y `TtlCache` compat;
+  `_clean_news_content` a `utils/strings.py` (lo importan `rag/` y `notifications/`); `utils/dates.py`
+  (`iso_day`, `hour_floor`, `today`); comentarios de diario («antes vivía en…»); `capture_trending`
   sigue purgando sin fuentes (decisión del dueño del contrato).

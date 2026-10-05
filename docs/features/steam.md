@@ -46,7 +46,6 @@ files:
   - steam/mappers/profile_mapper.py
   - steam/mappers/provider_mapper.py
   - steam/mappers/row_mapper.py
-  - steam/price_capture.py
   - steam/price_history_repo.py
   - steam/rankings_repo.py
   - steam/router.py
@@ -55,14 +54,17 @@ files:
   - steam/routes/market.py
   - steam/routes/news.py
   - steam/services/__init__.py
-  - steam/services/catalog.py
-  - steam/services/fx.py
-  - steam/services/inventory.py
-  - steam/services/market.py
-  - steam/services/news.py
-  - steam/services/pricing.py
-  - steam/services/profile.py
-  - steam/services/providers.py
+  - steam/services/cap_history_service.py
+  - steam/services/catalog_service.py
+  - steam/services/fx_service.py
+  - steam/services/inventory_service.py
+  - steam/services/market_service.py
+  - steam/services/news_service.py
+  - steam/services/price_capture_service.py
+  - steam/services/pricing_service.py
+  - steam/services/profile_service.py
+  - steam/services/providers_service.py
+  - steam/services/rankings_service.py
   - steam/utils/__init__.py
   - steam/utils/urls.py
 ---
@@ -115,7 +117,7 @@ por campo y tick, UX-46).
 
 | Flujo | Disparador | Qué devuelve | ¿Lo ve el cliente? | Decisión | Log (`flow` · `reason`) |
 |---|---|---|---|---|---|
-| Inventario | 429 / 402 con snapshot | snapshot | `X-Inventory-Stale` | conservar (PERF-14) | — |
+| Inventario | 429 / 402 con snapshot | snapshot | `X-Inventory-Stale` | conservar (PERF-14) | `inventory` · `rate_limit`/`quota`, `served=stale` (CLEAN-18; además la línea `[inventory-429]`) |
 | Inventario | 402 sin snapshot | 503 | `code: upstream_quota` | conservar (SEC-16) | — |
 | Inventario | 429 sin snapshot | 429, `detail` de texto | sin `code` | CAL-14 | — |
 | Inventario | 410 / 411 | snapshot con `X-Inventory-Stale` si lo hay, si no `[]`; **ni la caché ni el snapshot se pisan** | cabecera (con snapshot) | resuelto (CLEAN-15) | `inventory` · `http_410`/`http_411`, `served=stale` o `empty` |

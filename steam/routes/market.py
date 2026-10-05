@@ -8,10 +8,10 @@ from auth.service import market_rate_limit, require_jwt, token_matches
 from ..domain.catalog import VALID_MARKETS
 from ..errors import UpstreamError
 from ..errors.handling import SOURCE_ERRORS, http_error_for
-from ..services import fx as fx_service
-from ..services import market as market_service
-from ..services import providers as providers_service
-from steam.price_capture import capture as price_capture_run
+from ..services import fx_service
+from ..services import cap_history_service, market_service, rankings_service
+from ..services import providers_service
+from ..services.price_capture_service import capture as price_capture_run
 
 router = APIRouter()
 
@@ -23,7 +23,7 @@ def _require_cap_token(x_cap_token: str | None) -> None:
 
 @router.get("/market/movers", dependencies=[Depends(market_rate_limit)], summary="Top movers del mercado CS2 (hot & cold 24 h)")
 async def get_market_movers(request: Request, user: dict = Depends(require_jwt)):
-    return await market_service.get_movers()
+    return await rankings_service.get_movers()
 
 
 @router.get("/market/items", dependencies=[Depends(market_rate_limit)], summary="Busca items en el mercado CS2 por nombre")
@@ -69,7 +69,7 @@ async def get_market_price(
 
 @router.get("/market/trending", dependencies=[Depends(market_rate_limit)], summary="Items trending del mercado CS2 (por volumen 24h)")
 async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
-    return await market_service.get_trending()
+    return await rankings_service.get_trending()
 
 
 @router.get("/market/index", dependencies=[Depends(market_rate_limit)], summary="Índice de mercado global CS2")
@@ -91,7 +91,7 @@ async def cap_tick(
 ):
     _require_cap_token(x_cap_token)
     try:
-        return await market_service.capture_cap_snapshot(request.app.state.http_client)
+        return await cap_history_service.capture_cap_snapshot(request.app.state.http_client)
     except SOURCE_ERRORS as exc:
         raise http_error_for(exc, timeout_status=502) from exc
 
@@ -101,12 +101,12 @@ async def get_market_cap_history(
     tf: str = "7d",
     user: dict = Depends(require_jwt),
 ):
-    if tf not in market_service._CAP_TF_MAP:
+    if tf not in cap_history_service._CAP_TF_MAP:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid tf '{tf}'. Valid values: {', '.join(market_service._CAP_TF_MAP)}",
+            detail=f"Invalid tf '{tf}'. Valid values: {', '.join(cap_history_service._CAP_TF_MAP)}",
         )
-    return await market_service.get_cap_history(tf)
+    return await cap_history_service.get_cap_history(tf)
 
 
 @router.post("/internal/trending-tick", summary="Captura el ranking trending del mercado CS2 (cron interno)")
@@ -115,19 +115,19 @@ async def trending_tick(
     x_cap_token: str | None = Header(default=None),
 ):
     _require_cap_token(x_cap_token)
-    return await market_service.capture_trending(request.app.state.http_client)
+    return await rankings_service.capture_trending(request.app.state.http_client)
 
 
 @router.post("/internal/enrich-tick", summary="Enriquece deltas del trending con histórico csfloat (cron interno)")
 async def enrich_tick(request: Request, x_cap_token: str | None = Header(default=None)):
     _require_cap_token(x_cap_token)
-    return await market_service.enrich_trending(request.app.state.http_client)
+    return await rankings_service.enrich_trending(request.app.state.http_client)
 
 
 @router.post("/internal/movers-tick", summary="Captura el ranking hot/cold del mercado CS2 (cron interno)")
 async def movers_tick(request: Request, x_cap_token: str | None = Header(default=None)):
     _require_cap_token(x_cap_token)
-    return await market_service.capture_movers(request.app.state.http_client)
+    return await rankings_service.capture_movers(request.app.state.http_client)
 
 
 @router.post("/internal/price-tick", summary="Captura diaria de precios por-skin (cron)")

@@ -171,7 +171,7 @@ LoginCsFinance/
     mappers/        # Mappers puros: modelo interno → TypedDict de salida (sin HTTP, caché, fallback):
       item_mapper.py  #   _map_item(SteamItem), _inline_delta, _safe_delta, _delta_from_history,
                     #   _resolve_phase (la imagen la normaliza domain/normalizers)
-      movers_mapper.py #  _map_topmovers_item(TopMover), _build_movers_from_topmovers, _MOVERS_LIMIT
+      movers_mapper.py #  _map_topmovers_item(TopMover), _MOVERS_LIMIT (el respaldo hot/cold está en rankings_service)
       market_index_mapper.py # _map_market_index_point(IndexPoint)
       news_mapper.py  #   _map_news_item(NewsEntry) (color vía rules.news_category),
                     #   _clean_news_content (lo importan rag/ y notifications/; a utils/ en la Fase 6)
@@ -203,22 +203,32 @@ LoginCsFinance/
                     #   Reciben el JSON de api/ y lo pasan por adapters/ antes de mapear.
                     #   Entre módulos se llaman vía el módulo (`catalog.fetch_static_images`)
                     #   para que un test pueda sustituirlos en un solo sitio.
-      catalog.py      #   catálogo ByMykel: fetch_static_images (lock PERF-18, backoff CAL-08),
+      catalog_service.py #   catálogo ByMykel: fetch_static_images (lock PERF-18, backoff CAL-08),
                     #   cache_images, enrich_images_from_cache, rarity_from_cache, _STATIC_*_URL
-      pricing.py      #   fetch_history_for_item, enrich_prices (deltas de CSFloat),
+      pricing_service.py #   fetch_history_for_item, enrich_prices (deltas de CSFloat),
                     #   enrich_market_prices (CSFloat/Buff), get_item_history (/item/history)
-      providers.py    #   fetch_market_providers (+ respaldo estático)
-      fx.py           #   fetch_fx_rate (USD→EUR, stale si cae frankfurter)
-      market.py       #   compute_movers / compute_trending (/items + fallback de topmovers;
-                    #   orden y reparto con rules.turnover / rules.diversificar),
-                    #   search_items (la búsqueda de /items para rutas y chat), search_market,
-                    #   get_item_full, get_market_index, get_market_prices, get_cap_history,
-                    #   ticks (capture_cap_snapshot, capture_trending, enrich_trending,
-                    #   capture_movers). Constantes: _MOVERS_SELECT, _TRENDING_CAPTURE_LIMIT,
-                    #   _ENRICH_BATCH, _TRENDING_STALE_DAYS, _CAP_TF_MAP, _CAP_BUCKET_MAP
-      inventory.py    #   fetch_fresh_inventory(track=): la ruta registra en tracked_skins, el chat no
-      profile.py      #   get_profile (/me)
-      news.py         #   get_cs2_news (/news/cs2, og:image, filtro UX-05)
+      providers_service.py #   fetch_market_providers (+ respaldo estático)
+      fx_service.py   #   fetch_fx_rate (USD→EUR, stale si cae frankfurter)
+      market_service.py #   search_items (la búsqueda de /items para rutas y chat), search_cache_key,
+                    #   search_market, get_item_full, get_market_index, get_market_prices,
+                    #   _stale_or_raise. Partido en CLEAN-18: rankings y cap-history fuera
+      rankings_service.py # compute_movers / compute_trending (/items + fallback de topmovers,
+                    #   _build_movers_from_topmovers; orden y reparto con rules.turnover /
+                    #   rules.diversificar), get_movers / get_trending (snapshots), ticks
+                    #   capture_trending, enrich_trending, capture_movers. Constantes:
+                    #   _MOVERS_SELECT (con `prices`, load-bearing), _TRENDING_CAPTURE_LIMIT,
+                    #   _ENRICH_BATCH, _TRENDING_STALE_DAYS, _ITEMS_FETCH_MAX
+      cap_history_service.py # capture_cap_snapshot (/internal/cap-tick, línea [steam-cache]),
+                    #   get_cap_history + _downsample, _CAP_TF_MAP, _CAP_BUCKET_MAP, _CAP_FIELDS
+      price_capture_service.py # ex steam/price_capture.py (CLEAN-18): seed_tracked, capture (el
+                    #   price-tick) y lookup_item(client, name) → SteamItem | None (público: lo usa
+                    #   alerts/); rules.canonical_price decide el precio sobre el modelo
+      inventory_service.py #   fetch_fresh_inventory(track=): la ruta registra en tracked_skins, el chat no;
+                    #   get_inventory(client, steam_id, force=, origin=) → Fetched[Inventory] con la
+                    #   degradación 429/402/410 (PERF-14, CAL-13): caché, snapshot, _retry_inventory
+                    #   y _backoff viven aquí desde CLEAN-18; la ruta pone cabeceras y status
+      profile_service.py #   get_profile (/me)
+      news_service.py #   get_cs2_news (/news/cs2, og:image, filtro UX-05)
     cap_history_repo.py  # Supabase data layer for the CS2 price-index history:
                     #   get_supabase (module-cached client, service_role),
                     #   insert_snapshot (upsert by ts), fetch_range (rows since cutoff).
@@ -229,7 +239,8 @@ LoginCsFinance/
     routes/         # APIRouters finos (registered in routes/__init__.py): auth, rate limit,
                     #   llamar al service y traducir errores a HTTP. No importan steam.api
                     #   (guardia en tests/test_steam_layers.py)
-      items.py      #   /me, /inventory (+ degradación ante 429/402, PERF-14), /item/history
+      items.py      #   /me, /inventory y /inventory/refresh (cabeceras X-Inventory-* según el
+                    #   Fetched de inventory_service), /item/history
       market.py     #   /market/movers, /market/items, /market/trending, /market/index,
                     #   /market/cap-history, /market/providers, /market/prices, /market/fx,
                     #   /internal/cap-tick, /internal/trending-tick,
@@ -266,10 +277,11 @@ steam/api/*             ← steam/errors, settings (solo steam_client)
 steam/adapters/*        ← steam/domain, steam/errors (nunca api, mappers, services, stores)
 steam/mappers/*         ← steam/domain (nunca adapters, services, stores)
 steam/services/*        ← steam/api, steam/adapters, steam/domain, steam/errors, steam/mappers,
-                          stores, repos de Supabase (rankings, cap_history, price_history)
+                          steam/cache, repos de Supabase (rankings, cap_history, price_history,
+                          inventory_snapshot); market_service → rankings_service (_MOVERS_SELECT)
                           (reglas comprobadas por AST en tests/test_steam_layers.py)
 steam/cap_history_repo.py ← settings, steam/errors (+ supabase)
-steam/routes/*          ← steam/services, steam/errors, steam/domain, stores,
+steam/routes/*          ← steam/services, steam/errors, steam/domain, steam/cache,
                           settings, auth/service (require_jwt only)
 main.py                 ← middleware, auth/router, steam/routes, settings
 ```
@@ -329,7 +341,7 @@ steamwebapi responses are transformed in `steam/mappers/` before being returned:
 
 **Price deltas** (`_inline_delta` in `steam/mappers/item_mapper.py`): deltas are computed from the **`pricereal` family** (`pricereal` vs `pricereal24h/7d/30d`). Do **not** use `pricelatestsell24h/7d/30d` — steamwebapi returns those identical to `pricelatestsell` for every item, so any delta derived from them is always `None` → `"N/A"` badges everywhere. `_inline_delta` also discards historical values more than 10× away from the current price (the API occasionally returns garbage, e.g. `pricereal30d=0.22` for a $17.57 skin → +7886%). `None` means no sales data and renders as `"N/A"`.
 
-**History-derived enrichment** (`enrich_prices` in `steam/services/pricing.py`): fires one concurrent `csfloat/history` call per item and overwrites the deltas with history-derived values. Cached per item in `_item_history_cache`. Used by `/market/*` (trending, movers) only — **not** by `/inventory`, which would need one API call per item and blow the 18/60s limiter. Inventory therefore relies entirely on `_inline_delta`.
+**History-derived enrichment** (`enrich_prices` in `steam/services/pricing_service.py`): fires one concurrent `csfloat/history` call per item and overwrites the deltas with history-derived values. Cached per item in `_item_history_cache`. Used by `/market/*` (trending, movers) only — **not** by `/inventory`, which would need one API call per item and blow the 18/60s limiter. Inventory therefore relies entirely on `_inline_delta`.
 
 **Rate limiting** (`_history_limiter`, `steam/api/steam_client.py`): steamwebapi Starter allows **20 req/60s per endpoint**. Every `csfloat/history` call goes through a process-wide `_SlidingWindowLimiter` capped at 18/60s. Without it, bursts past 20 items got HTTP 429 → `_fetch_history_for_item` returns `[]` → `_delta_from_history` returns `None` → frontend renders `"N/A"` badges for every item past the 20th. Because the limiter makes callers *wait* rather than fail, the number of items enriched **in one pass** must fit one window — de ahí `_MOVERS_LIMIT` ≤18 y `_ENRICH_BATCH = 18`.
 
@@ -354,7 +366,7 @@ La predicción es **determinista, no la hace el LLM**: se expone como tool y el 
 - **Gate**: si el backtest dice que **no supera a naive**, la confianza se fuerza a `"baja"` sea cual sea el R². La cifra se sigue devolviendo, pero declarada como poco fiable — el system prompt obliga al agente a advertirlo. En un random walk el modelo pierde contra naive y el gate salta (verificado en `tests/test_predict_trend.py`).
 - **Fuente histórica** (`predict/service.py:_historico`): prioriza la serie propia de `precios_historicos` (≥20 puntos); si aún no hay suficientes o Supabase falla, cae a `pricing.fetch_history_for_item` (CSFloat, 35 días, con limiter y caché). Ambas devuelven la misma forma `[{date, price, volume}]`.
 
-## Captura de precios por-skin (`steam/price_capture.py`)
+## Captura de precios por-skin (`steam/services/price_capture_service.py`)
 
 Tablas `tracked_skins` (qué seguimos) y `precios_historicos` (la serie) — SQL en `docs/sql/precios_historicos.sql`, y la cola priorizada (columnas `last_seen`/`inventory_seen_at` + vista `price_tick_queue`) en `docs/sql/tracked_skins_prioridad.sql`. **Ojo: hay que ejecutarlos en Supabase; si la tabla no existe, la predicción cae silenciosamente a CSFloat, y sin la vista el price-tick falla.**
 
@@ -485,7 +497,7 @@ la cuota compartida de steamwebapi. Sigue siendo en memoria y single-worker (CAL
 
 **402 de steamwebapi (cuota mensual agotada) nunca es un 429** (SEC-16): `/market/items`,
 `/market/price`, `/market/index` y `/market/prices` sirven su caché aunque esté caducada
-(stale-on-402 en `steam/services/market.py`); sin caché, `503` con
+(stale-on-402 en `steam/services/market_service.py`); sin caché, `503` con
 `detail: UPSTREAM_QUOTA_DETAIL` (`{"code": "upstream_quota", ...}`, en `steam/errors/domain_errors.py`).
 El front reconoce `code` y muestra su propio aviso: no comparar el texto.
 
@@ -515,7 +527,7 @@ el 2026-09-26: cero usos (los ticks son crons externos). `CacheControl`,
 `_history_limiter` (18 req/60 s) **hace esperar** a quien llega con la ventana llena. Es lo
 correcto para los crons y lo incorrecto para el chat: la espera iba dentro de la respuesta
 al usuario (hasta 60 s). Desde 2026-09-26 `fetch_history_for_item(..., limiter_timeout=)` y
-`enrich_prices(..., limiter_timeout=)` (`steam/services/pricing.py`) aceptan un tope; **solo las tools del chat lo pasan**
+`enrich_prices(..., limiter_timeout=)` (`steam/services/pricing_service.py`) aceptan un tope; **solo las tools del chat lo pasan**
 (`CHAT_LIMITER_TIMEOUT = 3.0` en `tools/market_tools.py`). Si vence, `HistoryBusy`: la tool
 `historial_precio` devuelve `{"error": ...}` para que el modelo lo explique, y
 `consultar_precio_skin` responde con el precio sin deltas, marca `aviso` y **no cachea** el
@@ -655,7 +667,7 @@ Dos errores distintos, dos tratamientos — no confundirlos:
 | **429** | Límite por minuto (20/60 s en Starter): transitorio | Sirve el snapshot + **reintenta en segundo plano** |
 | **402** | Cuota mensual agotada (PERF-09): dura hasta el día 10 | Sirve el snapshot si lo hay, **nunca reintenta** (sin snapshot: 503 `upstream_quota`, SEC-16) |
 
-- **Snapshot durable**: tabla Supabase `inventory_snapshots` (`steam_id` PK, `items` jsonb, `captured_at`), DDL en **`docs/sql/inventory_snapshots.sql` — hay que ejecutarlo a mano en Supabase antes de desplegar** (sin la tabla el guardado falla en silencio y un 429 vuelve a dar error). Una fila por usuario, sobrescrita en cada lectura 200 (`_store` en `steam/routes/items.py`). No sirve `_inventory_cache`: se vacía cuando Render duerme y solo guarda un `monotonic()`. Es dato personal: RLS sin políticas y se borra con la cuenta.
+- **Snapshot durable**: tabla Supabase `inventory_snapshots` (`steam_id` PK, `items` jsonb, `captured_at`), DDL en **`docs/sql/inventory_snapshots.sql` — hay que ejecutarlo a mano en Supabase antes de desplegar** (sin la tabla el guardado falla en silencio y un 429 vuelve a dar error). Una fila por usuario, sobrescrita en cada lectura 200 (`_store` en `steam/services/inventory_service.py`). No sirve `_inventory_cache`: se vacía cuando Render duerme y solo guarda un `monotonic()`. Es dato personal: RLS sin políticas y se borra con la cuenta.
 - **Reintento**: `_retry_inventory`, una tarea `asyncio` por usuario (`_retry_tasks`), backoff exponencial con jitter (`_backoff`: mitad fija + mitad aleatoria, nunca menos que `Retry-After`). Mientras haya uno en curso, `GET /inventory` sirve el snapshot **sin llamar a steamwebapi** (cada llamada extra sería otro 429). Si recupera, rellena `_inventory_cache` y el snapshot. **Ceiling:** vive en el proceso: si Render duerme se pierde y el siguiente GET reintenta por su cuenta.
 - **Sin snapshot** (usuario que nunca tuvo una lectura buena) el 429 sigue siendo un 429: no hay nada que enseñar. El reintento se programa igualmente para calentar la caché.
 - **Detectar recurrencia** (criterio para subir de plan): una línea por 429, `[inventory-429] user= origin= retry_after= served= last_hour=`. `last_hour` es el conteo de los últimos 60 min en ese proceso; `grep inventory-429` en los logs de Render. CORS expone las dos cabeceras (`expose_headers` en `main.py`): sin eso el WebView no las lee.
