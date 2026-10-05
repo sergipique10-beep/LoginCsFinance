@@ -277,10 +277,11 @@ steam/api/*             ← steam/errors, settings (solo steam_client)
 steam/adapters/*        ← steam/domain, steam/errors (nunca api, mappers, services, stores)
 steam/mappers/*         ← steam/domain (nunca adapters, services, stores)
 steam/services/*        ← steam/api, steam/adapters, steam/domain, steam/errors, steam/mappers,
-                          stores, repos de Supabase (rankings, cap_history, price_history)
+                          steam/cache, repos de Supabase (rankings, cap_history, price_history,
+                          inventory_snapshot); market_service → rankings_service (_MOVERS_SELECT)
                           (reglas comprobadas por AST en tests/test_steam_layers.py)
 steam/cap_history_repo.py ← settings, steam/errors (+ supabase)
-steam/routes/*          ← steam/services, steam/errors, steam/domain, stores,
+steam/routes/*          ← steam/services, steam/errors, steam/domain, steam/cache,
                           settings, auth/service (require_jwt only)
 main.py                 ← middleware, auth/router, steam/routes, settings
 ```
