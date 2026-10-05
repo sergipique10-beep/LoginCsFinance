@@ -135,9 +135,12 @@ LoginCsFinance/
                     #   «★ », «Souvenir » y la marca de slab solo aparecen aquí (guardia en
                     #   tests/test_domain_names.py)
       enums.py        # FetchStatus (ok|partial|stale|error) y Served (stale|empty|fallback|error),
-                    #   como Literal (CLEAN-15); la Fase 4 añade Market, Wear, NewsCategory
+                    #   como Literal (CLEAN-15). `str, Enum` (CLEAN-17): Market (steam|csfloat|
+                    #   buff), WeaponCategory, Wear (los 5 desgastes), NewsCategory (con `.color`).
+                    #   Fuera de domain/ se usan los `.value`: en 3.11 f"{Market.BUFF}" no es "buff"
       catalog.py      # Constantes inmutables: WEAR_NAMES, WEAPON_CATEGORY + weapon_category,
-                    #   TRACKED_MARKETS / VALID_MARKETS / HISTORY_MARKETS, proveedores
+                    #   TRACKED_MARKETS / VALID_MARKETS (= HISTORY_MARKETS | PASSTHROUGH_MARKETS)
+                    #   / HISTORY_MARKETS, todos derivados de los enums como `.value`; proveedores
                     #   (KNOWN_LOGOS, PROVIDER_IDS, fallback_providers() devuelve copia)
       models.py       # TypedDict del contrato JSON (CLEAN-08): RankedCard (_row_to_item) ⊂
                     #   SkinCard (_map_item) ⊂ MoverItem (+_change24h interno), RankingRow,
