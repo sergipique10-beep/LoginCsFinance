@@ -17,11 +17,8 @@ from stores import (
 )
 from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
-from ..errors.handling import log_degraded, reason_of
-from ..errors import (
-    UPSTREAM_QUOTA_DETAIL, UPSTREAM_RATE_LIMIT_DETAIL, HistoryBusy, QuotaExhausted, RateLimited,
-    SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
-)
+from ..errors.handling import SOURCE_ERRORS, http_error_for, log_degraded, reason_of
+from ..errors import UPSTREAM_QUOTA_DETAIL, QuotaExhausted, RateLimited, UpstreamError
 from ..services import inventory as inventory_service
 from ..services import pricing
 from ..services import profile as profile_service
@@ -41,13 +38,8 @@ async def get_me(request: Request, user: dict = Depends(require_jwt)):
     steam_id: str = user["sub"]
     try:
         return await profile_service.get_profile(request.app.state.http_client, steam_id)
-    except SourceTimeout:
-        raise HTTPException(status_code=504, detail="Steam profile request timed out") from None
-    except SourceUnavailable as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
-    except UpstreamError as exc:
-        logger.error("[me] steamwebapi returned %s | body: %s", exc.status, exc.body_excerpt[:300])
-        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
+    except SOURCE_ERRORS as exc:
+        raise http_error_for(exc, timeout_status=504) from exc
 
 
 async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
@@ -57,10 +49,6 @@ async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
         return await inventory_service.fetch_fresh_inventory(
             request.app.state.http_client, steam_id, track=True,
         )
-    except SourceTimeout:
-        raise HTTPException(status_code=504, detail="Steam inventory request timed out") from None
-    except SourceUnavailable as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
     except (QuotaExhausted, RateLimited):
         raise
     except UpstreamError as exc:
@@ -70,10 +58,11 @@ async def _fetch_fresh_inventory(request: Request, steam_id: str) -> list:
             # CAL-13: se sirve y se guarda como inventario vacío (CLEAN-12: con su línea).
             log_degraded("inventory", reason_of(exc), "empty")
             return []
-        logger.error("steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
-        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
-    except UnexpectedPayload as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if exc.status is not None:
+            logger.error("steamwebapi /inventory → %s: %.500s", exc.status, exc.body_excerpt)
+        raise http_error_for(exc, timeout_status=504) from exc
+    except SOURCE_ERRORS as exc:
+        raise http_error_for(exc, timeout_status=504) from exc
 
 
 # ── PERF-14: degradación elegante ante 429 ────────────────────────────────────
@@ -234,14 +223,7 @@ async def get_item_history(
             request.app.state.http_client, name, interval, market, days,
             limiter_timeout=ITEM_HISTORY_LIMITER_TIMEOUT,
         )
-    except SourceTimeout:
-        raise HTTPException(status_code=504, detail="Steam history request timed out") from None
-    except SourceUnavailable as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach Steam: {exc}") from exc
-    except (HistoryBusy, RateLimited):
-        # Ventana de steamwebapi llena y sin caché caducada que servir.
-        raise HTTPException(status_code=503, detail=UPSTREAM_RATE_LIMIT_DETAIL,
-                            headers={"Retry-After": "60"}) from None
-    except UpstreamError as exc:
-        raise HTTPException(status_code=502, detail=f"Steam returned {exc.status}") from exc
+    except SOURCE_ERRORS as exc:
+        # Ventana llena / 429 sin caché caducada → 503 + Retry-After; 402 → 503 upstream_quota.
+        raise http_error_for(exc, timeout_status=504) from exc
     return fetched.data

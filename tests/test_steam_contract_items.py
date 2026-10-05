@@ -58,7 +58,6 @@ def test_me_errores(steam_api, client, route, status):
     assert client.get("/me").status_code == status
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 def test_me_402_es_503_upstream_quota(steam_api, client):
     steam_api.on("api/profile", status=402)
     resp = client.get("/me")
@@ -122,7 +121,6 @@ def test_inventory_410_no_pisa_el_snapshot(steam_api, client):
     assert SNAPSHOT_DB[STEAM_ID][0] == [{"name": NAME}]
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 def test_inventory_json_invalido_es_502(steam_api, client):
     steam_api.on("api/inventory", content=b"<html>")
     assert client.get("/inventory").status_code == 502
@@ -183,7 +181,6 @@ def test_item_history_errores(steam_api, client, route, status):
     assert client.get("/item/history", params={"name": NAME}).status_code == status
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 def test_item_history_402_sin_cache_es_503_upstream_quota(steam_api, client):
     steam_api.on("api/history", status=402)
     resp = client.get("/item/history", params={"name": NAME})
@@ -225,7 +222,6 @@ def test_news_errores(steam_api, client, route, status):
     assert client.get("/news/cs2").status_code == status
 
 
-@pytest.mark.xfail(strict=True, reason="CAL-14")
 def test_news_json_que_no_es_objeto_es_502(steam_api, client):
     steam_api.on("GetNewsForApp/v2/", json=[])
     assert client.get("/news/cs2").status_code == 502

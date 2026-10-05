@@ -24,7 +24,7 @@ from steam.domain.models import Fetched, RankedCard, SkinCard, SteamItem, TopMov
 from steam.domain.names import is_sticker_slab, skin_base
 from steam.domain.validators import MIN_SOLD_MOVERS, MIN_SOLD_TRENDING, ranking_eligible
 from steam.errors import (
-    QuotaExhausted, SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
+    InvalidPayload, QuotaExhausted, SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
 )
 from steam.mappers.item_mapper import _map_item
 from steam.mappers.market_index_mapper import _map_market_index_point
@@ -174,13 +174,14 @@ async def search_items(client: httpx.AsyncClient, query: str, *, max: int, selec
 async def _ranking_items(client: httpx.AsyncClient, tag: str,
                          fallback_label: str) -> tuple[list[SteamItem] | None, str | None]:
     """Fuente principal de movers y trending: /items por unidades vendidas. Devuelve
-    (items, None), o (None, motivo) si no responde o no es una lista; entonces se cae
-    a topmovers."""
+    (items, None), o (None, motivo) si no responde, no es JSON (CAL-14: antes 500) o no
+    es una lista; entonces se cae a topmovers."""
     try:
         data = await steam_client.items(
             client, sort_by="soldZa", max=_ITEMS_FETCH_MAX, select=_MOVERS_SELECT,
         )
-    except (SourceTimeout, SourceUnavailable) as exc:
+    except (SourceTimeout, SourceUnavailable, InvalidPayload) as exc:
+        logger.warning("[%s] /items failed (%s) — falling back to %s", tag, reason_of(exc), fallback_label)
         return None, reason_of(exc)
     except UpstreamError as exc:
         logger.warning("[%s] /items returned %s — falling back to %s", tag, exc.status, fallback_label)

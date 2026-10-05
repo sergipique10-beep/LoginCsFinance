@@ -63,14 +63,15 @@ def test_perfil_vacio(steam_api, client, lines):
     assert lines("profile") == [("empty_body", "empty")]
 
 
-@pytest.mark.parametrize("route, reason", [
-    ({"status": 403}, "http_403"), ({"exc": httpx.ConnectError("x")}, "unavailable"),
-    ({"json": {"no": "lista"}}, "unexpected_format"),
+@pytest.mark.parametrize("route", [
+    {"status": 403}, {"exc": httpx.ConnectError("x")}, {"json": {"no": "lista"}},
 ])
-async def test_inventario_del_chat(steam_api, http, lines, route, reason):
+async def test_inventario_del_chat_no_deja_linea(steam_api, http, lines, route):
+    # CAL-14 (CLEAN-15): el fallo vuelve al modelo como `{"error": ...}`, así que el
+    # cliente lo ve y no hay degradación invisible que registrar.
     steam_api.on("api/inventory", **route)
-    assert await _ver_inventario(steam_id="1", client=http) == []
-    assert lines("chat_inventory") == [(reason, "empty")]
+    assert "error" in await _ver_inventario(steam_id="1", client=http)
+    assert lines("chat_inventory") == []
 
 
 # ── Histórico ─────────────────────────────────────────────────────────────────
@@ -83,12 +84,16 @@ async def test_historico_del_enriquecimiento(steam_api, http, lines, route, reas
     assert lines("history") == [(reason, "empty")]
 
 
-def test_item_history_402_y_cuerpo_que_no_es_lista(steam_api, client, lines):
+def test_item_history_402_stale_y_cuerpo_que_no_es_lista(steam_api, client, lines):
+    # CAL-14 (CLEAN-15): el 402 sin caché ya es un 503 visible (sin línea); con caché
+    # caducada se sirve stale y se registra, igual que el 429.
+    _item_history_cache.put(f"{NAME}:10:steam:35", [{"date": "d", "price": 1.0, "volume": 1}], now=-1e9)
     steam_api.on("api/history", status=402)
-    assert client.get("/item/history", params={"name": NAME}).json() == []
+    assert client.get("/item/history", params={"name": NAME}).status_code == 200
+    assert client.get("/item/history", params={"name": "sin-cache"}).status_code == 503
     steam_api.on("api/history", json={"no": "lista"})
     assert client.get("/item/history", params={"name": "otra"}).json() == []
-    assert lines("item_history") == [("quota", "empty"), ("unexpected_format", "empty")]
+    assert lines("item_history") == [("quota", "stale"), ("unexpected_format", "empty")]
 
 
 def test_item_history_stale_por_429(steam_api, client, lines):

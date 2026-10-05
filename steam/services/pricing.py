@@ -171,8 +171,10 @@ async def get_item_history(client: httpx.AsyncClient, name: str, interval: str, 
     """GET /item/history: histórico de Steam (ruta legacy) o de Buff/CSFloat.
 
     Pasa por `_history_limiter` con espera máxima `limiter_timeout` (SEC-16). Ventana
-    llena o 429 → la caché caducada si la hay; si no, `HistoryBusy` / `RateLimited`.
-    Un 402 da `[]` sin cachear (CAL-14); un cuerpo ilegible también, sin cachear.
+    llena, 429 o 402 → la caché caducada si la hay; si no, sube `HistoryBusy` /
+    `RateLimited` / `QuotaExhausted` y la ruta responde 503 con su `code` (CAL-14: el 402
+    daba un `200 []` que el front pintaba como «sin histórico»). Un cuerpo ilegible da
+    `[]` sin cachear.
     """
     market = market.lower() if market else None
     days = max(1, min(days, 365))  # el frontend pide por timeframe; acotar el rango
@@ -206,16 +208,12 @@ async def get_item_history(client: httpx.AsyncClient, name: str, interval: str, 
 
     try:
         data = await fetch()
-    except QuotaExhausted:
-        logger.warning("[item-history] daily limit reached for %s (%s)", name, market or "steam")
-        log_degraded("item_history", "quota", "empty")
-        return Fetched([], "error", "quota")
-    except RateLimited:
-        logger.warning("[item-history] steamwebapi 429 for %s (%s)", name, market or "steam")
+    except (QuotaExhausted, RateLimited) as exc:
+        logger.warning("[item-history] steamwebapi %s for %s (%s)", exc.status, name, market or "steam")
         stale = _item_history_cache.stale(cache_key)
         if stale is not None:
-            log_degraded("item_history", "rate_limit", "stale")
-            return Fetched(stale, "stale", "rate_limit")
+            log_degraded("item_history", reason_of(exc), "stale")
+            return Fetched(stale, "stale", reason_of(exc))
         raise
 
     try:

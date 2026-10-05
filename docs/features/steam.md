@@ -21,6 +21,7 @@ files:
   - steam/api/steam_client.py
   - steam/domain/__init__.py
   - steam/domain/catalog.py
+  - steam/domain/enums.py
   - steam/domain/models.py
   - steam/domain/names.py
   - steam/domain/validators.py
@@ -103,31 +104,31 @@ por campo y tick, UX-46) y la caché compartida con el chat (CAL-11).
 | Inventario | 402 sin snapshot | 503 | `code: upstream_quota` | conservar (SEC-16) | — |
 | Inventario | 429 sin snapshot | 429, `detail` de texto | sin `code` | CAL-14 | — |
 | Inventario | 410 / 411 | `[]` guardado en caché y snapshot | invisible | CAL-13 | `inventory` · `http_410`/`http_411` |
-| Inventario | JSON inválido | 500 | 500 | CAL-14 | — |
-| Perfil `/me` | 402 / 429 | 502 | sin `code` | CAL-14 | — |
+| Inventario | JSON inválido | 502 | 502 | resuelto (CLEAN-15, `http_error_for`) | — |
+| Perfil `/me` | 402 / 429 | 503 | `code: upstream_quota` / `upstream_rate_limit` | resuelto (CLEAN-15) | — |
 | Perfil `/me` | 200 sin perfil | perfil en blanco **sin cachear** | invisible | resuelto (CLEAN-14) | `profile` · `empty_body` |
 | Histórico (enriquecimiento) | fallo de csfloat/history | `[]` 5 min; deltas de `_inline_delta` | invisible | conservar | `history` · `reason_of(exc)` |
 | `/item/history` | ventana llena / 429 | stale, o 503 + `Retry-After` | `code: upstream_rate_limit` | conservar (SEC-16) | `item_history` · `rate_limit` (solo stale) |
-| `/item/history` | 402 | `200 []` sin cachear | invisible | CAL-14 | `item_history` · `quota` |
-| `/item/history` | cuerpo no lista | `200 []` **sin cachear** | invisible | resuelto (CLEAN-14); el 502 es Fase 2 | `item_history` · `unexpected_format` |
+| `/item/history` | 402 | stale, o 503 | `code: upstream_quota` | resuelto (CLEAN-15; como el 429) | `item_history` · `quota` (solo stale) |
+| `/item/history` | cuerpo no lista | `200 []` **sin cachear** | invisible | conservar (CLEAN-14): un histórico ilegible no deja sin detalle a la skin | `item_history` · `unexpected_format` |
 | Lookup CSFloat/Buff | fallo | stale o `{}`, backoff 5 min | precios a `null` | conservar (PERF-17) | `market_lookup` · motivo o `backoff` |
 | Proveedores | fallo | stale o `_FALLBACK_PROVIDERS` | invisible | conservar (PERF-17) | `providers` · motivo o `backoff` |
 | FX | fallo / tasa fuera de 0,5–2,0 | última tasa o ninguna | `stale` en el cuerpo | conservar (UX-08) | — |
-| Movers / trending | `/items` caído | fallback a topmovers, deltas `0.0` | invisible | UX-46 | `movers`/`trending` · motivo de `/items`; `served=fallback`, o `error` sin fuentes |
+| Movers / trending | `/items` caído o ilegible | fallback a topmovers, deltas `0.0` | invisible | UX-46 (el JSON ilegible daba 500: resuelto, CLEAN-15) | `movers`/`trending` · motivo de `/items` (`invalid_json` si ilegible); `served=fallback`, o `error` sin fuentes |
 | Movers / trending | topmovers cacheado viejo | se usa sin mirar su edad | invisible | CAL-12 | — |
 | `movers-tick` | ninguna fuente | conserva el snapshot anterior | `kept_previous` | conservar (CAL-10) | — |
 | Trending | sticker slabs | no se filtran (sí en movers y búsqueda) | — | CAL-14 | — |
 | Búsqueda / precio | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `search`/`item_price` · `quota` (solo stale) |
-| Búsqueda / precio | 429 | 502 | sin `code` | CAL-14 | — |
+| Búsqueda / precio | 429 | 503 + `Retry-After` | `code: upstream_rate_limit` | resuelto (CLEAN-15) | — |
 | Búsqueda | caché compartida con el chat | hasta 10 items sin liquidez | invisible | CAL-11 | — |
 | `/market/index` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_index` · `quota` (solo stale) |
 | `/market/prices` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_prices` · `quota` (solo stale) |
 | `/market/index` | gainer sin `markethashname` / sin `change24h` | se descarta / `0.0` | invisible | resuelto (CLEAN-14) | `market_index` · `invalid_field` (solo al descartar) |
 | Catálogo de imágenes | todas las fuentes caídas | backoff 5 min, `image: ""` | invisible | conservar (CAL-08) | `catalog` · `all_sources_failed` |
-| Noticias | JSON que no es dict | 500 | 500 | CAL-14 | — |
+| Noticias | JSON que no es dict / ilegible | 502 | 502 | resuelto (CLEAN-15) | — |
 | Noticias | og:image falla o la página no lo trae | `imageUrl: ""` | invisible | conservar | `news_image` · `reason_of(exc)` o `no_og_tag` (solo con URL) |
-| Chat: precio / búsqueda | 402 / 429 | "error al ejecutar" | genérico | CAL-14 | — |
-| Chat: inventario | cualquier error | `[]` | parece vacío | CAL-14 | `chat_inventory` · `reason_of(exc)` |
+| Chat: precio / búsqueda | 402 / 429 / red / ilegible | `{"error": motivo}` (`user_message`) | el modelo lo explica | resuelto (CLEAN-15) | — |
+| Chat: inventario | cualquier error | `{"error": motivo}` (`user_message`) | el modelo lo explica | resuelto (CLEAN-15); ya no hay línea: el fallo se ve | — |
 | Mappers | campos ausentes | `0`, `"Base Grade"`, `True`… | invisible | UX-46 | — |
 
 El detalle por función (con número de línea aproximado) está en el primer comentario de
