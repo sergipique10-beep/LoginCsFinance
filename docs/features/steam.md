@@ -12,6 +12,9 @@ files:
   - steam/adapters/static_catalog_adapter.py
   - steam/adapters/steam_adapter.py
   - steam/api/__init__.py
+  - steam/cache/__init__.py
+  - steam/cache/base_cache.py
+  - steam/cache/policy.py
   - steam/api/buff_client.py
   - steam/api/csfloat_client.py
   - steam/api/fx_client.py

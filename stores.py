@@ -7,10 +7,11 @@ TODO: replace _nonces, _auth_codes, _rate_store,
       _profile_cache, _inventory_cache, _market_index_cache and
       _item_history_cache with Redis.
 """
-import time
 from collections import defaultdict
 from datetime import timedelta
 from typing import Any
+
+from steam.cache import policy
 
 # ── Auth constants ─────────────────────────────────────────────────────────────
 
@@ -37,97 +38,36 @@ _rate_store: dict[str, list[float]] = defaultdict(list)
 # ── Cache constants ────────────────────────────────────────────────────────────
 
 # steamwebapi Starter plan: 20 req/60s per endpoint, 2k/day — cache 23 h to stay well under the daily budget
-PROFILE_CACHE_TTL = 82800
-INVENTORY_CACHE_TTL = 82800
-MARKET_INDEX_CACHE_TTL = 82800
-ITEM_HISTORY_CACHE_TTL = 82800
-SEARCH_CACHE_TTL = 300       # 5 min — search queries cached briefly to avoid hammering the API
-ITEM_PRICE_CACHE_TTL = 300   # 5 min — single-item full lookup (con liquidez) para el detail sheet
-MARKET_PRICES_CACHE_TTL = 300  # 5 min — live market prices, updated frequently by steamwebapi
-IMAGE_CACHE_TTL = 82800      # 23 h — same budget as other free-plan caches; CDN URLs are stable
-MARKET_LOOKUP_CACHE_TTL = 82800  # 23 h — full price list per market (premium endpoint, same daily budget)
-MARKET_PROVIDERS_CACHE_TTL = 82800  # 23 h — market list is mostly static
-LEETIFY_CACHE_TTL = 300       # 5 min — misma frescura que tenía el staleTime del front (SEC-09)
-NEWS_CACHE_TTL = 1800        # 30 min — /news/cs2 llama a Steam + scrapea 5 og:image por petición (PERF-06)
-FX_CACHE_TTL = 86400         # 24 h — el BCE publica un tipo al día (UX-08)
+PROFILE_CACHE_TTL = policy.PROFILE.ttl
+INVENTORY_CACHE_TTL = policy.INVENTORY.ttl
+MARKET_INDEX_CACHE_TTL = policy.MARKET_INDEX.ttl
+ITEM_HISTORY_CACHE_TTL = policy.ITEM_HISTORY.ttl
+SEARCH_CACHE_TTL = policy.SEARCH.ttl       # 5 min — search queries cached briefly to avoid hammering the API
+ITEM_PRICE_CACHE_TTL = policy.ITEM_PRICE.ttl   # 5 min — single-item full lookup (con liquidez) para el detail sheet
+MARKET_PRICES_CACHE_TTL = policy.MARKET_PRICES.ttl  # 5 min — live market prices, updated frequently by steamwebapi
+IMAGE_CACHE_TTL = policy.IMAGE_CATALOG.ttl      # 23 h — same budget as other free-plan caches; CDN URLs are stable
+MARKET_LOOKUP_CACHE_TTL = policy.MARKET_LOOKUP.ttl  # 23 h — full price list per market (premium endpoint, same daily budget)
+MARKET_PROVIDERS_CACHE_TTL = policy.MARKET_PROVIDERS.ttl  # 23 h — market list is mostly static
+LEETIFY_CACHE_TTL = policy.LEETIFY.ttl       # 5 min — misma frescura que tenía el staleTime del front (SEC-09)
+NEWS_CACHE_TTL = policy.NEWS.ttl        # 30 min — /news/cs2 llama a Steam + scrapea 5 og:image por petición (PERF-06)
+FX_CACHE_TTL = policy.FX.ttl         # 24 h — el BCE publica un tipo al día (UX-08)
 # CAL-12: el respaldo de topmovers caduca con el índice; antes se leía como stale sin
 # mirar la edad y un movers-tick podía servir un ranking de hace días como "fallback".
 TOPMOVERS_RAW_TTL = MARKET_INDEX_CACHE_TTL
 
-INVENTORY_REFRESH_COOLDOWN = 3600  # 1h — manual "force refresh" button, protects shared steamwebapi quota
+INVENTORY_REFRESH_COOLDOWN = policy.INVENTORY_REFRESH_COOLDOWN.ttl  # 1h — manual "force refresh" button, protects shared steamwebapi quota
 
 # Backoff tras un fallo o un vacío: 5 min en vez del TTL largo, para no reintentar en
 # cada petición contra una fuente caída (CAL-08, PERF-17) ni guardar 23 h un vacío.
-HISTORY_EMPTY_TTL = 300   # histórico de csfloat vacío o fallido (antes _HISTORY_EMPTY_TTL)
-IMAGE_FAIL_TTL = 300      # todas las fuentes del catálogo fallaron (CAL-08)
-LOOKUP_FAIL_TTL = 300     # lookup de precios por mercado o lista de proveedores (PERF-17)
+HISTORY_EMPTY_TTL = policy.ITEM_HISTORY.empty_ttl   # histórico de csfloat vacío o fallido (antes _HISTORY_EMPTY_TTL)
+IMAGE_FAIL_TTL = policy.IMAGE_CATALOG.fail_ttl      # todas las fuentes del catálogo fallaron (CAL-08)
+LOOKUP_FAIL_TTL = policy.MARKET_LOOKUP.fail_ttl     # lookup de precios por mercado o lista de proveedores (PERF-17)
 
 
 # ── TtlCache ───────────────────────────────────────────────────────────────────
-
-class TtlCache(dict):
-    """Caché `clave → (valor, ts)` con la regla del TTL en un solo sitio (CLEAN-09).
-
-    Sigue siendo un dict, así que lo que lea o escriba `(valor, ts)` a mano funciona.
-    `ts` es `time.monotonic()`. Migrar a Redis (CAL-04) es cambiar esta clase.
-
-    - `fresh`: el valor si está dentro del TTL; si no, None. `empty_ttl` acorta el
-      TTL de los valores vacíos (un histórico `[]` no vale 23 h).
-    - `stale`: el último valor, tenga la edad que tenga (stale-on-error).
-    - `mark_failed` / `in_backoff`: caché negativo aparte del valor, para no pisar el
-      último dato bueno (PERF-17). Un `put` lo borra.
-    - `max_entries`: al pasarse, `put` expulsa las entradas más antiguas. Sin limpieza
-      periódica: no hay scheduler (los ticks son crons externos).
-    """
-
-    def __init__(self, ttl: float, *, fail_ttl: float = 0, max_entries: int | None = None):
-        super().__init__()
-        self.ttl = ttl
-        self.fail_ttl = fail_ttl
-        self.max_entries = max_entries
-        self.failed_at: dict[Any, float] = {}
-        self.hits = self.misses = self.stale_served = 0
-
-    def fresh(self, key: Any, now: float | None = None, *, empty_ttl: float | None = None) -> Any:
-        entry = self.get(key)
-        if entry is not None:
-            value, ts = entry
-            ttl = empty_ttl if empty_ttl is not None and not value else self.ttl
-            if (time.monotonic() if now is None else now) - ts < ttl:
-                self.hits += 1
-                return value
-        self.misses += 1
-        return None
-
-    def stale(self, key: Any) -> Any:
-        entry = self.get(key)
-        if entry is None:
-            return None
-        self.stale_served += 1
-        return entry[0]
-
-    def put(self, key: Any, value: Any, now: float | None = None) -> None:
-        self[key] = (value, time.monotonic() if now is None else now)
-        self.failed_at.pop(key, None)
-        if self.max_entries is not None:
-            while len(self) > self.max_entries:
-                del self[min(self, key=lambda k: self[k][1])]
-
-    def mark_failed(self, key: Any, now: float | None = None) -> None:
-        self.failed_at[key] = time.monotonic() if now is None else now
-
-    def in_backoff(self, key: Any, now: float | None = None) -> bool:
-        failed = self.failed_at.get(key)
-        return failed is not None and (time.monotonic() if now is None else now) - failed < self.fail_ttl
-
-    def clear(self) -> None:
-        super().clear()
-        self.failed_at.clear()
-        self.hits = self.misses = self.stale_served = 0
-
-    def stats(self) -> dict[str, int]:
-        return {"entries": len(self), "hits": self.hits, "misses": self.misses,
-                "stale_served": self.stale_served}
+# Vive en steam/cache/base_cache.py (CLEAN-16); este import es compatibilidad hasta la
+# Fase 6. Los TTL de arriba son los de steam/cache/policy.py.
+from steam.cache.base_cache import TtlCache  # noqa: E402 — compat, ver arriba
 
 
 # ── Cache stores ───────────────────────────────────────────────────────────────
