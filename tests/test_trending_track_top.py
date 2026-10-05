@@ -15,7 +15,7 @@ from steam.domain.models import Fetched
 from steam.errors import StorageError
 from steam.rankings_repo import trending_repo
 from steam.routes import market as market_routes
-from steam.services import market as market_service
+from steam.services import market_service as market_service
 
 
 def _item(nombre: str) -> dict:

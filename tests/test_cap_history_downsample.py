@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import steam.services.market as market
-from steam.services.market import _CAP_FIELDS, _downsample, _parse_ts
+import steam.services.market_service as market
+from steam.services.market_service import _CAP_FIELDS, _downsample, _parse_ts
 
 HOUR = timedelta(hours=1)
 

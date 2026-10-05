@@ -1,11 +1,11 @@
-"""CLEAN-15: status y reason de los `Fetched` de `steam/services/market.py` ante una
+"""CLEAN-15: status y reason de los `Fetched` de `steam/services/market_service.py` ante una
 fuente caída, 402, 429 y payload corrupto. El contrato HTTP lo fijan
 tests/test_steam_contract_*; aquí se mira lo que ve la ruta antes de traducir."""
 import httpx
 import pytest
 
 from steam.errors import InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout, UnexpectedPayload
-from steam.services import market as market_service
+from steam.services import market_service as market_service
 from stores import _item_price_cache, _market_index_cache, _search_cache, _topmovers_raw_cache
 from tests.test_steam_contract_market import NAME, RAW
 

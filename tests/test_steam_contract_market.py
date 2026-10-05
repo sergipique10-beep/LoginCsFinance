@@ -12,7 +12,7 @@ import pytest
 
 import main
 from steam.rankings_repo import movers_repo, trending_repo
-from steam.services import catalog
+from steam.services import catalog_service
 from stores import (
     _fx_cache, _item_history_cache, _item_price_cache,
     _market_index_cache, _market_lookup_cache, _market_prices_cache,
@@ -73,7 +73,7 @@ def api(client, monkeypatch):
         c.clear()
     monkeypatch.setattr(main.app.state, "http_client", httpx.AsyncClient(transport=httpx.MockTransport(_handler)))
     # El catálogo de ByMykel no forma parte del contrato de estos endpoints.
-    monkeypatch.setattr(catalog, "fetch_static_images", AsyncMock())
+    monkeypatch.setattr(catalog_service, "fetch_static_images", AsyncMock())
     yield client
     for c in CACHES:
         c.clear()

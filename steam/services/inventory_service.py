@@ -12,7 +12,7 @@ from steam.domain.models import Fetched, SkinCard
 from steam.errors import StorageError, UpstreamError
 from steam.errors.handling import log_degraded, reason_of
 from steam.mappers.item_mapper import _map_item
-from steam.services import catalog, pricing
+from steam.services import catalog_service, pricing_service
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -39,8 +39,8 @@ async def fetch_fresh_inventory(client: httpx.AsyncClient, steam_id: str, *, tra
             return Fetched([], "error", reason_of(exc))
         raise
     items = [_map_item(item) for item in adapt_inventory(data)]   # cuerpo no lista → UnexpectedPayload
-    items = await pricing.enrich_market_prices(client, items)
-    catalog.enrich_images_from_cache(items)
+    items = await pricing_service.enrich_market_prices(client, items)
+    catalog_service.enrich_images_from_cache(items)
 
     if track:
         # Auto-registro para la captura de precios (best-effort: nunca romper /inventory)

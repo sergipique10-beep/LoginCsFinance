@@ -104,8 +104,8 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
     from stores import _item_price_cache
     from steam.adapters.steam_adapter import adapt_items
     from steam.mappers.item_mapper import _map_item
-    from steam.services import catalog, pricing
-    from steam.services.market import search_items
+    from steam.services import catalog_service, pricing_service
+    from steam.services.market_service import search_items
 
     import time
 
@@ -136,19 +136,19 @@ async def _consultar_precio_skin(*, market_hash_name: str, client: httpx.AsyncCl
     if raw is None:
         return {"error": f"skin '{query}' no encontrada"}
 
-    catalog.cache_images([raw])
+    catalog_service.cache_images([raw])
     # dict y no SkinCard: el chat le añade `aviso`, que no es del contrato con el front.
     item: dict[str, Any] = dict(_map_item(raw))
     try:
-        (item,) = await pricing.enrich_prices(client_http, [item], limiter_timeout=CHAT_LIMITER_TIMEOUT)
+        (item,) = await pricing_service.enrich_prices(client_http, [item], limiter_timeout=CHAT_LIMITER_TIMEOUT)
         enriched = True
     except HistoryBusy:
         # PERF-03: mejor un precio sin deltas en 3 s que uno completo en 60.
         enriched = False
         item["aviso"] = HISTORY_BUSY_MSG
-    (item,) = await pricing.enrich_market_prices(client_http, [item])
-    await catalog.fetch_static_images(client_http)
-    catalog.enrich_images_from_cache([item])
+    (item,) = await pricing_service.enrich_market_prices(client_http, [item])
+    await catalog_service.fetch_static_images(client_http)
+    catalog_service.enrich_images_from_cache([item])
 
     if enriched:
         _item_price_cache.put(cache_key, item, now)
@@ -163,8 +163,8 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict] |
     from steam.domain.rules import is_sticker_slab
     from steam.adapters.steam_adapter import adapt_items
     from steam.mappers.item_mapper import _map_item
-    from steam.services import catalog, pricing
-    from steam.services.market import search_cache_key, search_items
+    from steam.services import catalog_service, pricing_service
+    from steam.services.market_service import search_cache_key, search_items
 
     import time
 
@@ -191,15 +191,15 @@ async def _buscar_skin(*, query: str, client: httpx.AsyncClient) -> list[dict] |
         return []
 
     items = adapt_items(data)
-    catalog.cache_images(items)
+    catalog_service.cache_images(items)
     result = [
         _map_item(item) for item in items
         if (item.price_latest_sell or 0) > 0 and not is_sticker_slab(item)
     ][:10]
 
-    await catalog.fetch_static_images(client)
-    result = await pricing.enrich_market_prices(client, result)
-    catalog.enrich_images_from_cache(result)
+    await catalog_service.fetch_static_images(client)
+    result = await pricing_service.enrich_market_prices(client, result)
+    catalog_service.enrich_images_from_cache(result)
 
     # El cache guarda el item completo (lo consumen otros callers); la proyección
     # es solo para lo que ve el modelo.
@@ -237,10 +237,10 @@ async def _historial_precio(
     *, market_hash_name: str, client: httpx.AsyncClient, market: str = "csfloat", days: int = 35
 ) -> list[dict]:
     """Historial de precios de una skin."""
-    from steam.services import pricing
+    from steam.services import pricing_service
 
     try:
-        fetched = await pricing.fetch_history_for_item(client, market_hash_name, limiter_timeout=CHAT_LIMITER_TIMEOUT)
+        fetched = await pricing_service.fetch_history_for_item(client, market_hash_name, limiter_timeout=CHAT_LIMITER_TIMEOUT)
         return [dict(p) for p in fetched.data]
     except HistoryBusy:
         # Vuelve al modelo como functionResponse: lo explica con sus palabras.

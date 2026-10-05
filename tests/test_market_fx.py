@@ -9,7 +9,7 @@ import time
 import httpx
 import pytest
 
-from steam.services.fx import fetch_fx_rate as _fetch_fx_rate
+from steam.services.fx_service import fetch_fx_rate as _fetch_fx_rate
 from steam.domain.models import Fetched
 from stores import FX_CACHE_TTL, _fx_cache
 
@@ -83,7 +83,7 @@ async def test_tasa_implausible_se_descarta(rate):
 def test_endpoint_devuelve_la_forma_que_espera_el_cliente(client, monkeypatch):
     async def _fake(_):
         return Fetched(0.88067)
-    monkeypatch.setattr("steam.services.fx.fetch_fx_rate", _fake)
+    monkeypatch.setattr("steam.services.fx_service.fetch_fx_rate", _fake)
     body = client.get("/market/fx").json()
     assert body == {"base": "USD", "rates": {"EUR": 0.88067}, "stale": False}
 
@@ -93,7 +93,7 @@ def test_endpoint_sin_tasa_no_es_un_error(client, monkeypatch):
     un toast de error por algo que no lo es."""
     async def _fake(_):
         return Fetched(None, "error", "unavailable")
-    monkeypatch.setattr("steam.services.fx.fetch_fx_rate", _fake)
+    monkeypatch.setattr("steam.services.fx_service.fetch_fx_rate", _fake)
     resp = client.get("/market/fx")
     assert resp.status_code == 200
     assert resp.json() == {"base": "USD", "rates": {}, "stale": True}

@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from steam import price_capture
-from steam.services import pricing, providers
+from steam.services import pricing_service, providers_service
 from steam.api import steam_client
 from steam.errors import UpstreamError
 from stores import _item_history_cache, _market_lookup_cache, _market_providers_cache
@@ -41,9 +41,9 @@ async def test_key_goes_in_header_and_never_reaches_logs(caplog):
     caplog.set_level(logging.DEBUG)                     # peor caso: todo el logging a DEBUG
     seen: list[httpx.Request] = []
     async with _client(seen) as client:
-        await pricing.fetch_history_for_item(client, "AK-47 | Redline (Field-Tested)")
-        await pricing._fetch_market_price_lookup(client, "csfloat")
-        await providers.fetch_market_providers(client)
+        await pricing_service.fetch_history_for_item(client, "AK-47 | Redline (Field-Tested)")
+        await pricing_service._fetch_market_price_lookup(client, "csfloat")
+        await providers_service.fetch_market_providers(client)
         await price_capture._lookup_item(client, "AK-47 | Redline (Field-Tested)")
 
     assert len(seen) == 4

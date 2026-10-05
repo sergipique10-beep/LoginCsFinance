@@ -19,7 +19,7 @@ from settings import (
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
 from steam.routes import router as steam_router
-from steam.services.catalog import fetch_static_images
+from steam.services.catalog_service import fetch_static_images
 from notifications.router import router as notifications_router
 from alerts.router import router as alerts_router
 from alerts.service import run_tick_loop

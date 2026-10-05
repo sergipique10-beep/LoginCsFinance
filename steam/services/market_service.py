@@ -34,7 +34,7 @@ from steam.mappers.market_index_mapper import _map_market_index_point
 from steam.mappers.movers_mapper import _MOVERS_LIMIT, _build_movers_from_topmovers, _map_topmovers_item
 from steam.mappers.row_mapper import _row_to_item, _to_row
 from steam.rankings_repo import movers_repo, trending_repo
-from steam.services import catalog, pricing
+from steam.services import catalog_service, pricing_service
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -175,7 +175,7 @@ async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
     # ── Primary source: /items (paid plan) ───────────────────────────────────
     data, reason = await _ranking_items(client, "market-movers", "market-index topmovers")
     if data is not None:
-        catalog.cache_images(data)
+        catalog_service.cache_images(data)
         mapped = []
         for item in data:
             if ranking_eligible(item, MIN_SOLD_MOVERS) and not is_sticker_slab(item):
@@ -191,7 +191,7 @@ async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
         # list[Any]: enrich_prices devuelve dicts nuevos sin tipar.
         candidates: list[Any] = diversificar(mapped, _MOVERS_LIMIT * 2)
         logger.info("[market-movers] candidates: %d (capped from %d)", len(candidates), len(mapped))
-        candidates = await pricing.enrich_prices(client, candidates)
+        candidates = await pricing_service.enrich_prices(client, candidates)
         with_delta = sorted(
             [x for x in candidates if x["priceDelta7d"] is not None],
             key=lambda x: x["priceDelta7d"],
@@ -209,11 +209,11 @@ async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
         }
         # steamwebapi /items no devuelve `image` en este plan → el cache estático
         # (ByMykel) es la única fuente. Igual que en /market/items y /market/trending.
-        await catalog.fetch_static_images(client)
-        catalog.enrich_images_from_cache(result["hot"])
-        catalog.enrich_images_from_cache(result["cold"])
-        await pricing.enrich_market_prices(client, result["hot"])
-        await pricing.enrich_market_prices(client, result["cold"])
+        await catalog_service.fetch_static_images(client)
+        catalog_service.enrich_images_from_cache(result["hot"])
+        catalog_service.enrich_images_from_cache(result["cold"])
+        await pricing_service.enrich_market_prices(client, result["hot"])
+        await pricing_service.enrich_market_prices(client, result["cold"])
         return Fetched(result)
 
     # ── Fallback: market-index topmovers (free plan) ─────────────────────────
@@ -223,11 +223,11 @@ async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
         gainers, losers = raw_topmovers
         fallback = _build_movers_from_topmovers(gainers, losers)
         if fallback:
-            await catalog.fetch_static_images(client)
-            catalog.enrich_images_from_cache(fallback["hot"])
-            catalog.enrich_images_from_cache(fallback["cold"])
-            await pricing.enrich_market_prices(client, fallback["hot"])
-            await pricing.enrich_market_prices(client, fallback["cold"])
+            await catalog_service.fetch_static_images(client)
+            catalog_service.enrich_images_from_cache(fallback["hot"])
+            catalog_service.enrich_images_from_cache(fallback["cold"])
+            await pricing_service.enrich_market_prices(client, fallback["hot"])
+            await pricing_service.enrich_market_prices(client, fallback["cold"])
             logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(fallback["hot"]), len(fallback["cold"]))
             return degraded("movers", reason or "unknown", "fallback", fallback)
 
@@ -246,7 +246,7 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
     # ── Primary source: /items (paid plan) ───────────────────────────────────
     data, reason = await _ranking_items(client, "market-trending", "topmovers")
     if data is not None:
-        catalog.cache_images(data)
+        catalog_service.cache_images(data)
         result = []
         for item in data:
             # Slabs fuera también aquí (CAL-14, CLEAN-17): antes solo los filtraban
@@ -267,11 +267,11 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
         # _inline_delta (familia `pricereal`), que ya vienen en el payload.
         # enrich_market_prices sí se queda: son 2 peticiones fijas y
         # cacheadas, no escalan con el número de items.
-        result = await pricing.enrich_market_prices(client, result)
+        result = await pricing_service.enrich_market_prices(client, result)
         # steamwebapi /items no devuelve `image` en este plan → el cache estático
         # (ByMykel) es la única fuente. Igual que en /market/items (search).
-        await catalog.fetch_static_images(client)
-        catalog.enrich_images_from_cache(result)
+        await catalog_service.fetch_static_images(client)
+        catalog_service.enrich_images_from_cache(result)
         return Fetched(result)
 
     # ── Fallback: topmovers from cache (free plan) ────────────────────────────
@@ -281,11 +281,11 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
         gainers, losers = raw_topmovers
         combined = (*gainers, *losers)
         if combined:
-            await catalog.fetch_static_images(client)
+            await catalog_service.fetch_static_images(client)
             result = [_map_topmovers_item(mover) for mover in combined]
-            catalog.enrich_images_from_cache(result)
+            catalog_service.enrich_images_from_cache(result)
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_FALLBACK_LIMIT]
-            result = await pricing.enrich_market_prices(client, result)
+            result = await pricing_service.enrich_market_prices(client, result)
             logger.info("[market-trending] serving from topmovers (%d items)", len(result))
             return degraded("trending", reason or "unknown", "fallback", result)
 
@@ -332,15 +332,15 @@ async def search_market(client: httpx.AsyncClient, query: str) -> Fetched[list[S
         return _stale_or_raise("search", _search_cache.stale(cache_key), exc)
     items = adapt_items(data)   # cuerpo no lista → UnexpectedPayload
 
-    catalog.cache_images(items)
+    catalog_service.cache_images(items)
     result = [
         _map_item(item) for item in items
         if (item.price_latest_sell or 0) > 0 and not is_sticker_slab(item)
     ][:_SEARCH_LIMIT]
 
-    await catalog.fetch_static_images(client)
-    result = await pricing.enrich_market_prices(client, result)
-    catalog.enrich_images_from_cache(result)
+    await catalog_service.fetch_static_images(client)
+    result = await pricing_service.enrich_market_prices(client, result)
+    catalog_service.enrich_images_from_cache(result)
 
     _search_cache.put(cache_key, result, now)
     logger.info("[market-items] q=%r → %d results", query, len(result))
@@ -368,12 +368,12 @@ async def get_item_full(client: httpx.AsyncClient, query: str) -> Fetched[SkinCa
     if match is None:
         return Fetched(None)
 
-    catalog.cache_images([match])
+    catalog_service.cache_images([match])
     item = _map_item(match)
-    (item,) = await pricing.enrich_prices(client, [item])
-    (item,) = await pricing.enrich_market_prices(client, [item])
-    await catalog.fetch_static_images(client)
-    catalog.enrich_images_from_cache([item])
+    (item,) = await pricing_service.enrich_prices(client, [item])
+    (item,) = await pricing_service.enrich_market_prices(client, [item])
+    await catalog_service.fetch_static_images(client)
+    catalog_service.enrich_images_from_cache([item])
 
     _item_price_cache.put(cache_key, item, now)
     logger.info("[market-price] name=%r → hit", query)
@@ -407,8 +407,8 @@ async def get_market_index(client: httpx.AsyncClient, tf: str) -> Fetched[dict]:
     # UX-39: topmovers no trae la rareza; sale del catálogo estático (23 h, sin cuota).
     rarity = None
     if top:
-        await catalog.fetch_static_images(client)
-        rarity = catalog.rarity_from_cache(top.item.name)
+        await catalog_service.fetch_static_images(client)
+        rarity = catalog_service.rarity_from_cache(top.item.name)
 
     result = {
         "turnover24h": mi.turnover_24h or 0.0,
@@ -616,7 +616,7 @@ async def enrich_trending(client: httpx.AsyncClient) -> dict:
     # que no hace falta cargar la fila entera de Supabase.
     stubs = [{"name": n, "priceDelta24h": None, "priceDelta7d": None, "priceDelta30d": None}
              for n in pendientes]
-    enriched = await pricing.enrich_prices(client, stubs)
+    enriched = await pricing_service.enrich_prices(client, stubs)
 
     enriched_at = datetime.now(timezone.utc).isoformat()
     con_deltas: list[dict] = []

@@ -13,7 +13,7 @@ from steam.routes import market
 from steam.adapters.static_catalog_adapter import adapt_catalog_source
 from steam.adapters.steam_adapter import adapt_market_index
 from steam.mappers.movers_mapper import _build_movers_from_topmovers
-from steam.services.catalog import _register_flat, _register_skin, rarity_from_cache as _rarity_from_cache
+from steam.services.catalog_service import _register_flat, _register_skin, rarity_from_cache as _rarity_from_cache
 from stores import (
     _image_cache_meta, _item_image_cache, _item_rarity_cache, _market_index_cache, _topmovers_raw_cache,
 )

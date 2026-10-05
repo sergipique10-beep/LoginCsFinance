@@ -55,14 +55,14 @@ files:
   - steam/routes/market.py
   - steam/routes/news.py
   - steam/services/__init__.py
-  - steam/services/catalog.py
-  - steam/services/fx.py
-  - steam/services/inventory.py
-  - steam/services/market.py
-  - steam/services/news.py
-  - steam/services/pricing.py
-  - steam/services/profile.py
-  - steam/services/providers.py
+  - steam/services/catalog_service.py
+  - steam/services/fx_service.py
+  - steam/services/inventory_service.py
+  - steam/services/market_service.py
+  - steam/services/news_service.py
+  - steam/services/pricing_service.py
+  - steam/services/profile_service.py
+  - steam/services/providers_service.py
   - steam/utils/__init__.py
   - steam/utils/urls.py
 ---

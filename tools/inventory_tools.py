@@ -72,7 +72,7 @@ async def _ver_inventario(
     """
     from stores import _inventory_cache
     from steam.errors.handling import user_message
-    from steam.services import inventory as inventory_service
+    from steam.services import inventory_service as inventory_service
 
     import time
 

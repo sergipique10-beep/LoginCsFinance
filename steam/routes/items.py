@@ -16,9 +16,9 @@ from .. import inventory_snapshot_repo
 from ..domain.models import Fetched
 from ..errors.handling import SOURCE_ERRORS, http_error_for, log_degraded
 from ..errors import UPSTREAM_QUOTA_DETAIL, QuotaExhausted, RateLimited, StorageError, UpstreamError
-from ..services import inventory as inventory_service
-from ..services import pricing
-from ..services import profile as profile_service
+from ..services import inventory_service as inventory_service
+from ..services import pricing_service
+from ..services import profile_service as profile_service
 
 
 # SEC-16: espera máxima por un hueco en `_history_limiter` (como el chat en PERF-03).
@@ -230,7 +230,7 @@ async def get_item_history(
     user: dict = Depends(require_jwt),
 ):
     try:
-        fetched = await pricing.get_item_history(
+        fetched = await pricing_service.get_item_history(
             request.app.state.http_client, name, interval, market, days,
             limiter_timeout=ITEM_HISTORY_LIMITER_TIMEOUT,
         )

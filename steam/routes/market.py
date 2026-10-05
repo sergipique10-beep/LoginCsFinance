@@ -8,9 +8,9 @@ from auth.service import market_rate_limit, require_jwt, token_matches
 from ..domain.catalog import VALID_MARKETS
 from ..errors import UpstreamError
 from ..errors.handling import SOURCE_ERRORS, http_error_for
-from ..services import fx as fx_service
-from ..services import market as market_service
-from ..services import providers as providers_service
+from ..services import fx_service as fx_service
+from ..services import market_service as market_service
+from ..services import providers_service as providers_service
 from steam.price_capture import capture as price_capture_run
 
 router = APIRouter()

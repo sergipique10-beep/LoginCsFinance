@@ -11,8 +11,8 @@ import httpx
 import pytest
 
 from steam.errors import handling as degraded
-from steam.services import catalog, market as market_service, pricing
-from steam.services import providers as providers_service
+from steam.services import catalog_service, market_service as market_service, pricing_service
+from steam.services import providers_service as providers_service
 from stores import _item_history_cache, _item_price_cache, _market_lookup_cache, _search_cache
 from tests.test_steam_contract_market import NAME, RAW
 from tools.inventory_tools import _ver_inventario
@@ -80,7 +80,7 @@ async def test_inventario_del_chat_no_deja_linea(steam_api, http, lines, route):
                                            ({"exc": httpx.ReadTimeout("t")}, "timeout")])
 async def test_historico_del_enriquecimiento(steam_api, http, lines, route, reason):
     steam_api.on("csfloat/history", **route)
-    fetched = await pricing.fetch_history_for_item(http, NAME)
+    fetched = await pricing_service.fetch_history_for_item(http, NAME)
     assert (fetched.data, fetched.status, fetched.reason) == ([], "error", reason)
     assert lines("history") == [(reason, "empty")]
 
@@ -108,11 +108,11 @@ def test_item_history_stale_por_429(steam_api, client, lines):
 
 async def test_lookup_de_mercado_fallo_y_backoff(steam_api, http, lines):
     steam_api.on("csfloat/prices", status=500)
-    assert (await pricing._fetch_market_price_lookup(http, "csfloat")).data == {}
-    assert (await pricing._fetch_market_price_lookup(http, "csfloat")).data == {}    # en backoff
+    assert (await pricing_service._fetch_market_price_lookup(http, "csfloat")).data == {}
+    assert (await pricing_service._fetch_market_price_lookup(http, "csfloat")).data == {}    # en backoff
     _market_lookup_cache.put("buff", {"AK": 1.0}, now=-1e9)
     steam_api.on("buff/prices", exc=httpx.ConnectError("x"))
-    assert (await pricing._fetch_market_price_lookup(http, "buff")).data == {"AK": 1.0}
+    assert (await pricing_service._fetch_market_price_lookup(http, "buff")).data == {"AK": 1.0}
     assert lines("market_lookup") == [("http_500", "empty"), ("backoff", "empty"), ("unavailable", "stale")]
 
 
@@ -124,9 +124,9 @@ async def test_proveedores_respaldo(steam_api, http, lines):
 
 async def test_catalogo_todas_las_fuentes_caidas(steam_api, http, lines, monkeypatch):
     import asyncio
-    monkeypatch.setattr(catalog, "_image_cache_lock", asyncio.Lock())
+    monkeypatch.setattr(catalog_service, "_image_cache_lock", asyncio.Lock())
     steam_api.on(".json", status=500)
-    await catalog.fetch_static_images(http)
+    await catalog_service.fetch_static_images(http)
     # Una línea por fuente caída (7) y la del fallo total, que es la que dispara el backoff.
     assert lines("catalog") == [("http_500", "empty")] * 7 + [("all_sources_failed", "empty")]
 
@@ -134,9 +134,9 @@ async def test_catalogo_todas_las_fuentes_caidas(steam_api, http, lines, monkeyp
 async def test_catalogo_una_fuente_caida_carga_las_demas(steam_api, http, lines, monkeypatch):
     import asyncio
     from stores import _image_cache_meta
-    monkeypatch.setattr(catalog, "_image_cache_lock", asyncio.Lock())
+    monkeypatch.setattr(catalog_service, "_image_cache_lock", asyncio.Lock())
     steam_api.on("skins.json", content=b"<html>")   # las otras seis responden [] (fixture)
-    await catalog.fetch_static_images(http)
+    await catalog_service.fetch_static_images(http)
     assert lines("catalog") == [("invalid_json", "empty")]
     assert _image_cache_meta.fresh("catalog") is not None   # cargó: no entra en backoff
 
@@ -146,7 +146,7 @@ async def test_registro_en_tracked_skins_best_effort(steam_api, http, lines, mon
     from steam.errors import StorageError
     monkeypatch.setattr("steam.price_history_repo.register_tracked", AsyncMock(side_effect=StorageError("caída")))
     steam_api.on("api/inventory", json=[RAW])
-    from steam.services import inventory as inventory_service
+    from steam.services import inventory_service
     assert (await inventory_service.fetch_fresh_inventory(http, "1", track=True)).status == "ok"
     assert lines("tracked_register") == [("storage", "empty")]
 
