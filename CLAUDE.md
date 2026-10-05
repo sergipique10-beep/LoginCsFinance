@@ -84,17 +84,18 @@ LoginCsFinance/
     router.py       # APIRouter: /auth/steam, /auth/steam/callback, /auth/token,
                     #            /auth/dev-token, /auth/refresh, /auth/logout
                     # Note: /auth/dev-token gated by settings.DEV_TOKEN_ENABLED (DEBUG and ENV != production)
-  steam/            # Refactor hacia el árbol objetivo (CLEAN-13..19): plan y diagnóstico en
-                    #   docs/superpowers/{plans,specs}/2026-10-04-steam-refactor-arbol-objetivo*
-    errors/         # Paquete (CLEAN-14); `from steam.errors import X` re-exporta todo
-      domain_errors.py # Errores tipados de las fuentes (CLEAN-06): UpstreamError (status,
+  steam/            # Integración con steamwebapi, ByMykel, frankfurter y Steam News. Árbol final del
+                    #   refactor CLEAN-13..19 (plan, spec y salida de cada fase en
+                    #   docs/superpowers/{plans,specs}/2026-10-04-steam-refactor-arbol-objetivo*)
+    errors/         # Paquete; `from steam.errors import X` re-exporta todo
+      domain_errors.py # Errores tipados de las fuentes: UpstreamError (status,
                     #   body_excerpt, retry_after) y sus hijas QuotaExhausted (402),
                     #   RateLimited (429), SourceTimeout (→504), SourceUnavailable (→502);
                     #   InvalidPayload (200 ilegible, NO hereda de UpstreamError); HistoryBusy;
                     #   UnexpectedPayload (forma inesperada) e InvalidField (campo con tipo
                     #   imposible: source/operation/field/value), que hereda de ella
-      handling.py     # ex degraded.py. http_error_for(exc, timeout_status=) es la ÚNICA
-                    #   traducción de errores tipados a HTTP (CLEAN-15): las rutas capturan
+      handling.py     # http_error_for(exc, timeout_status=) es la ÚNICA traducción de
+                    #   errores tipados a HTTP: las rutas capturan
                     #   SOURCE_ERRORS y lanzan lo que devuelve. DEGRADABLE es la tupla que un
                     #   service captura cuando tiene camino de degradación; degraded(flow,
                     #   reason, served, data) deja la línea y construye el Fetched (status
@@ -103,9 +104,9 @@ LoginCsFinance/
                     #   StorageError (domain_errors): fallo de Supabase, lo lanza
                     #   cap_history_repo.storage_call para los best-effort.
                     #   Ver «Log de degradaciones (steam-degraded)»
-    api/            # ex clients/ (CLEAN-14). Una función por endpoint externo: devuelve el
-                    #   JSON del 200 o lanza el error tipado. Sin caché, sin fallback, sin
-                    #   normalizar (CLEAN-06/07). MARKET_CLIENTS: módulo por mercado
+    api/            # Una función por endpoint externo: devuelve el JSON del 200 o lanza el
+                    #   error tipado. Sin caché, sin fallback, sin normalizar. MARKET_CLIENTS:
+                    #   módulo por mercado. Sin logs: los deja quien degrada
       http.py         # get_json / get_text (transporte común + mapeo a errores), parse_retry_after
       static_catalog_client.py # fetch_source: un JSON de ByMykel/CSGO-API (15 s); exige lista
       fx_client.py    # latest_usd_eur: frankfurter (10 s)
@@ -113,12 +114,12 @@ LoginCsFinance/
                     #   "" lo decide services/news con su motivo)
       csfloat_client.py / buff_client.py # history / prices sobre /market/{market} con el
                     #   mercado fijo; delegan en steam_client
-      steam_client.py # ex steamwebapi.py. Cliente único de steamwebapi (CLEAN-06):
+      steam_client.py # Cliente único de steamwebapi:
                     #   STEAM_WEB_API/STEAM_MARKET_API, steam_auth_headers, _history_limiter, y
                     #   una función por endpoint (items, item, inventory, profile, market_index,
                     #   market_prices, market_history, legacy_history, info_markets). Devuelve
                     #   el JSON del 200 tal cual o lanza el error tipado; no parsea nada
-    adapters/       # JSON crudo → modelo interno validado (CLEAN-14). Entrada Any, salida
+    adapters/       # JSON crudo → modelo interno validado. Entrada Any, salida
                     #   dataclass de domain/models, errores UnexpectedPayload / InvalidField.
                     #   Sin HTTP, caché, log ni fallback. Campo ausente o no convertible = None
       _common.py      #   require_list, require_dict, mappings, history_points (HistoryPoint, única impl.)
@@ -131,24 +132,22 @@ LoginCsFinance/
       provider_adapter.py # adapt_markets (la cadena de alias del logo vive aquí)
       fx_adapter.py   #   adapt_rates (estricto: una tasa como string es anomalía)
     domain/
-      normalizers.py  # ex names.py (CLEAN-17). Normalizadores puros de nombres e imágenes:
+      normalizers.py  # Normalizadores puros de nombres e imágenes:
                     #   image_lookup_candidates, catalog_keys_for_skin, without_souvenir,
                     #   has_slab_mark, skin_base, name_key / names_match (match exacto de
-                    #   /market/price), normalize_image_url (ex item_mapper._normalize_image,
-                    #   sobre utils/urls). Los prefijos «StatTrak™ », «★ », «Souvenir », la
+                    #   /market/price), normalize_image_url (sobre utils/urls). Los prefijos «StatTrak™ », «★ », «Souvenir », la
                     #   marca de slab y "glove"/"knife"/"bayonet" solo aparecen en domain/
                     #   (guardia en tests/test_domain_normalizers.py)
-      rules.py        # Reglas de negocio (CLEAN-17), puras sobre el modelo interno o la tarjeta:
-                    #   plausible_ratio / plausible_fx_rate (ex validators), ranking_eligible +
-                    #   MIN_RANKING_PRICE / MIN_SOLD_*, turnover y diversificar (ex
-                    #   services/market, con MAX_POR_CATEGORIA / MAX_POR_SKIN),
-                    #   is_sticker_slab(item) (por item_type y luego por nombre; también en
-                    #   compute_trending, CAL-14), is_readable_news (ex news_mapper, UX-05),
+      rules.py        # Reglas de negocio, puras sobre el modelo interno o la tarjeta:
+                    #   plausible_ratio / plausible_fx_rate, ranking_eligible +
+                    #   MIN_RANKING_PRICE / MIN_SOLD_*, turnover y diversificar (con
+                    #   MAX_POR_CATEGORIA / MAX_POR_SKIN), is_sticker_slab(item) (por item_type y
+                    #   luego por nombre; también en compute_trending, CAL-14), is_readable_news (UX-05),
                     #   news_category(feedname, feedlabel) → NewsCategory (tabla NEWS_CATEGORY_MARKS)
-      liquidity.py    # ex steam/liquidity.py (CLEAN-17). Liquidity Score (0-100):
+      liquidity.py    # Liquidity Score (0-100):
                     #   compute_liquidity(SteamItem). Puro
       enums.py        # FetchStatus (ok|partial|stale|error) y Served (stale|empty|fallback|error),
-                    #   como Literal (CLEAN-15). `str, Enum` (CLEAN-17): Market (steam|csfloat|
+                    #   como Literal. `str, Enum`: Market (steam|csfloat|
                     #   buff), WeaponCategory, Wear (los 5 desgastes), NewsCategory (con `.color`).
                     #   Fuera de domain/ se usan los `.value`: en 3.11 f"{Market.BUFF}" no es "buff"
       catalog.py      # Constantes inmutables: WEAR_NAMES, WEAPON_CATEGORY + weapon_category (con
@@ -156,19 +155,18 @@ LoginCsFinance/
                     #   TRACKED_MARKETS / VALID_MARKETS (= HISTORY_MARKETS | PASSTHROUGH_MARKETS)
                     #   / HISTORY_MARKETS, todos derivados de los enums como `.value`; proveedores
                     #   (KNOWN_LOGOS, PROVIDER_IDS, fallback_providers() devuelve copia)
-      models.py       # TypedDict del contrato JSON (CLEAN-08): RankedCard (_row_to_item) ⊂
+      models.py       # TypedDict del contrato JSON: RankedCard (_row_to_item) ⊂
                     #   SkinCard (_map_item) ⊂ MoverItem (+_change24h interno), RankingRow,
                     #   MarketIndexPoint, NewsItem, MarketProvider, HistoryPoint.
                     #   tests/test_steam_models.py ata sus claves a los tests de contrato.
-                    #   Fetched[T] (CLEAN-12): data + status (ok|partial|stale|error) + reason.
-                    #   Modelos INTERNOS (CLEAN-14, dataclasses frozen, NO contrato): SteamItem
+                    #   Fetched[T]: data + status (ok|partial|stale|error) + reason.
+                    #   Modelos INTERNOS (dataclasses frozen, NO contrato): SteamItem
                     #   (.name, .latest_price), PriceQuote, Variant, TopMover, IndexPoint,
                     #   MarketIndexData, ProfileData, NewsEntry, CatalogEntry, ProviderInfo,
                     #   PriceRow, FxRates. None = «no vino / no convertible»; 0 = cero
-      validators.py   # Validadores de valor (CLEAN-14): as_float/as_int/as_bool/as_str (None si
-                    #   falta; InvalidField si el tipo es imposible), canonical_price (dict de
-                    #   /item, hasta la Fase 5), has_price. Las reglas de plausibilidad y de
-                    #   rankings viven en rules.py desde CLEAN-17
+      validators.py   # Validadores de valor: as_float/as_int/as_bool/as_str (None si falta;
+                    #   InvalidField si el tipo es imposible), has_price. Las reglas de
+                    #   plausibilidad y de rankings y canonical_price viven en rules.py
     mappers/        # Mappers puros: modelo interno → TypedDict de salida (sin HTTP, caché, fallback):
       item_mapper.py  #   _map_item(SteamItem), _inline_delta, _safe_delta, _delta_from_history,
                     #   _resolve_phase (la imagen la normaliza domain/normalizers)
@@ -179,7 +177,7 @@ LoginCsFinance/
       profile_mapper.py #  _map_profile(ProfileData | None, steam_id)
       provider_mapper.py # _build_providers(list[ProviderInfo]) → steam, csfloat, buff
       row_mapper.py   #   _row_to_item, _to_row (filas de market_trending / market_movers)
-    utils/          # Sin dependencias internas (CLEAN-17/19; guardia AST en tests/test_steam_layers.py)
+    utils/          # Sin dependencias internas (guardia AST en tests/test_steam_layers.py)
       urls.py         # STEAM_CDN, is_http_url, steam_cdn_url
       strings.py      # clean_news_content (news_mapper lo reexporta como _clean_news_content para
                     #   rag/ y notifications/), lower_key (claves de caché)
@@ -198,11 +196,11 @@ LoginCsFinance/
                     #   is_fresh_or_backoff. Sustituye los tres dicts planos
       __init__.py     # ALL_CACHES, clear_all() (conftest), stats_all() (línea [steam-cache]
                     #   por caché en cada cap-tick)
-    services/       # Orquestación, una responsabilidad por módulo (CLEAN-11). Sin FastAPI:
+    services/       # Orquestación, una responsabilidad por módulo. Sin FastAPI:
                     #   lanzan los errores de steam/errors/ y las rutas los traducen a HTTP.
-                    #   Todo service con camino de degradación devuelve Fetched[T] (CLEAN-15:
-                    #   también profile, news, inventory, fetch_history_for_item y el lookup
-                    #   por mercado); las rutas responden `.data`. Solo capturan DEGRADABLE:
+                    #   Todo service con camino de degradación devuelve Fetched[T] (también
+                    #   profile, news, inventory, fetch_history_for_item y el lookup por
+                    #   mercado); las rutas responden `.data`. Solo capturan DEGRADABLE:
                     #   un KeyError es un bug y sube como 500, no se disfraza de degradación.
                     #   Reciben el JSON de api/ y lo pasan por adapters/ antes de mapear.
                     #   Entre módulos se llaman vía el módulo (`catalog.fetch_static_images`)
@@ -215,7 +213,7 @@ LoginCsFinance/
       fx_service.py   #   fetch_fx_rate (USD→EUR, stale si cae frankfurter)
       market_service.py #   search_items (la búsqueda de /items para rutas y chat), search_cache_key,
                     #   search_market, get_item_full, get_market_index, get_market_prices,
-                    #   _stale_or_raise. Partido en CLEAN-18: rankings y cap-history fuera
+                    #   _stale_or_raise. Rankings y cap-history en sus propios services
       rankings_service.py # compute_movers / compute_trending (/items + fallback de topmovers,
                     #   _build_movers_from_topmovers; orden y reparto con rules.turnover /
                     #   rules.diversificar), get_movers / get_trending (snapshots), ticks
@@ -224,20 +222,20 @@ LoginCsFinance/
                     #   _ENRICH_BATCH, _TRENDING_STALE_DAYS, _ITEMS_FETCH_MAX
       cap_history_service.py # capture_cap_snapshot (/internal/cap-tick, línea [steam-cache]),
                     #   get_cap_history + _downsample, _CAP_TF_MAP, _CAP_BUCKET_MAP, _CAP_FIELDS
-      price_capture_service.py # ex steam/price_capture.py (CLEAN-18): seed_tracked, capture (el
+      price_capture_service.py # seed_tracked, capture (el
                     #   price-tick) y lookup_item(client, name) → SteamItem | None (público: lo usa
                     #   alerts/); rules.canonical_price decide el precio sobre el modelo
       inventory_service.py #   fetch_fresh_inventory(track=): la ruta registra en tracked_skins, el chat no;
                     #   get_inventory(client, steam_id, force=, origin=) → Fetched[Inventory] con la
                     #   degradación 429/402/410 (PERF-14, CAL-13): caché, snapshot, _retry_inventory
-                    #   y _backoff viven aquí desde CLEAN-18; la ruta pone cabeceras y status
+                    #   y _backoff viven aquí; la ruta pone cabeceras y status
       profile_service.py #   get_profile (/me)
       news_service.py #   get_cs2_news (/news/cs2, og:image, filtro UX-05)
     cap_history_repo.py  # Supabase data layer for the CS2 price-index history:
                     #   get_supabase (module-cached client, service_role),
                     #   insert_snapshot (upsert by ts), fetch_range (rows since cutoff).
                     #   supabase-py is sync → calls wrapped in asyncio.to_thread.
-                    #   storage_call(fn): to_thread + traducción a StorageError (CLEAN-15),
+                    #   storage_call(fn): to_thread + traducción a StorageError,
                     #   solo para los caminos best-effort (snapshot del inventario,
                     #   register_tracked); los ticks dejan subir el error tal cual
     routes/         # APIRouters finos (registered in routes/__init__.py): auth, rate limit,
@@ -668,6 +666,14 @@ lista de flows está en la columna «Log» del mapa de degradaciones de
 `docs/features/steam.md`. Los services con camino de degradación devuelven
 `Fetched[T]` (`steam/domain/models.py`) y las rutas responden con `.data`, idéntico a
 antes: exponer `status` al front es UX-46, que puede priorizar con estos conteos.
+
+**Prefijos de log por fuente** (CLEAN-19): el resto de líneas de `steam/` llevan el prefijo
+de su fuente o tick, así que un solo `grep` recoge todo lo de una: `[catalog]`,
+`[item-history]`, `[market-items]`, `[market-prices]`, `[market-index]`, `[market-movers]`,
+`[market-trending]`, `[providers]`, `[fx]`, `[price]` (price-tick), `[inventory]`, `[cap-tick]`,
+`[trending-tick]`, `[enrich-tick]`, `[movers-tick]`, `[steam-cache]`. `[inventory-429]` y
+`[steam-degraded]` tienen formato propio y no se renombran. `api/` no loguea (lanza el error
+tipado) y `news/` solo degrada vía `[steam-degraded]`.
 
 ## Degradación ante 429 de steamwebapi (PERF-14)
 

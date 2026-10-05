@@ -110,12 +110,18 @@ aceptada), *UX-46* (hacerla visible al usuario, necesita al front) o el issue de
 **Log** (CLEAN-12): las degradaciones que el cliente no ve dejan una línea
 `[steam-degraded] flow=<flow> reason=<reason> served=<stale|empty|fallback|error> last_hour=<n>`
 (`steam/errors/handling.py`), una por fila con algo en la última columna;
-`tests/test_steam_degraded_logs.py` provoca cada una. Los services la dejan vía
+`tests/test_steam_degraded_logs.py` provoca cada una (CLEAN-19: también las tres que
+faltaban, `inventory` · `rate_limit`/`quota`, `inventory_snapshot` · `storage` y
+`news_image` · `no_og_tag`). Los services la dejan vía
 `degraded(flow, reason, served, data)`, que construye a la vez el `Fetched` con el
 `status` que corresponde a `served` (`served_to_status`), y solo capturan `DEGRADABLE`
 (`UpstreamError`, `InvalidPayload`, `UnexpectedPayload`): lo demás es un bug y sube. Las que ya se ven (cabecera, `code`,
 `stale` en el cuerpo, 5xx) no llevan línea. Fuera a propósito: los mappers (una línea
-por campo y tick, UX-46).
+por campo y tick, UX-46). Las demás líneas de `steam/` llevan el prefijo de su fuente o
+tick (`[catalog]`, `[item-history]`, `[market-items]`, `[market-prices]`, `[market-index]`,
+`[market-movers]`, `[market-trending]`, `[providers]`, `[fx]`, `[price]`, `[inventory]`,
+`[cap-tick]`, `[trending-tick]`, `[enrich-tick]`, `[movers-tick]`, `[steam-cache]`);
+`[inventory-429]` y `[steam-degraded]` no se renombran (CLEAN-19).
 
 | Flujo | Disparador | Qué devuelve | ¿Lo ve el cliente? | Decisión | Log (`flow` · `reason`) |
 |---|---|---|---|---|---|

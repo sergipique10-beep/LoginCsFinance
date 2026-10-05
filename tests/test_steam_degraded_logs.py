@@ -243,3 +243,47 @@ def test_sin_degradacion_no_hay_linea(steam_api, client, lines):
     steam_api.on("csfloat/history", json=[])
     client.get("/market/items?q=redline")
     assert lines("search") == [] and lines("market_lookup") == []
+
+
+# ── Inventario: snapshot por 429/402 y el snapshot que no se puede leer o guardar ──
+
+@pytest.mark.parametrize("status, reason", [(429, "rate_limit"), (402, "quota")])
+def test_inventario_sirve_snapshot_por_429_y_402(steam_api, client, lines, monkeypatch, status, reason):
+    # PERF-14: el 200 con snapshot es invisible salvo por la cabecera; deja su línea
+    # (además de la de `[inventory-429]`). Sin tarea de reintento en el test.
+    from unittest.mock import MagicMock
+    from steam.services import inventory_service
+    from tests.conftest import SNAPSHOT_DB, STEAM_ID
+    monkeypatch.setattr(inventory_service, "_schedule_retry", MagicMock())
+    SNAPSHOT_DB[STEAM_ID] = ([RAW], "2026-10-02T08:00:00+00:00")
+    steam_api.on("api/inventory", status=status)
+    resp = client.get("/inventory")
+    assert resp.status_code == 200 and resp.headers["X-Inventory-Stale"] == "1"
+    assert lines("inventory") == [(reason, "stale")]
+
+
+def test_inventario_snapshot_ilegible_o_no_guardable(steam_api, client, lines, monkeypatch):
+    # Best-effort (PERF-14): Supabase caído no rompe /inventory, pero queda registrado.
+    from unittest.mock import AsyncMock, MagicMock
+    from steam import inventory_snapshot_repo
+    from steam.cache.user_cache import _inventory_cache
+    from steam.errors import StorageError
+    from steam.services import inventory_service
+    monkeypatch.setattr(inventory_service, "_schedule_retry", MagicMock())
+    monkeypatch.setattr(inventory_snapshot_repo, "save", AsyncMock(side_effect=StorageError("caída")))
+    monkeypatch.setattr(inventory_snapshot_repo, "load", AsyncMock(side_effect=StorageError("caída")))
+    steam_api.on("api/inventory", json=[RAW])
+    assert client.get("/inventory").status_code == 200   # guardar el snapshot falló: la lectura sigue
+    _inventory_cache.clear()
+    steam_api.on("api/inventory", status=429)
+    assert client.get("/inventory").status_code == 429   # leer el snapshot falló: no hay nada que servir
+    assert lines("inventory_snapshot") == [("storage", "empty"), ("storage", "empty")]
+
+
+def test_noticia_cuya_pagina_no_trae_og_image(steam_api, client, lines):
+    steam_api.on("GetNewsForApp/v2/", json={"appnews": {"newsitems": [
+        {"gid": "1", "title": "A", "url": "https://news/1", "contents": "", "date": 0},
+    ]}})
+    steam_api.on("news/1", content=b"<html><head><title>sin og</title></head></html>")
+    assert client.get("/news/cs2").json()[0]["imageUrl"] == ""
+    assert lines("news_image") == [("no_og_tag", "empty")]

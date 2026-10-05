@@ -246,11 +246,11 @@ Cada punto quita **un** `xfail(strict=True)`; el test afirma el comportamiento c
 ### Tarea 6.1 — `steam/utils/` — [x]
 - `strings.py` (`_clean_news_content` — `news_mapper` lo re-exporta para `rag/ingest.py:14` y `notifications/service.py:14`, que no se tocan —, `lower_key`), `dates.py` (`iso_day`, `hour_floor`, `today` inyectable para que `_delta_from_history` deje de depender del reloj en tests), `urls.py`.
 
-### Tarea 6.2 — Comentarios y logs
+### Tarea 6.2 — Comentarios y logs — [x]
 - Quitar comentarios de diario (`«antes vivía en»`, `«como antes»`, referencias a CLEAN-xx ya cerrados en docstrings de módulo) manteniendo los de invariante/medición. Unificar prefijos de log por fuente (`[steam-client]`, `[catalog]`, `[item-history]`…) y que toda degradación tenga su `[steam-degraded]`.
 - Retirar los `# compat` de `stores.py`.
 
-### Tarea 6.3 — Documentación y cierre
+### Tarea 6.3 — Documentación y cierre — [x]
 - `CLAUDE.md`: sección «Module structure» y «Dependency order» con el árbol final; «In-memory stores» → apunta a `steam/cache/`; mapa de degradaciones en `docs/features/steam.md` al día; `docs/steam-module-refactor-plan.md` marcado como ejecutado con enlace al plan/spec de 2026-10-04.
 - `python tools/ratchet.py --bless` final; comprobar que `coverage_floor` solo sube.
 - Resumen *movido / igual / riesgo reducido / prueba / pendiente* de las 6 fases en el plan del repo.
@@ -441,3 +441,58 @@ Por fase, además:
   `_clean_news_content` a `utils/strings.py` (lo importan `rag/` y `notifications/`); `utils/dates.py`
   (`iso_day`, `hour_floor`, `today`); comentarios de diario («antes vivía en…»); `capture_trending`
   sigue purgando sin fuentes (decisión del dueño del contrato).
+
+### Fase 6 (CLEAN-19, commits `fe7607a`..HEAD)
+- **Movido:** `_clean_news_content` → `steam/utils/strings.py` (`clean_news_content`; `news_mapper`
+  lo reexporta para `rag/` y `notifications/`), `iso_day` / `hour_floor` / `today` →
+  `steam/utils/dates.py` (6.1). De `stores.py` fuera: los alias a las cachés de `steam/`
+  (`_search_cache`, `_profile_cache`, `_inventory_cache`, `_item_image_cache`, `_item_rarity_cache`,
+  `_image_cache_meta`…), los TTL reexportados y el `TtlCache` compat; cada consumidor (auth/router,
+  conftest, tools/ y 19 tests) importa de `steam.cache.<módulo>` o lee `policy.X.ttl` /
+  `.empty_ttl` / `.fail_ttl`. `stores.py` se queda con los stores de auth y `_leetify_cache`.
+- **Nuevo:** guardia `tests/test_cache_policy.py::test_stores_no_reexporta_las_caches_de_steam`
+  (`grep -rn "_cache" stores.py` → solo `_leetify_cache`); los tres tests del mapa que faltaban
+  (`inventory` · `rate_limit`/`quota` con snapshot, `inventory_snapshot` · `storage`, `news_image` ·
+  `no_og_tag`); prefijos de log por fuente (`[catalog]`, `[providers]`, `[market-prices]`,
+  `[market-items]`, `[inventory]` para el 402 y el error de la ruta); `tests/test_image_cache.py`
+  sobre `catalog_cache`.
+- **Igual:** el contrato JSON y los status de todas las rutas (`tests/test_steam_contract_*` sin
+  tocar salvo la línea de import de `test_steam_contract_market.py`); los flows, el formato y los
+  conteos de `[steam-degraded]`; `[inventory-429]` y `[steam-cache]`; las instancias de las cachés,
+  sus nombres y sus TTL; los stores de auth y su limpieza en `conftest`.
+- **Riesgo reducido:** cada caché tiene UNA casa (`grep -rn "from stores import" --include=*.py`
+  solo da constantes de auth y `_leetify_cache`); los docstrings describen el módulo, no su
+  historia (`grep -rnE "antes vivía|como antes|antes se |antes era|antes iba|ex [a-z_]+\.py|\(ex " steam` → 0;
+  `grep -rn "CLEAN-" steam --include=*.py` → 0); un solo `grep "[catalog]"` (o `[providers]`,
+  `[market-prices]`…) recoge todo lo de una fuente; toda fila del mapa con «Log» tiene test.
+- **Prueba:** DoD en verde en los tres commits (1021 tests, cobertura 91 % → `coverage_floor` 90 → 91;
+  ruff 71, mypy 56, sin cambios; `--bless` en 6.3 porque el test del snapshot saca a
+  `steam/inventory_snapshot_repo.py` de `files_without_test`, regla A-8). Smoke desde la sesión:
+  `/` 200 y `/auth/dev-token` 404.
+- **Pendiente (deuda consciente, fuera del refactor):** `capture_trending` sigue purgando sin fuentes
+  (decisión del dueño del contrato); `Fetched.status` no se expone al front (UX-46); migración a
+  Redis (CAL-04). `[steam-client]` y `[news]` quedan reservados sin emisor: `api/` no loguea (lanza
+  el error tipado) y `news_service` solo degrada vía `[steam-degraded]`.
+- **Desvíos respecto al plan:** (1) además de la lista del handoff se conservan `[market-index]`,
+  `[market-prices]` y `[movers-tick]` como prefijos propios: coinciden con sus flows
+  (`market_index`, `market_prices`) y con el tick que capturan; `[market-lookup]` → `[market-prices]`
+  (misma fuente, `/market/{m}/prices`) y `[market-price]` → `[market-items]` (misma búsqueda de
+  `/items`). (2) `LEETIFY_CACHE_TTL` se queda en `stores.py`: es el TTL de `_leetify_cache`, que
+  vive allí (`stats/router.py` no cambia). (3) En `tests/test_steam_contract_market.py` se tocó
+  **solo la línea de import**: el contrato no cambia y era la única forma de retirar los alias sin
+  dejar uno para ese fichero. (4) 6.2 fue en dos commits (comentarios y logs / stores), como
+  preveía el plan.
+
+---
+
+## Resumen de las seis fases
+
+| Fase | Issue | Qué se movió | Guardia que lo protege |
+|---|---|---|---|
+| 0 | CLEAN-13 | Nada: línea base, payloads de ejemplo en `tests/fixtures/` | `tests/test_steam_layers.py::test_orden_de_dependencias`, `tests/test_steam_flows_mappers.py::test_fixture_*` |
+| 1 | CLEAN-14 | `errors.py` → `errors/`, `clients/` → `api/` (+ `csfloat_client`, `buff_client`), `adapters/` nuevos, mappers `*_mapper.py`, modelos internos y validadores de valor | `tests/test_invalid_payloads.py` (56 casos), `tests/test_steam_errors.py`, capas por AST |
+| 2 | CLEAN-15 | Nada: `http_error_for` (traducción única), `Fetched` en todos los services, `DEGRADABLE`, `StorageError`; cierre de CAL-11..14 | 0 `xfail` en `tests/test_steam_contract_*`, `tests/test_steam_degraded_logs.py`, `grep "except Exception" steam/` → 0 |
+| 3 | CLEAN-16 | `TtlCache` → `steam/cache/base_cache.py`; `policy.py`, instancias por dominio, `CatalogCache`, `ALL_CACHES` | `tests/test_cache_policy.py` (`cached[1]` prohibido, políticas), `steam/cache` sin imports internos (AST) |
+| 4 | CLEAN-17 | `names.py` → `normalizers.py`, `liquidity.py` → `domain/`, reglas a `rules.py`, enums `Market`/`Wear`/`WeaponCategory`/`NewsCategory` | `tests/test_domain_normalizers.py` (prefijos solo en domain/), `tests/test_domain_rules.py`, `tests/test_domain_enums.py` (`.value` fuera de domain/) |
+| 5 | CLEAN-18 | `*_service.py`; `market_service` partido en `rankings_service` + `cap_history_service`; el 429 de la ruta a `inventory_service.get_inventory`; `price_capture_service.lookup_item` | `tests/test_steam_layers.py` (services/routes), `tests/test_inventory_429.py`, `tests/test_market_service.py`, `tests/test_steam_contract_*` |
+| 6 | CLEAN-19 | `utils/{strings,dates}.py`; alias de `stores.py` fuera; comentarios de diario fuera; prefijos de log por fuente | `test_stores_no_reexporta_las_caches_de_steam`, `tests/test_steam_degraded_logs.py` (mapa completo), guardia AST de `utils` |
