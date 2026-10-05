@@ -19,7 +19,7 @@ from auth.service import item_history_rate_limit, require_jwt
 from .. import inventory_snapshot_repo
 from ..domain.models import Fetched
 from ..errors.handling import SOURCE_ERRORS, http_error_for, log_degraded
-from ..errors import UPSTREAM_QUOTA_DETAIL, QuotaExhausted, RateLimited, UpstreamError
+from ..errors import UPSTREAM_QUOTA_DETAIL, QuotaExhausted, RateLimited, StorageError, UpstreamError
 from ..services import inventory as inventory_service
 from ..services import pricing
 from ..services import profile as profile_service
@@ -38,7 +38,7 @@ router = APIRouter()
 async def get_me(request: Request, user: dict = Depends(require_jwt)):
     steam_id: str = user["sub"]
     try:
-        return await profile_service.get_profile(request.app.state.http_client, steam_id)
+        return (await profile_service.get_profile(request.app.state.http_client, steam_id)).data
     except SOURCE_ERRORS as exc:
         raise http_error_for(exc, timeout_status=504) from exc
 
@@ -86,8 +86,9 @@ async def _store(steam_id: str, items: list, now: float) -> None:
     _inventory_cache.put(steam_id, items, now)
     try:
         await inventory_snapshot_repo.save(steam_id, items)
-    except Exception as exc:  # noqa: BLE001 — best-effort: nunca romper /inventory
+    except StorageError as exc:   # best-effort: nunca romper /inventory
         logger.warning("[inventory] no se pudo guardar el snapshot: %s", exc)
+        log_degraded("inventory_snapshot", "storage", "empty")
 
 
 async def _snapshot_response(steam_id: str) -> JSONResponse | None:
@@ -95,8 +96,9 @@ async def _snapshot_response(steam_id: str) -> JSONResponse | None:
     siendo la lista de siempre: el aviso de dato viejo va en cabeceras."""
     try:
         snap = await inventory_snapshot_repo.load(steam_id)
-    except Exception as exc:  # noqa: BLE001
+    except StorageError as exc:
         logger.warning("[inventory] no se pudo leer el snapshot: %s", exc)
+        log_degraded("inventory_snapshot", "storage", "empty")
         return None
     if snap is None:
         return None
@@ -138,8 +140,8 @@ async def _retry_inventory(request: Request, steam_id: str, retry_after: float |
             except QuotaExhausted:
                 logger.warning("[inventory-402] user=%s cuota agotada en el reintento; se aborta", steam_id)
                 return
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[inventory] reintento de %s abortado: %r", steam_id, exc)
+            except HTTPException as exc:   # lo que _fetch_fresh_inventory ya tradujo (403, 502...)
+                logger.warning("[inventory] reintento de %s abortado: %s", steam_id, exc.detail)
                 return
             if fetched.status == "error":
                 logger.warning("[inventory] reintento de %s: %s, no se guarda nada", steam_id, fetched.reason)

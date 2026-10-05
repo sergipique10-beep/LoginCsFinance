@@ -92,7 +92,15 @@ LoginCsFinance/
                     #   InvalidPayload (200 ilegible, NO hereda de UpstreamError); HistoryBusy;
                     #   UnexpectedPayload (forma inesperada) e InvalidField (campo con tipo
                     #   imposible: source/operation/field/value), que hereda de ella
-      handling.py     # ex degraded.py: log_degraded(flow, reason, served) y reason_of(exc).
+      handling.py     # ex degraded.py. http_error_for(exc, timeout_status=) es la ÚNICA
+                    #   traducción de errores tipados a HTTP (CLEAN-15): las rutas capturan
+                    #   SOURCE_ERRORS y lanzan lo que devuelve. DEGRADABLE es la tupla que un
+                    #   service captura cuando tiene camino de degradación; degraded(flow,
+                    #   reason, served, data) deja la línea y construye el Fetched (status
+                    #   vía served_to_status); user_message(exc) es el motivo legible para el
+                    #   chat; log_degraded / reason_of. Importa fastapi (no es un service).
+                    #   StorageError (domain_errors): fallo de Supabase, lo lanza
+                    #   cap_history_repo.storage_call para los best-effort.
                     #   Ver «Log de degradaciones (steam-degraded)»
     api/            # ex clients/ (CLEAN-14). Una función por endpoint externo: devuelve el
                     #   JSON del 200 o lanza el error tipado. Sin caché, sin fallback, sin
@@ -126,6 +134,8 @@ LoginCsFinance/
                     #   without_souvenir, is_sticker_slab, skin_base. Los prefijos «StatTrak™ »,
                     #   «★ », «Souvenir » y la marca de slab solo aparecen aquí (guardia en
                     #   tests/test_domain_names.py)
+      enums.py        # FetchStatus (ok|partial|stale|error) y Served (stale|empty|fallback|error),
+                    #   como Literal (CLEAN-15); la Fase 4 añade Market, Wear, NewsCategory
       catalog.py      # Constantes inmutables: WEAR_NAMES, WEAPON_CATEGORY + weapon_category,
                     #   TRACKED_MARKETS / VALID_MARKETS / HISTORY_MARKETS, proveedores
                     #   (KNOWN_LOGOS, PROVIDER_IDS, fallback_providers() devuelve copia)
@@ -156,6 +166,10 @@ LoginCsFinance/
     liquidity.py    # Liquidity Score (0-100): compute_liquidity(SteamItem). Puro.
     services/       # Orquestación, una responsabilidad por módulo (CLEAN-11). Sin FastAPI:
                     #   lanzan los errores de steam/errors/ y las rutas los traducen a HTTP.
+                    #   Todo service con camino de degradación devuelve Fetched[T] (CLEAN-15:
+                    #   también profile, news, inventory, fetch_history_for_item y el lookup
+                    #   por mercado); las rutas responden `.data`. Solo capturan DEGRADABLE:
+                    #   un KeyError es un bug y sube como 500, no se disfraza de degradación.
                     #   Reciben el JSON de api/ y lo pasan por adapters/ antes de mapear.
                     #   Entre módulos se llaman vía el módulo (`catalog.fetch_static_images`)
                     #   para que un test pueda sustituirlos en un solo sitio.
@@ -178,6 +192,9 @@ LoginCsFinance/
                     #   get_supabase (module-cached client, service_role),
                     #   insert_snapshot (upsert by ts), fetch_range (rows since cutoff).
                     #   supabase-py is sync → calls wrapped in asyncio.to_thread.
+                    #   storage_call(fn): to_thread + traducción a StorageError (CLEAN-15),
+                    #   solo para los caminos best-effort (snapshot del inventario,
+                    #   register_tracked); los ticks dejan subir el error tal cual
     routes/         # APIRouters finos (registered in routes/__init__.py): auth, rate limit,
                     #   llamar al service y traducir errores a HTTP. No importan steam.api
                     #   (guardia en tests/test_steam_layers.py)
@@ -203,8 +220,10 @@ LoginCsFinance/
 **Dependency order** (no circular imports):
 
 ```
-settings.py, stores.py, middleware.py, steam/errors/*  ← nothing internal
-steam/domain/models.py  ← nothing internal
+settings.py, stores.py, middleware.py, steam/errors/domain_errors.py  ← nothing internal
+steam/domain/enums.py   ← nothing internal
+steam/domain/models.py  ← steam/domain/enums
+steam/errors/handling.py ← steam/errors/domain_errors, steam/domain/{enums,models} (+ fastapi)
 steam/domain/*          ← steam/domain, steam/errors (catalog → models, names → catalog)
 steam/liquidity.py      ← steam/domain/models
 auth/service.py         ← stores, settings
@@ -215,7 +234,7 @@ steam/mappers/*         ← steam/domain, steam/liquidity (nunca adapters, servi
 steam/services/*        ← steam/api, steam/adapters, steam/domain, steam/errors, steam/mappers,
                           stores, repos de Supabase (rankings, cap_history, price_history)
                           (reglas comprobadas por AST en tests/test_steam_layers.py)
-steam/cap_history_repo.py ← settings (+ supabase)
+steam/cap_history_repo.py ← settings, steam/errors (+ supabase)
 steam/routes/*          ← steam/services, steam/errors, steam/domain, stores,
                           settings, auth/service (require_jwt only)
 main.py                 ← middleware, auth/router, steam/routes, settings

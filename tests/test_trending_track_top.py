@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from steam.domain.models import Fetched
+from steam.errors import StorageError
 from steam.rankings_repo import trending_repo
 from steam.routes import market as market_routes
 from steam.services import market as market_service
@@ -79,7 +80,7 @@ def test_un_fallo_al_registrar_no_tumba_la_captura(client, monkeypatch):
     monkeypatch.setattr(trending_repo, "upsert_rows", AsyncMock())
     monkeypatch.setattr(trending_repo, "purge_stale", AsyncMock(return_value=0))
     monkeypatch.setattr("steam.price_history_repo.register_tracked",
-                        AsyncMock(side_effect=RuntimeError("supabase caída")))
+                        AsyncMock(side_effect=StorageError("supabase caída")))
 
     resp = client.post("/internal/trending-tick", headers={"X-Cap-Token": "secret123"})
 

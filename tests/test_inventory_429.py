@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from steam.domain.models import Fetched
-from steam.errors import QuotaExhausted
+from steam.errors import QuotaExhausted, StorageError
 from steam.routes import items as items_routes
 from steam.errors import RateLimited
 from stores import _inventory_cache
@@ -102,7 +102,7 @@ def test_fresh_read_stores_snapshot(client, monkeypatch):
 def test_snapshot_failure_never_breaks_a_good_read(client, monkeypatch):
     monkeypatch.setattr(items_routes, "_fetch_fresh_inventory", AsyncMock(return_value=Fetched(FRESH)))
     monkeypatch.setattr(items_routes.inventory_snapshot_repo, "save",
-                        AsyncMock(side_effect=RuntimeError("supabase caído")))
+                        AsyncMock(side_effect=StorageError("supabase caído")))
 
     assert client.get("/inventory").json() == FRESH
 

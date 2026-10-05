@@ -241,7 +241,8 @@ async def _historial_precio(
     from steam.services import pricing
 
     try:
-        return await pricing.fetch_history_for_item(client, market_hash_name, limiter_timeout=CHAT_LIMITER_TIMEOUT)
+        fetched = await pricing.fetch_history_for_item(client, market_hash_name, limiter_timeout=CHAT_LIMITER_TIMEOUT)
+        return [dict(p) for p in fetched.data]
     except HistoryBusy:
         # Vuelve al modelo como functionResponse: lo explica con sus palabras.
         return {"error": HISTORY_BUSY_MSG}

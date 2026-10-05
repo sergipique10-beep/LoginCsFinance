@@ -9,8 +9,8 @@ import httpx
 from steam.adapters.steam_adapter import adapt_inventory
 from steam.api import steam_client
 from steam.domain.models import Fetched, SkinCard
-from steam.errors import UpstreamError
-from steam.errors.handling import reason_of
+from steam.errors import StorageError, UpstreamError
+from steam.errors.handling import log_degraded, reason_of
 from steam.mappers.item_mapper import _map_item
 from steam.services import catalog, pricing
 
@@ -49,7 +49,8 @@ async def fetch_fresh_inventory(client: httpx.AsyncClient, steam_id: str, *, tra
             names = [i.get("name") for i in items if i.get("name")]
             if names:
                 await register_tracked(names, "inventory")
-        except Exception as exc:  # noqa: BLE001
+        except StorageError as exc:
             logger.warning("[price] auto-registro de inventario falló: %s", exc)
+            log_degraded("tracked_register", "storage", "empty")
 
     return Fetched(items)

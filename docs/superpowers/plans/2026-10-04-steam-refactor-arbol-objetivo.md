@@ -152,11 +152,11 @@ Fuera de alcance (issues aparte, no refactor): añadir `weapontype`/`exterior`/`
 
 ## Fase 2 — Validación, errores explícitos y los bugs del mapa (CLEAN-15)
 
-### Tarea 2.1 — Traducción única a HTTP
+### Tarea 2.1 — Traducción única a HTTP — [x]
 - `errors/handling.py:http_error_for(exc, *, timeout_status=502) -> HTTPException`: `QuotaExhausted`→503 `UPSTREAM_QUOTA_DETAIL`; `RateLimited`/`HistoryBusy`→503 `UPSTREAM_RATE_LIMIT_DETAIL` + `Retry-After`; `SourceTimeout`→`timeout_status` (504 en index/prices, 502 en búsqueda: hoy difieren a propósito); `SourceUnavailable`/`UpstreamError`→502; `InvalidPayload`/`UnexpectedPayload`/`InvalidField`→502 con `detail` (hoy `InvalidPayload` da 500: CAL-14). `handling.py` **sí** puede importar `fastapi` (no es un service; la guardia de capas excluye `errors/`).
 - Rutas (`routes/items.py`, `routes/market.py`, `routes/news.py`) sustituyen sus 5 bloques `except` por `http_error_for`. Los status que hoy están bien no cambian; los que cambian son exactamente los `xfail` CAL-14.
 
-### Tarea 2.2 — Cerrar CAL-14 (9 xfail)
+### Tarea 2.2 — Cerrar CAL-14 (9 xfail) — [x]
 Cada punto quita **un** `xfail(strict=True)`; el test afirma el comportamiento correcto y pasa a ser la regresión:
 - `/me` 402 → 503 `upstream_quota` (`test_me_402_es_503_upstream_quota`); perfil vacío **no se cachea** (`profile_service` devuelve `Fetched(blank,"error","empty_body")` sin `put`).
 - `/inventory` JSON inválido → 502 (`http_error_for`).
@@ -166,12 +166,12 @@ Cada punto quita **un** `xfail(strict=True)`; el test afirma el comportamiento c
 - Ticks movers/trending con `/items` JSON inválido → no 500: `_ranking_items` captura `InvalidPayload` como ya captura red, y sigue al fallback con `reason="invalid_json"`.
 - Tools del chat: `consultar_precio_skin` 402 y `ver_inventario` 403/429/red devuelven `{"error": <motivo legible>}` — el cambio es en `steam/services` (lanzar tipado) y en **la línea de `except`** de `tools/*_tools.py`, nada más.
 
-### Tarea 2.3 — Cerrar CAL-11, CAL-12, CAL-13 (3 xfail)
+### Tarea 2.3 — Cerrar CAL-11, CAL-12, CAL-13 (3 xfail) — [x]
 - CAL-11: `tools/market_tools` escribe en `_search_cache` con clave del usuario sin liquidez. Fix en `steam`: `market_service.search_items(..., cache_namespace="chat")` → clave `f"{ns}:{q}"`; la búsqueda web usa `"market"`. Línea de import/llamada en tools.
 - CAL-12: `_topmovers_raw_cache` se lee `stale` sin mirar edad → `fresh()` con `TOPMOVERS_RAW_TTL = MARKET_INDEX_CACHE_TTL`; si caducó, `Fetched([], "error", "topmovers_stale")` + `log_degraded`.
 - CAL-13: 410/411 del inventario no pisa el snapshot ni la caché: `inventory_service` devuelve `Fetched([], "error", "http_410")` y la ruta sirve el snapshot con `X-Inventory-Stale` si existe; sin snapshot, `[]` como hoy.
 
-### Tarea 2.4 — Fallbacks trazables
+### Tarea 2.4 — Fallbacks trazables — [x]
 - Cada `except Exception` de `steam/` (13) pasa a capturar la tupla tipada `(UpstreamError, InvalidPayload, UnexpectedPayload)`; lo que no sea eso **se propaga** (un `KeyError` es un bug, no una degradación). Donde el bucle debe seguir (catálogo por fuente, price-tick por skin, `register_tracked` best-effort), se captura tipado y se llama a `log_degraded` con `reason_of` — hoy el fallo parcial del catálogo y el `_topmovers` con status no dejan línea.
 - `rankings`: `capture_trending` **no purga** si `compute_trending` devolvió `status="error"`.
 - `Fetched` en los services que aún no lo devuelven: `news_service`, `profile_service`, `inventory_service`, `fetch_history_for_item`, `_fetch_market_price_lookup`. Las rutas siguen devolviendo `.data` (UX-46 queda fuera).
@@ -294,3 +294,42 @@ Por fase, además:
 - **Prueba:** DoD en verde (873 tests, cobertura ~90 %, ruff 73 → 71, mypy 61 → 56).
 - **Pendiente para la Fase 2:** `http_error_for` (InvalidPayload → 502, 402/429 con `code` en /me, búsqueda e /item/history); los 13 `xfail`; `except Exception` → tuplas tipadas (13 sitios); `Fetched` en news/profile/inventory/history/lookup; `capture_trending` no purga con `status="error"`.
 - **Deuda consciente dejada:** `canonical_price` y `price_capture._lookup_item` siguen sobre el dict crudo de `/item` (8 mocks en tests de alerts y price-capture; se cambia en la Fase 5.4); `tools/market_tools` llama al adapter antes de `_map_item` (3 líneas por tool); `domain/names.py` y `liquidity.py` siguen en su sitio hasta la Fase 4.
+
+### Fase 2 (CLEAN-15, commits `4dd2540`..HEAD)
+- **Movido:** nada (`git mv` no aplica). **Nuevo:** `steam/domain/enums.py` (`FetchStatus`, `Served`);
+  en `errors/handling.py`: `http_error_for`, `SOURCE_ERRORS`, `DEGRADABLE`, `degraded`, `served_to_status`,
+  `user_message`; `StorageError` en `domain_errors.py` y `cap_history_repo.storage_call`;
+  `market.search_cache_key`; `stores.TOPMOVERS_RAW_TTL`; `tests/test_market_service.py`,
+  `tests/test_news_service.py`.
+- **Igual:** el contrato JSON de todas las rutas y todos los status que no eran `xfail`; las cachés y sus
+  TTL (el de topmovers ya existía, ahora se respeta); el limiter; el `[]` de `/item/history` con cuerpo
+  ilegible (conservado a propósito, fila del mapa); el 429 de `/inventory` sin snapshot (sigue siendo 429 con
+  `detail` de texto: cambiarlo es contrato, no estaba en los `xfail`).
+- **Cambiado (los 13 `xfail`):** `InvalidPayload` → 502 en /inventory y /news/cs2 (antes 500); 402 en /me e
+  /item/history → 503 `upstream_quota`; 429 en /me y búsqueda → 503 `upstream_rate_limit` + `Retry-After`;
+  ticks con `/items` ilegible → fallback (`reason=invalid_json`); tools del chat → `{"error": motivo}`
+  (CAL-14). `_search_cache` con namespace `market:`/`chat:` (CAL-11). Topmovers caducado no es respaldo:
+  `error` + `topmovers_stale` y el movers-tick conserva el snapshot (CAL-12). 410/411 del inventario →
+  `Fetched([], "error", "http_410")`: snapshot con `X-Inventory-Stale` si lo hay, `[]` si no, y nunca se
+  pisa caché ni snapshot (CAL-13).
+- **Riesgo reducido:** una sola correspondencia error → HTTP (`http_error_for`) en vez de 8 bloques `except`
+  divergentes; `grep -rn "except Exception" steam/` → **0** (13 → 0): los services capturan `DEGRADABLE`
+  y los best-effort de Supabase `StorageError`, así que un `KeyError` o un `TypeError` ya sale como 500 en
+  vez de disfrazarse de degradación; `Fetched` en todos los services con camino de degradación (profile,
+  news, inventory, history, lookup) con el `status` derivado de `served` en un solo sitio; cuatro
+  degradaciones que no dejaban línea ahora la dejan (`topmovers`, `catalog` parcial, `tracked_register`,
+  `inventory_snapshot`, `price_capture`), cada una con su test.
+- **Prueba:** DoD en verde (942 tests, cobertura 90 % → `coverage_floor` 86 → 90; ruff 71, mypy 56, sin
+  cambios). `grep -rn "xfail" tests/test_steam_contract_*` → **0**.
+- **Desvíos respecto al plan:** (1) 2.1 y 2.2 van en un commit: `http_error_for` cambia exactamente los
+  status que los `xfail(strict=True)` afirmaban, así que separarlos dejaba el DoD en rojo. (2) CAL-11 se
+  resolvió con `search_cache_key(namespace, query)` y no con `search_items(..., cache_namespace=)`:
+  `search_items` no toca la caché (cada llamador guarda su resultado mapeado, con `select` distinto), así
+  que el parámetro no tenía dónde actuar. (3) `capture_trending` **sigue purgando** con `status="error"`:
+  el contrato `test_trending_tick_sin_fuentes_no_inserta_pero_purga` afirma `purged: 3` sin fuentes, y los
+  tests de contrato no se editan; queda como decisión para el dueño del contrato (fila «`trending-tick` ·
+  ninguna fuente» del mapa). (4) `errors/handling.py` importa `steam/domain/{enums,models}`
+  (hojas sin imports internos), reflejado en el orden de dependencias de `CLAUDE.md`.
+- **Pendiente para la Fase 3:** `Fetched.status` sigue sin exponerse al front (UX-46); las cachés se
+  siguen tocando desde `stores` (CLEAN-16 las encapsula); `_news_cache`, `_profile_cache` y compañía siguen
+  siendo `TtlCache` de módulo.

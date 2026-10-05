@@ -61,10 +61,12 @@ async def test_inventario_410_es_error_sin_datos(fake, http, register, status):
 
 async def test_perfil_lista_vacia_y_cache(fake, http):
     fake.on("api/profile", json=[])
-    profile = await profile_service.get_profile(http, "765")
+    fetched = await profile_service.get_profile(http, "765")
+    assert (fetched.status, fetched.reason) == ("error", "empty_body")
+    profile = fetched.data
     assert profile["steam64_id"] == "765" and profile["userName"] == "" and profile["isOnline"] is False
     # CAL-14 (CLEAN-14): un 200 sin perfil no se cachea, así que la segunda llamada vuelve a pedirlo.
-    assert await profile_service.get_profile(http, "765") == profile
+    assert await profile_service.get_profile(http, "765") == fetched
     assert len(fake.hits("api/profile")) == 2
 
 
@@ -79,12 +81,13 @@ def _news(*titles):
 async def test_noticias_piden_de_mas_y_filtran_alfabetos(fake, http):
     fake.on("GetNewsForApp/v2/", json=_news("Обновление", "Release Notes", "更新", "Patch"))
     out = await news_service.get_cs2_news(http, 2)
-    assert [n["title"] for n in out] == ["Release Notes", "Patch"]
+    assert out.status == "ok" and [n["title"] for n in out.data] == ["Release Notes", "Patch"]
     assert fake.hits("GetNewsForApp/v2/")[0].url.params["count"] == "6"   # 2 × NEWS_OVERFETCH
 
 
 async def test_noticias_tope_y_sin_legibles_se_quedan_las_originales(fake, http):
     fake.on("GetNewsForApp/v2/", json=_news("Обновление"))
     out = await news_service.get_cs2_news(http, 50)
-    assert [n["title"] for n in out] == ["Обновление"]
+    assert [n["title"] for n in out.data] == ["Обновление"]
+    assert (out.status, out.reason) == ("partial", "no_readable_news")
     assert fake.hits("GetNewsForApp/v2/")[0].url.params["count"] == str(news_service.NEWS_MAX_FETCH)

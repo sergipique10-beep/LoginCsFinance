@@ -16,21 +16,28 @@ import logging
 import math
 import time
 from collections import deque
+from typing import TypeVar
 
 from fastapi import HTTPException
 
 from steam.domain.enums import FetchStatus, Served
+from steam.domain.models import Fetched
 from steam.errors.domain_errors import (
     UNEXPECTED_FORMAT, UPSTREAM_QUOTA_DETAIL, UPSTREAM_RATE_LIMIT_DETAIL, HistoryBusy, InvalidField,
-    InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, UnexpectedPayload,
-    UpstreamError,
+    InvalidPayload, QuotaExhausted, RateLimited, SourceTimeout, SourceUnavailable, StorageError,
+    UnexpectedPayload, UpstreamError,
 )
 
 logger = logging.getLogger("uvicorn.error")
 
+_T = TypeVar("_T")
+
 # Lo que lanzan api/, adapters/ y services/ y una ruta debe traducir. Lo que no esté aquí
 # (un KeyError, un TypeError) es un bug y debe salir como 500, no disfrazado de 502.
 SOURCE_ERRORS = (UpstreamError, InvalidPayload, UnexpectedPayload, HistoryBusy)
+# Lo que un service captura cuando la fuente falla y tiene un camino de degradación
+# (stale, respaldo, vacío). `HistoryBusy` no está: es del llamador que no puede esperar.
+DEGRADABLE = (UpstreamError, InvalidPayload, UnexpectedPayload)
 
 # SEC-16: segundos de `Retry-After` cuando steamwebapi no lo dice (ventana de 60 s).
 RETRY_AFTER_DEFAULT = 60
@@ -56,6 +63,8 @@ def reason_of(exc: BaseException) -> str:
         return "invalid_field"
     if isinstance(exc, UnexpectedPayload):
         return "unexpected_format"
+    if isinstance(exc, StorageError):
+        return "storage"
     return type(exc).__name__
 
 
@@ -131,3 +140,10 @@ def log_degraded(flow: str, reason: str, served: Served) -> None:
         window.popleft()
     logger.warning("[steam-degraded] flow=%s reason=%s served=%s last_hour=%d",
                    flow, reason, served, len(window))
+
+
+def degraded(flow: str, reason: str, served: Served, data: _T) -> Fetched[_T]:
+    """La línea de degradación y el `Fetched` que la acompaña, de una vez: el `status`
+    sale de `served` por `served_to_status`, así que ningún service lo decide a mano."""
+    log_degraded(flow, reason, served)
+    return Fetched(data, served_to_status(served), reason)

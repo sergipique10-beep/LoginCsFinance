@@ -96,7 +96,10 @@ aceptada), *UX-46* (hacerla visible al usuario, necesita al front) o el issue de
 **Log** (CLEAN-12): las degradaciones que el cliente no ve dejan una línea
 `[steam-degraded] flow=<flow> reason=<reason> served=<stale|empty|fallback|error> last_hour=<n>`
 (`steam/errors/handling.py`), una por fila con algo en la última columna;
-`tests/test_steam_degraded_logs.py` provoca cada una. Las que ya se ven (cabecera, `code`,
+`tests/test_steam_degraded_logs.py` provoca cada una. Los services la dejan vía
+`degraded(flow, reason, served, data)`, que construye a la vez el `Fetched` con el
+`status` que corresponde a `served` (`served_to_status`), y solo capturan `DEGRADABLE`
+(`UpstreamError`, `InvalidPayload`, `UnexpectedPayload`): lo demás es un bug y sube. Las que ya se ven (cabecera, `code`,
 `stale` en el cuerpo, 5xx) no llevan línea. Fuera a propósito: los mappers (una línea
 por campo y tick, UX-46).
 
@@ -119,6 +122,7 @@ por campo y tick, UX-46).
 | Movers / trending | `/items` caído o ilegible | fallback a topmovers, deltas `0.0` | invisible | UX-46 (el JSON ilegible daba 500: resuelto, CLEAN-15) | `movers`/`trending` · motivo de `/items` (`invalid_json` si ilegible); `served=fallback`, o `error` sin fuentes |
 | Movers / trending | topmovers cacheado caducado (`TOPMOVERS_RAW_TTL`) | no se usa: se pide market-index; si también falla, `error` | `kept_previous` en el tick | resuelto (CLEAN-15) | `topmovers` · motivo del respaldo (`served=empty`); `movers`/`trending` · `topmovers_stale` |
 | `movers-tick` | ninguna fuente | conserva el snapshot anterior | `kept_previous` | conservar (CAL-10) | — |
+| `trending-tick` | ninguna fuente | no inserta pero **sí purga** (`purged`) | `count: 0` | lo fija el contrato (`test_trending_tick_sin_fuentes_no_inserta_pero_purga`); el plan de CLEAN-15 proponía no purgar con `status="error"`: decisión pendiente del dueño del contrato | — |
 | Trending | sticker slabs | no se filtran (sí en movers y búsqueda) | — | CAL-14 | — |
 | Búsqueda / precio | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `search`/`item_price` · `quota` (solo stale) |
 | Búsqueda / precio | 429 | 503 + `Retry-After` | `code: upstream_rate_limit` | resuelto (CLEAN-15) | — |
@@ -127,6 +131,10 @@ por campo y tick, UX-46).
 | `/market/prices` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_prices` · `quota` (solo stale) |
 | `/market/index` | gainer sin `markethashname` / sin `change24h` | se descarta / `0.0` | invisible | resuelto (CLEAN-14) | `market_index` · `invalid_field` (solo al descartar) |
 | Catálogo de imágenes | todas las fuentes caídas | backoff 5 min, `image: ""` | invisible | conservar (CAL-08) | `catalog` · `all_sources_failed` |
+| Catálogo de imágenes | una fuente caída o ilegible | se cargan las demás | invisible | conservar | `catalog` · `reason_of(exc)` (`served=empty`, una por fuente) |
+| Inventario | snapshot de Supabase no se puede leer/guardar | la lectura sigue; sin snapshot que servir | invisible | conservar (PERF-14, best-effort) | `inventory_snapshot` · `storage` |
+| `/inventory`, `trending-tick` | `register_tracked` falla (Supabase) | la respuesta sigue; la skin no entra en la captura diaria | `tracked: 0` en el tick | conservar (best-effort) | `tracked_register` · `storage` |
+| `price-tick` | el lookup de una skin falla | se marca intentada, sin punto ese día | `errors` en la respuesta | conservar (PERF-11) | `price_capture` · `reason_of(exc)` |
 | Noticias | JSON que no es dict / ilegible | 502 | 502 | resuelto (CLEAN-15) | — |
 | Noticias | og:image falla o la página no lo trae | `imageUrl: ""` | invisible | conservar | `news_image` · `reason_of(exc)` o `no_og_tag` (solo con URL) |
 | Chat: precio / búsqueda | 402 / 429 / red / ilegible | `{"error": motivo}` (`user_message`) | el modelo lo explica | resuelto (CLEAN-15) | — |

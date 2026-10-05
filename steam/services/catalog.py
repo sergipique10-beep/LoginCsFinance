@@ -12,10 +12,9 @@ import httpx
 from stores import IMAGE_FAIL_TTL, _image_cache_meta, _item_image_cache, _item_rarity_cache
 from steam.adapters.static_catalog_adapter import adapt_catalog_source
 from steam.api import static_catalog_client
-from steam.errors.handling import log_degraded
+from steam.errors.handling import DEGRADABLE, log_degraded, reason_of
 from steam.domain.models import CatalogEntry, SteamItem
 from steam.domain.names import catalog_keys_for_skin, image_lookup_candidates, without_souvenir
-from steam.errors import InvalidPayload, UpstreamError
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -113,13 +112,10 @@ async def fetch_static_images(client: httpx.AsyncClient) -> None:
 
 
 def _log_catalog_failure(label: str, exc: Exception) -> None:
-    """Una fuente del catálogo falló: se salta y se registra."""
-    if isinstance(exc, InvalidPayload):
-        logger.warning("[image-cache] %s unexpected format: %s", label, exc.body_excerpt)
-    elif isinstance(exc, UpstreamError) and exc.status is not None:
-        logger.warning("[image-cache] %s returned %s", label, exc.status)
-    else:
-        logger.warning("[image-cache] could not fetch %s: %s", label, exc)
+    """Una fuente del catálogo falló: se salta (las demás cargan) y deja su línea. Antes
+    el fallo parcial no quedaba registrado como degradación (CLEAN-15)."""
+    logger.warning("[image-cache] could not load %s (%s): %s", label, reason_of(exc), exc)
+    log_degraded("catalog", reason_of(exc), "empty")
 
 
 async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
@@ -144,7 +140,7 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
             for entry in data:
                 _register_skin(entry)
             fetched[label] = len(data)
-        except Exception as exc:
+        except DEGRADABLE as exc:
             _log_catalog_failure(label, exc)
 
     for label, url in sources_flat:
@@ -153,7 +149,7 @@ async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
             for entry in data:
                 _register_flat(entry)
             fetched[label] = len(data)
-        except Exception as exc:
+        except DEGRADABLE as exc:
             _log_catalog_failure(label, exc)
 
     # CAL-08: "catalog" significa "última carga buena" (stores.py). Si no cargó ninguna

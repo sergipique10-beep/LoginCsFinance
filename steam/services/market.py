@@ -19,12 +19,13 @@ from stores import (
 from steam.cap_history_repo import fetch_range, insert_snapshot
 from steam.adapters.steam_adapter import adapt_items, adapt_market_index
 from steam.api import steam_client
-from steam.errors.handling import log_degraded, reason_of
+from steam.errors.handling import degraded, log_degraded, reason_of
 from steam.domain.models import Fetched, RankedCard, SkinCard, SteamItem, TopMover
 from steam.domain.names import is_sticker_slab, skin_base
 from steam.domain.validators import MIN_SOLD_MOVERS, MIN_SOLD_TRENDING, ranking_eligible
 from steam.errors import (
-    InvalidPayload, QuotaExhausted, SourceTimeout, SourceUnavailable, UnexpectedPayload, UpstreamError,
+    InvalidPayload, QuotaExhausted, SourceTimeout, SourceUnavailable, StorageError, UnexpectedPayload,
+    UpstreamError,
 )
 from steam.mappers.item_mapper import _map_item
 from steam.mappers.market_index_mapper import _map_market_index_point
@@ -290,12 +291,10 @@ async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
             await pricing.enrich_market_prices(client, fallback["hot"])
             await pricing.enrich_market_prices(client, fallback["cold"])
             logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(fallback["hot"]), len(fallback["cold"]))
-            log_degraded("movers", reason or "unknown", "fallback")
-            return Fetched(fallback, "partial", reason)
+            return degraded("movers", reason or "unknown", "fallback", fallback)
 
     logger.warning("[market-movers] no data available from any source")
-    log_degraded("movers", reason or "unknown", "error")
-    return Fetched({"hot": [], "cold": []}, "error", reason)
+    return degraded("movers", reason or "unknown", "error", {"hot": [], "cold": []})
 
 
 async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]:
@@ -348,12 +347,10 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
             result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_FALLBACK_LIMIT]
             result = await pricing.enrich_market_prices(client, result)
             logger.info("[market-trending] serving from topmovers (%d items)", len(result))
-            log_degraded("trending", reason or "unknown", "fallback")
-            return Fetched(result, "partial", reason)
+            return degraded("trending", reason or "unknown", "fallback", result)
 
     logger.warning("[market-trending] no data available from any source")
-    log_degraded("trending", reason or "unknown", "error")
-    return Fetched([], "error", reason)
+    return degraded("trending", reason or "unknown", "error", [])
 
 
 # ── Lecturas de /market ───────────────────────────────────────────────────────
@@ -377,8 +374,7 @@ def _stale_or_raise(flow: str, stale: _T | None, exc: QuotaExhausted) -> Fetched
     """SEC-16 — 402 de steamwebapi: mejor un dato caducado que un error, porque la
     cuota no vuelve hasta el día 10. Sin caché, el 402 sube y la ruta da 503."""
     if stale is not None:
-        log_degraded(flow, "quota", "stale")
-        return Fetched(stale, "stale", "quota")
+        return degraded(flow, "quota", "stale", stale)
     raise exc
 
 
@@ -652,8 +648,9 @@ async def capture_trending(client: httpx.AsyncClient) -> dict:
         if nombres:
             await register_tracked(nombres, "trending")
             tracked = len(nombres)
-    except Exception as exc:  # noqa: BLE001
+    except StorageError as exc:
         logger.warning("[trending-tick] register_tracked falló: %s", exc)
+        log_degraded("tracked_register", "storage", "empty")
 
     logger.info("[trending-tick] upserted=%d purged=%d tracked=%d",
                 len(rows), purged, tracked)

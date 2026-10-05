@@ -80,7 +80,8 @@ async def test_inventario_del_chat_no_deja_linea(steam_api, http, lines, route):
                                            ({"exc": httpx.ReadTimeout("t")}, "timeout")])
 async def test_historico_del_enriquecimiento(steam_api, http, lines, route, reason):
     steam_api.on("csfloat/history", **route)
-    assert await pricing.fetch_history_for_item(http, NAME) == []
+    fetched = await pricing.fetch_history_for_item(http, NAME)
+    assert (fetched.data, fetched.status, fetched.reason) == ([], "error", reason)
     assert lines("history") == [(reason, "empty")]
 
 
@@ -107,11 +108,11 @@ def test_item_history_stale_por_429(steam_api, client, lines):
 
 async def test_lookup_de_mercado_fallo_y_backoff(steam_api, http, lines):
     steam_api.on("csfloat/prices", status=500)
-    assert await pricing._fetch_market_price_lookup(http, "csfloat") == {}
-    assert await pricing._fetch_market_price_lookup(http, "csfloat") == {}    # en backoff
+    assert (await pricing._fetch_market_price_lookup(http, "csfloat")).data == {}
+    assert (await pricing._fetch_market_price_lookup(http, "csfloat")).data == {}    # en backoff
     _market_lookup_cache.put("buff", {"AK": 1.0}, now=-1e9)
     steam_api.on("buff/prices", exc=httpx.ConnectError("x"))
-    assert await pricing._fetch_market_price_lookup(http, "buff") == {"AK": 1.0}
+    assert (await pricing._fetch_market_price_lookup(http, "buff")).data == {"AK": 1.0}
     assert lines("market_lookup") == [("http_500", "empty"), ("backoff", "empty"), ("unavailable", "stale")]
 
 
@@ -126,7 +127,42 @@ async def test_catalogo_todas_las_fuentes_caidas(steam_api, http, lines, monkeyp
     monkeypatch.setattr(catalog, "_image_cache_lock", asyncio.Lock())
     steam_api.on(".json", status=500)
     await catalog.fetch_static_images(http)
-    assert lines("catalog") == [("all_sources_failed", "empty")]
+    # Una línea por fuente caída (7) y la del fallo total, que es la que dispara el backoff.
+    assert lines("catalog") == [("http_500", "empty")] * 7 + [("all_sources_failed", "empty")]
+
+
+async def test_catalogo_una_fuente_caida_carga_las_demas(steam_api, http, lines, monkeypatch):
+    import asyncio
+    from stores import _image_cache_meta
+    monkeypatch.setattr(catalog, "_image_cache_lock", asyncio.Lock())
+    steam_api.on("skins.json", content=b"<html>")   # las otras seis responden [] (fixture)
+    await catalog.fetch_static_images(http)
+    assert lines("catalog") == [("invalid_json", "empty")]
+    assert _image_cache_meta.fresh("catalog") is not None   # cargó: no entra en backoff
+
+
+async def test_registro_en_tracked_skins_best_effort(steam_api, http, lines, monkeypatch):
+    from unittest.mock import AsyncMock
+    from steam.errors import StorageError
+    monkeypatch.setattr("steam.price_history_repo.register_tracked", AsyncMock(side_effect=StorageError("caída")))
+    steam_api.on("api/inventory", json=[RAW])
+    from steam.services import inventory as inventory_service
+    assert (await inventory_service.fetch_fresh_inventory(http, "1", track=True)).status == "ok"
+    assert lines("tracked_register") == [("storage", "empty")]
+
+
+async def test_price_tick_lookup_caido_deja_linea(http, lines, monkeypatch):
+    from unittest.mock import AsyncMock
+    from steam import price_capture
+    from steam.errors import SourceUnavailable
+    monkeypatch.setattr(price_capture.repo, "count_captured_on", AsyncMock(return_value=0))
+    monkeypatch.setattr(price_capture.repo, "count_pending", AsyncMock(return_value=1))
+    monkeypatch.setattr(price_capture.repo, "fetch_tracked", AsyncMock(return_value=["AK"]))
+    monkeypatch.setattr(price_capture.repo, "upsert_prices", AsyncMock())
+    monkeypatch.setattr(price_capture.repo, "mark_captured", AsyncMock())
+    monkeypatch.setattr(price_capture, "_lookup_item", AsyncMock(side_effect=SourceUnavailable("down")))
+    assert (await price_capture.capture(http))["errors"] == 1
+    assert lines("price_capture") == [("unavailable", "empty")]
 
 
 # ── Rankings ──────────────────────────────────────────────────────────────────
