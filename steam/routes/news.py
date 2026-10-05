@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request
 
 from auth.service import _get_client_ip, _rate_limit
 from ..errors.handling import SOURCE_ERRORS, http_error_for
-from ..services import news_service as news_service
+from ..services import news_service
 
 router = APIRouter()
 

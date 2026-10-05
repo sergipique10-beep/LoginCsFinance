@@ -16,9 +16,9 @@ from .. import inventory_snapshot_repo
 from ..domain.models import Fetched
 from ..errors.handling import SOURCE_ERRORS, http_error_for, log_degraded
 from ..errors import UPSTREAM_QUOTA_DETAIL, QuotaExhausted, RateLimited, StorageError, UpstreamError
-from ..services import inventory_service as inventory_service
+from ..services import inventory_service
 from ..services import pricing_service
-from ..services import profile_service as profile_service
+from ..services import profile_service
 
 
 # SEC-16: espera máxima por un hueco en `_history_limiter` (como el chat en PERF-03).

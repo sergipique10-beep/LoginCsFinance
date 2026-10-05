@@ -55,6 +55,7 @@ files:
   - steam/routes/market.py
   - steam/routes/news.py
   - steam/services/__init__.py
+  - steam/services/cap_history_service.py
   - steam/services/catalog_service.py
   - steam/services/fx_service.py
   - steam/services/inventory_service.py
@@ -63,6 +64,7 @@ files:
   - steam/services/pricing_service.py
   - steam/services/profile_service.py
   - steam/services/providers_service.py
+  - steam/services/rankings_service.py
   - steam/utils/__init__.py
   - steam/utils/urls.py
 ---

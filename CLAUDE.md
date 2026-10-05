@@ -171,7 +171,7 @@ LoginCsFinance/
     mappers/        # Mappers puros: modelo interno → TypedDict de salida (sin HTTP, caché, fallback):
       item_mapper.py  #   _map_item(SteamItem), _inline_delta, _safe_delta, _delta_from_history,
                     #   _resolve_phase (la imagen la normaliza domain/normalizers)
-      movers_mapper.py #  _map_topmovers_item(TopMover), _build_movers_from_topmovers, _MOVERS_LIMIT
+      movers_mapper.py #  _map_topmovers_item(TopMover), _MOVERS_LIMIT (el respaldo hot/cold está en rankings_service)
       market_index_mapper.py # _map_market_index_point(IndexPoint)
       news_mapper.py  #   _map_news_item(NewsEntry) (color vía rules.news_category),
                     #   _clean_news_content (lo importan rag/ y notifications/; a utils/ en la Fase 6)
@@ -209,13 +209,17 @@ LoginCsFinance/
                     #   enrich_market_prices (CSFloat/Buff), get_item_history (/item/history)
       providers_service.py #   fetch_market_providers (+ respaldo estático)
       fx_service.py   #   fetch_fx_rate (USD→EUR, stale si cae frankfurter)
-      market_service.py #   compute_movers / compute_trending (/items + fallback de topmovers;
-                    #   orden y reparto con rules.turnover / rules.diversificar),
-                    #   search_items (la búsqueda de /items para rutas y chat), search_market,
-                    #   get_item_full, get_market_index, get_market_prices, get_cap_history,
-                    #   ticks (capture_cap_snapshot, capture_trending, enrich_trending,
-                    #   capture_movers). Constantes: _MOVERS_SELECT, _TRENDING_CAPTURE_LIMIT,
-                    #   _ENRICH_BATCH, _TRENDING_STALE_DAYS, _CAP_TF_MAP, _CAP_BUCKET_MAP
+      market_service.py #   search_items (la búsqueda de /items para rutas y chat), search_cache_key,
+                    #   search_market, get_item_full, get_market_index, get_market_prices,
+                    #   _stale_or_raise. Partido en CLEAN-18: rankings y cap-history fuera
+      rankings_service.py # compute_movers / compute_trending (/items + fallback de topmovers,
+                    #   _build_movers_from_topmovers; orden y reparto con rules.turnover /
+                    #   rules.diversificar), get_movers / get_trending (snapshots), ticks
+                    #   capture_trending, enrich_trending, capture_movers. Constantes:
+                    #   _MOVERS_SELECT (con `prices`, load-bearing), _TRENDING_CAPTURE_LIMIT,
+                    #   _ENRICH_BATCH, _TRENDING_STALE_DAYS, _ITEMS_FETCH_MAX
+      cap_history_service.py # capture_cap_snapshot (/internal/cap-tick, línea [steam-cache]),
+                    #   get_cap_history + _downsample, _CAP_TF_MAP, _CAP_BUCKET_MAP, _CAP_FIELDS
       inventory_service.py #   fetch_fresh_inventory(track=): la ruta registra en tracked_skins, el chat no
       profile_service.py #   get_profile (/me)
       news_service.py #   get_cs2_news (/news/cs2, og:image, filtro UX-05)

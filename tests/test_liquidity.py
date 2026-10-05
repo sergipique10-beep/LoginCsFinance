@@ -8,7 +8,7 @@ from steam.domain.models import TopMover
 from steam.domain.liquidity import compute_liquidity as _compute_liquidity
 from steam.mappers.item_mapper import _map_item
 from steam.mappers.movers_mapper import _map_topmovers_item
-from steam.services.market_service import _MOVERS_SELECT
+from steam.services.rankings_service import _MOVERS_SELECT
 
 
 def compute_liquidity(raw: dict):

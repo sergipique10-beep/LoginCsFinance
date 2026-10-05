@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from steam.services import pricing_service
-from steam.services import providers_service as providers_service
+from steam.services import providers_service
 from steam.domain import catalog
 from stores import (
     LOOKUP_FAIL_TTL, MARKET_LOOKUP_CACHE_TTL, MARKET_PROVIDERS_CACHE_TTL,

@@ -11,8 +11,8 @@ import httpx
 import pytest
 
 from steam.errors import handling as degraded
-from steam.services import catalog_service, market_service as market_service, pricing_service
-from steam.services import providers_service as providers_service
+from steam.services import catalog_service, pricing_service, rankings_service
+from steam.services import providers_service
 from stores import _item_history_cache, _item_price_cache, _market_lookup_cache, _search_cache
 from tests.test_steam_contract_market import NAME, RAW
 from tools.inventory_tools import _ver_inventario
@@ -168,7 +168,7 @@ async def test_price_tick_lookup_caido_deja_linea(http, lines, monkeypatch):
 # ── Rankings ──────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("compute, flow", [
-    (market_service.compute_movers, "movers"), (market_service.compute_trending, "trending"),
+    (rankings_service.compute_movers, "movers"), (rankings_service.compute_trending, "trending"),
 ])
 async def test_rankings_caen_a_topmovers(steam_api, http, lines, compute, flow):
     steam_api.on("api/items", status=500)
@@ -178,7 +178,7 @@ async def test_rankings_caen_a_topmovers(steam_api, http, lines, compute, flow):
 
 
 @pytest.mark.parametrize("compute, flow", [
-    (market_service.compute_movers, "movers"), (market_service.compute_trending, "trending"),
+    (rankings_service.compute_movers, "movers"), (rankings_service.compute_trending, "trending"),
 ])
 async def test_rankings_sin_ninguna_fuente(steam_api, http, lines, compute, flow):
     steam_api.on("api/items", exc=httpx.ReadTimeout("t"))
@@ -194,7 +194,7 @@ async def test_topmovers_caducado_no_se_sirve(steam_api, http, lines):
     _topmovers_raw_cache.put("latest", ((), ()), now=-1e9)
     steam_api.on("api/items", status=500)
     steam_api.on("market-index/cs2", exc=httpx.ConnectError("x"))
-    fetched = await market_service.compute_movers(http)
+    fetched = await rankings_service.compute_movers(http)
     assert (fetched.status, fetched.reason) == ("error", "topmovers_stale")
     assert lines("topmovers") == [("unavailable", "empty")]
     assert lines("movers") == [("topmovers_stale", "error")]
