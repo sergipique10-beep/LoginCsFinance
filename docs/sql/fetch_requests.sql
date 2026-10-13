@@ -1,5 +1,5 @@
 -- Cola de descargas que Render pide al worker del VPS (COST-07) — correr en el SQL editor del
--- proyecto Supabase `cs-finance`. Idempotente.
+-- proyecto Supabase `cs-finance`. Idempotente. Aplicado en `cs-finance` el 2026-10-13 (migración cost07_fetch_requests).
 --
 -- Render inserta (kind, steam_id, prio); el worker la lee cada 3 s (ingress), la pasa a
 -- `queued`, descarga y la cierra en `done` o `error` (`error` = private | rate_limit |

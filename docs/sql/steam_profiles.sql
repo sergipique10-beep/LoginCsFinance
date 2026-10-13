@@ -1,5 +1,5 @@
 -- Perfil público de Steam por usuario (COST-07), lo escribe el worker con GetPlayerSummaries.
--- Correr en el SQL editor del proyecto Supabase `cs-finance`. Idempotente.
+-- Correr en el SQL editor del proyecto Supabase `cs-finance`. Idempotente. Aplicado en `cs-finance` el 2026-10-13 (migración cost07_steam_profiles).
 -- Tabla SOMBRA hasta el corte: Render solo la lee con PROFILE_SOURCE=own.
 -- Dato personal: RLS sin políticas; se borra con la cuenta (DELETE /me).
 create table if not exists public.steam_profiles (
