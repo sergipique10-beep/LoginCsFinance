@@ -62,9 +62,12 @@ services:
       retries: 5
     logging: *logging
 
-  worker:
-    build: ./worker
-    profiles: ["worker"]          # sin código hasta COST-02: `--profile worker` para levantarlo
+  worker: &worker
+    build:
+      context: ..
+      dockerfile: deploy/worker/Dockerfile
+    image: csfinance-worker:latest
+    command: ["worker"]
     restart: unless-stopped
     user: "10001:10001"
     read_only: true
@@ -75,11 +78,17 @@ services:
     environment:
       VALKEY_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
       PG_DSN: postgresql://worker:${PG_WORKER_PASSWORD}@timescaledb:5432/csfinance
+      KUMA_URL: http://uptime-kuma:3001
     depends_on:
       valkey: { condition: service_healthy }
       timescaledb: { condition: service_healthy }
     networks: [internal, egress]
     logging: *logging
+
+  # Exactamente UNO: dos scheduler encolarían cada job dos veces. No escalar.
+  scheduler:
+    <<: *worker
+    command: ["scheduler"]
 
   uptime-kuma:
     image: louislam/uptime-kuma:1

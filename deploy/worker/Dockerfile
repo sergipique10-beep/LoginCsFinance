@@ -1,12 +1,14 @@
-# Imagen del worker (COST-01). El código y su arranque llegan en COST-02: hasta entonces el
-# servicio vive tras el perfil `worker` de compose.yml y no se levanta con un `up` normal.
+# Imagen del worker del VPS (COST-01/02). Contexto de build = raíz del repo (compose.yml),
+# pero solo entra `worker/`: el backend de Render no viaja en esta imagen.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin worker
 WORKDIR /app
-COPY requirements-worker.txt ./
-RUN pip install -r requirements-worker.txt
-COPY --chown=worker:worker . .
+COPY deploy/worker/requirements-worker.txt ./
+RUN pip install --require-hashes -r requirements-worker.txt
+COPY --chown=worker:worker worker ./worker
 USER 10001
-CMD ["python", "-c", "print('worker: sin código hasta COST-02')"]
+# `worker` o `scheduler` (worker/main.py); compose.yml fija cuál en cada servicio.
+ENTRYPOINT ["python", "-m", "worker.main"]
+CMD ["worker"]
