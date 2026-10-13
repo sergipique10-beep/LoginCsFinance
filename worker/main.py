@@ -12,14 +12,24 @@ COMMANDS = {
 }
 
 
+# Proceso propio, sin Taskiq: la cola de inventarios (worker/jobs/inventory.py). UNO por despliegue.
+INVENTORY = "inventory"
+
+
 def argv_for(mode: str) -> list[str]:
     if mode not in COMMANDS:
-        raise SystemExit(f"uso: python -m worker.main {{{'|'.join(COMMANDS)}}}")
+        raise SystemExit(f"uso: python -m worker.main {{{'|'.join([*COMMANDS, INVENTORY])}}}")
     return COMMANDS[mode]
 
 
 def main(args: list[str] | None = None) -> None:
     args = sys.argv[1:] if args is None else args
+    if args and args[0] == INVENTORY:
+        import asyncio
+
+        from worker.jobs import inventory
+        asyncio.run(inventory.main())
+        return
     argv = argv_for(args[0] if args else "")
     os.execvp(argv[0], argv)  # noqa: S606 — argv fijo de esta tabla, sin shell ni entrada externa
 

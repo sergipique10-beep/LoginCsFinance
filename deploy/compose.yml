@@ -90,6 +90,11 @@ services:
     <<: *worker
     command: ["scheduler"]
 
+  # Cola de inventarios y perfiles (COST-07): UNA corutina descargando; el ritmo lo pone el gate.
+  inventory:
+    <<: *worker
+    command: ["inventory"]
+
   uptime-kuma:
     image: louislam/uptime-kuma:1
     restart: unless-stopped
