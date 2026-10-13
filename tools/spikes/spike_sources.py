@@ -6,7 +6,7 @@ Bloques (todos por defecto):
   skinport    /v1/items y /v1/sales/history con Accept-Encoding: br — tamaño y cobertura
   marketcsgo  prices/USD.json — tamaño y cobertura
   csgotrader  buff163.json — tamaño, cobertura y MONEDA (3 ítems frente a priceoverview USD)
-  players     GetPlayerSummaries con hasta 100 ids (STEAM_VALVE_API_KEY, --ids fichero)
+  players     GetPlayerSummaries con hasta 100 ids (STEAM_WEB_API_KEY, --ids fichero)
   keyed       CSFloat (CSFLOAT_API_KEY) y Waxpeer (WAXPEER_API_KEY): 10 llamadas, cabeceras
   infra       Hetzner GET /v1/pricing (HCLOUD_TOKEN) — precio de una IPv4 primaria; AAAA de Steam
 
@@ -89,9 +89,9 @@ def csgotrader(client, rec, cat):
 
 
 def players(client, rec, ids_file):
-    key = os.environ.get("STEAM_VALVE_API_KEY")
+    key = os.environ.get("STEAM_WEB_API_KEY")
     if not key or not ids_file:
-        return rec("players", skipped="falta STEAM_VALVE_API_KEY o --ids")
+        return rec("players", skipped="falta STEAM_WEB_API_KEY o --ids")
     with open(ids_file, encoding="utf-8") as f:
         ids = [ln.strip() for ln in f if ln.strip()][:100]
     r = client.get("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",

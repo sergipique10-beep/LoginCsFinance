@@ -23,7 +23,7 @@ aplicación; los resultados viven en el issue COST-00 de Plane, no aquí.
 git clone … && cd LoginCsFinance && python3 -m venv venv
 venv/bin/pip install httpx brotli          # brotli: Skinport exige Accept-Encoding: br
 # 1) fuentes, claves e infra (~2 min). Las claves solo se leen del entorno.
-export STEAM_VALVE_API_KEY=…  CSFLOAT_API_KEY=…  WAXPEER_API_KEY=…  HCLOUD_TOKEN=…
+export STEAM_WEB_API_KEY=…  CSFLOAT_API_KEY=…  WAXPEER_API_KEY=…  HCLOUD_TOKEN=…
 venv/bin/python -m tools.spikes.spike_sources --ids ids.txt      # ids.txt: hasta 100 SteamID64
 # 2) inventario: cobertura + ritmo (puede tardar horas si hay bloqueo; usar tmux)
 venv/bin/python -m tools.spikes.spike_inventory <sid1> <sid2> <sid_con_2000+_items>
