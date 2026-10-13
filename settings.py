@@ -179,3 +179,15 @@ INVENTORY_429_BACKOFF_CAP = float(os.getenv("INVENTORY_429_BACKOFF_CAP", "120"))
 # Tope de alertas activas por usuario: acota la cuota que un solo usuario
 # puede consumir y el tamaño de la rueda.
 ALERTS_MAX_PER_USER = int(os.getenv("ALERTS_MAX_PER_USER", "20"))
+
+# ── COST-07: inventario y perfil desde el worker del VPS ─────────────────────
+# steamwebapi (por defecto, producción de hoy) | shadow (sirve steamwebapi y encola una
+# petición de fondo para que el worker rellene la tabla sombra y comparar) | own (sirve lo
+# del worker; solo tras el corte, COST-06).
+INVENTORY_SOURCE = os.getenv("INVENTORY_SOURCE", "steamwebapi").strip().lower()
+PROFILE_SOURCE = os.getenv("PROFILE_SOURCE", "steamwebapi").strip().lower()
+OWN_INVENTORY_TABLE = os.getenv("OWN_INVENTORY_TABLE", "inventory_snapshots_shadow")
+MARKET_CURRENT_TABLE = os.getenv("MARKET_CURRENT_TABLE", "market_current")
+INVENTORY_WAIT_S = float(os.getenv("INVENTORY_WAIT_S", "25"))   # long-poll de GET /inventory
+PROFILE_WAIT_S = float(os.getenv("PROFILE_WAIT_S", "8"))         # long-poll de GET /me
+OWN_FRESH_H = float(os.getenv("OWN_FRESH_H", "23"))              # snapshot más nuevo que esto = fresco

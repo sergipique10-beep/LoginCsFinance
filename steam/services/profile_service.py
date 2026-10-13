@@ -3,17 +3,24 @@ import time
 
 import httpx
 
+import settings
+
 from steam.cache.user_cache import _profile_cache
 from steam.adapters.steam_adapter import adapt_profile
 from steam.api import steam_client
 from steam.domain.models import Fetched
 from steam.errors.handling import degraded
 from steam.mappers.profile_mapper import _map_profile
+from steam.services import own_inventory_service
 
 
 async def get_profile(client: httpx.AsyncClient, steam_id: str) -> Fetched[dict]:
     """`ok` con el perfil; `error` (`reason="empty_body"`) con los campos en blanco si
     steamwebapi respondió 200 sin perfil. Los errores de la fuente suben tipados."""
+    if settings.PROFILE_SOURCE == "own":   # COST-07: GetPlayerSummaries vía el worker
+        return await own_inventory_service.get_profile(steam_id)
+    if settings.PROFILE_SOURCE == "shadow":
+        await own_inventory_service.enqueue_shadow(steam_id, "profile")
     now = time.monotonic()
     profile = _profile_cache.fresh(steam_id, now)
     if profile is not None:
