@@ -34,3 +34,7 @@ async def run_noop(state: Any) -> dict[str, Any]:
 @broker.task(task_name="noop", schedule=[{"cron": "* * * * *"}])
 async def noop(context: Annotated[Context, TaskiqDepends()]) -> dict[str, Any]:
     return await run_noop(context.state)
+
+
+# Registra los jobs de los módulos hermanos en el broker (la CLI de Taskiq importa este paquete).
+from worker.jobs import market_sync  # noqa: E402, F401

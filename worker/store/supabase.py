@@ -19,3 +19,12 @@ async def select_one(sb: Any) -> bool:
         return sb.table("market_cap_history").select("ts").limit(1).execute()
     res = await asyncio.to_thread(_q)
     return isinstance(res.data, list)
+
+
+async def upsert(sb: Any, table: str, rows: list[dict[str, Any]], on_conflict: str, batch: int = 500) -> int:
+    """Upsert por lotes (PostgREST corta peticiones grandes). Devuelve filas enviadas."""
+    def _q(chunk: list[dict[str, Any]]) -> Any:
+        return sb.table(table).upsert(chunk, on_conflict=on_conflict).execute()
+    for i in range(0, len(rows), batch):
+        await asyncio.to_thread(_q, rows[i:i + batch])
+    return len(rows)

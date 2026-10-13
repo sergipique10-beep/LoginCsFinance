@@ -28,6 +28,12 @@ DEFAULT_LIMITS: dict[str, HostLimit] = {
     "steamcommunity.com": HostLimit(rate=10, per_s=60, burst=2, reset_timeout=900, steam=True),
     "api.steampowered.com": HostLimit(rate=60, per_s=60, reset_timeout=900, steam=True),
     "api.skinport.com": HostLimit(rate=8, per_s=300),
+    # Feeds de volcado (COST-03): una descarga cada 15–60 min. Tope conservador, no medido:
+    # basta con que un bucle roto no pueda martillear a la fuente.
+    "market.csgo.com": HostLimit(rate=4, per_s=60, jitter=(0, 1)),
+    "prices.csgotrader.app": HostLimit(rate=4, per_s=60, jitter=(0, 1)),
+    "raw.githubusercontent.com": HostLimit(rate=10, per_s=60, jitter=(0, 0)),
+    "api.frankfurter.app": HostLimit(rate=4, per_s=60, jitter=(0, 0)),
 }
 
 # Cooldown de un host tras un 429 de Steam: 1 h al primero, ×2 por cada 429 dentro, tope 6 h.
@@ -60,6 +66,11 @@ PG_DSN = os.environ.get("PG_DSN", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 KUMA_URL = os.environ.get("KUMA_URL", "http://uptime-kuma:3001")
+# Moneda de buff163.json de csgotrader: USD o CNY. La resuelve el spike COST-00; vacía = el job
+# de csgotrader no corre (no se supone una moneda).
+BUFF_CURRENCY = os.environ.get("BUFF_CURRENCY", "").strip().upper()
+# Tabla de Supabase donde compute_reference publica el precio de referencia (sombra hasta COST-06).
+MARKET_CURRENT_TABLE = os.environ.get("MARKET_CURRENT_TABLE", "market_current")
 # Valores que nunca pueden salir en un log (worker/logs.py los enmascara).
 SECRET_ENV = ("STEAM_WEB_API_KEY", "CSFLOAT_API_KEY", "WAXPEER_API_KEY", "SUPABASE_SERVICE_KEY",
               "VALKEY_PASSWORD", "PG_PASSWORD", "PG_WORKER_PASSWORD")
