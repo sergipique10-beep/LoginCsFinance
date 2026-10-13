@@ -4,7 +4,23 @@ files:
   - worker/settings.py
   - worker/logs.py
   - worker/broker.py
-  - worker/jobs.py
+  - worker/jobs/__init__.py
+  - worker/jobs/market_sync.py
+  - worker/models.py
+  - worker/pricing/reference.py
+  - worker/adapters/_common.py
+  - worker/adapters/skinport.py
+  - worker/adapters/csgotm.py
+  - worker/adapters/csgotrader.py
+  - worker/adapters/catalog.py
+  - worker/adapters/fx.py
+  - worker/sources/_fetch.py
+  - worker/sources/skinport.py
+  - worker/sources/csgotm.py
+  - worker/sources/csgotrader.py
+  - worker/sources/catalog.py
+  - worker/sources/fx.py
+  - worker/store/market.py
   - worker/main.py
   - worker/health.py
   - worker/net/gate.py
@@ -26,7 +42,7 @@ nada del backend** (la imagen solo lleva `worker/`) y el backend no importa nada
 | Módulo | Qué hace |
 |---|---|
 | `broker.py` | Taskiq: `RedisStreamBroker` (streams + consumer group + ack) y `TaskiqScheduler` con `LabelScheduleSource`. Recursos por proceso en `WORKER_STARTUP` (`state.http`, `.redis`, `.gate`, `.breakers`, `.pg`, `.supabase`) |
-| `jobs.py` | Los jobs. Hoy solo `noop` (cada minuto: `SELECT 1` en Supabase y en Timescale + push a Kuma) |
+| `jobs/` | `noop` (cada minuto: `SELECT 1` en Supabase y Timescale + push a Kuma) y `market_sync.py` (abajo). `jobs/__init__.py` importa los módulos hermanos para registrarlos |
 | `main.py` | `python -m worker.main worker\|scheduler` → CLI de Taskiq. **Un único `scheduler`** |
 | `net/gate.py` | GCRA en Valkey por host (`rl:{host}`), jitter, cooldown tras 429 (`cool:{host}`: 1 h, ×2, tope 6 h) y presupuestos diarios (`budget:{kind}:{yyyymmdd}`) |
 | `net/breaker.py` | pybreaker por host con estado en Valkey (`cb:{host}`): 5 fallos → abierto 300 s (Steam 900). Logs `[breaker]` |
@@ -34,6 +50,32 @@ nada del backend** (la imagen solo lleva `worker/`) y el backend no importa nada
 | `store/` | Clientes de Valkey (async + sync, reconectan con backoff), Timescale (asyncpg) y Supabase (service_role) |
 | `health.py` | Push a Uptime Kuma al final de cada job (`KUMA_PUSH_TOKENS=job=token,…`) |
 | `logs.py` | `SecretFilter`: ningún secreto (`STEAM_WEB_API_KEY` y demás de `settings.SECRET_ENV`) ni `key=` de una URL en claro |
+
+## market-sync (COST-03)
+
+Fuentes gratuitas → `market_quotes` (Timescale) → precio de referencia → `market_ref` y Supabase
+`market_current` (DDL `docs/sql/market_current.sql`, **tabla sombra** hasta COST-06).
+
+| Job | Cron (UTC) | Fuente | `source` en market_quotes |
+|---|---|---|---|
+| `skinport_items` | `*/5` | Skinport `/v1/items` (br) | `skinport` (min_price, quantity) |
+| `skinport_sales` | `*/15` | Skinport `/v1/sales/history` (br) | `skinport_sales` (mediana 24 h o 7 d, ventas 24 h) |
+| `csgotm_prices` | `*/15` | market.csgo `prices/USD.json` | `marketcsgo` |
+| `csgotrader_buff` | `:07` | csgotrader `buff163.json`, If-None-Match | `buff` — **solo si `BUFF_CURRENCY` es USD o CNY** |
+| `fx_daily` | `06:05` | frankfurter USD→CNY | Valkey `fx:usd_per_cny` |
+| `catalog_weekly` | lun `04:13` | ByMykel | `catalog_items` |
+| `compute_reference` | `2,17,32,47` | — | `market_ref` + upsert de filas cambiadas a `MARKET_CURRENT_TABLE` |
+
+- `pricing/reference.py` (puro): `w = log1p(qty) × 0.5^(edad_h/6) × k`, fuera lo que cae fuera de
+  `[m/2, 2m]` (m = mediana simple), mediana ponderada. `ref_confidence` = fuentes que sobreviven
+  (tope 3). `qty` = ventas, si no ofertas, mínimo 1. `k` por fuente en `PRICE_K` (JSON), 1,0 por
+  defecto hasta calibrarlos en la convivencia.
+- «Solo filas cambiadas»: sha256 de la fila **sin marcas de tiempo** (si no, todas cambiarían en
+  cada tick) en el hash de Valkey `mc:hash`. El log del job da `changed_pct` (< 20 % esperado).
+- Cada job deja su fila en `source_health` (`consecutive_failures`) y empuja a Kuma con su nombre.
+- La moneda de Buff no se supone: sin `BUFF_CURRENCY` el job falla visible («cifra de COST-00»).
+- Skinport: pedir confirmación escrita de redistribución antes del corte; `market_current` no
+  publica el feed crudo, solo la referencia y el resumen por fuente.
 
 ## Reglas
 
