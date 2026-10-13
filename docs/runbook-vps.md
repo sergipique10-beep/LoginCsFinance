@@ -1,0 +1,90 @@
+# Runbook del VPS (worker de precios)
+
+Esqueleto de COST-01; COST-08 lo completa (alertas, `market_age_min`, incidencias).
+El stack está en `deploy/compose.yml`: Valkey, TimescaleDB, worker (desde COST-02),
+Uptime Kuma y **Nginx** como reverse proxy (no Caddy).
+
+## Principios
+
+- **Cero puertos públicos nuevos.** Solo Nginx publica, y solo en la IP de Tailscale.
+  Valkey y Postgres viven en la red `internal` de Compose (sin salida a internet).
+- **Secretos fuera del repo**: `/opt/csfinance/.env`, `chmod 600`, dueño root. Plantilla con
+  los nombres en `deploy/.env.example`. La service key de Supabase solo existe en Render y aquí.
+- No redimensionar el VPS (gama CX/CAX no disponible y con subidas en 2026).
+
+## Estructura en disco
+
+```
+/opt/csfinance/
+  .env            chmod 600
+  app/            clon de LoginCsFinance (deploy/ dentro)
+  tls/            <TS_HOSTNAME>.crt / .key de `tailscale cert`
+  backups/        pg_dump diarios (7 días) + backup.log
+```
+
+## Instalación (una vez)
+
+1. Tailscale: `tailscale up`; anotar `tailscale ip -4` (→ `TAILSCALE_IP`) y el nombre MagicDNS
+   (→ `TS_HOSTNAME`). Activar HTTPS en el tailnet y emitir el certificado:
+   `tailscale cert --cert-file /opt/csfinance/tls/$TS_HOSTNAME.crt --key-file /opt/csfinance/tls/$TS_HOSTNAME.key $TS_HOSTNAME`.
+   Caduca a los 90 días: cron mensual que lo reemite y hace `docker compose restart nginx`.
+2. `cp deploy/.env.example /opt/csfinance/.env && chmod 600 /opt/csfinance/.env` y rellenar.
+3. Arrancar: `docker compose --env-file /opt/csfinance/.env -f deploy/compose.yml up -d`.
+   El primer arranque de Timescale crea el rol `worker` y el esquema (`deploy/vps/initdb/`).
+4. Backups: cron de root `15 3 * * * /opt/csfinance/app/deploy/vps/backup.sh >> /opt/csfinance/backups/backup.log 2>&1`.
+
+### Checklist ufw / Tailscale
+
+- [ ] `ufw default deny incoming` y `ufw default allow outgoing`.
+- [ ] `ufw allow in on tailscale0` (todo lo del tailnet) y SSH **solo** por Tailscale
+      (`ufw delete allow OpenSSH` cuando el acceso por tailnet esté probado).
+- [ ] `ufw allow 41641/udp` (WireGuard directo de Tailscale; sin él va por DERP, más lento).
+- [ ] ⚠️ Docker se salta ufw con los `ports:` publicados: por eso el único publish está atado a
+      `${TAILSCALE_IP}` y nunca a todas las interfaces. Revisar `docker ps` tras cada cambio.
+- [ ] Desde fuera del tailnet: `nmap -Pn -p- <IP pública>` → solo lo que ya había (SSH si sigue).
+
+## Verificación (criterio de COST-01)
+
+```bash
+C="docker compose --env-file /opt/csfinance/.env -f deploy/compose.yml"
+$C ps                                                    # todo healthy
+docker ps --format '{{.Names}} {{.Ports}}'                # solo nginx con <TAILSCALE_IP>:443
+$C exec valkey sh -c 'REDISCLI_AUTH=$VALKEY_PASSWORD valkey-cli ping'          # PONG
+$C exec timescaledb psql -U postgres -d csfinance -c \
+  "select hypertable_name from timescaledb_information.hypertables"             # market_quotes, market_ref
+curl -s https://$TS_HOSTNAME/healthz                     # ok (desde el tailnet)
+/opt/csfinance/app/deploy/vps/backup.sh                  # backup ok …
+```
+
+Probado en local el 2026-10-13 (Docker, `TAILSCALE_IP=127.0.0.1`, certificado autofirmado):
+cuatro servicios healthy, 2 hypertables + 2 agregados continuos + 8 políticas (columnstore,
+retención, refresco), `worker` sin permisos en `public` ni en la BD `postgres`, `FLUSHALL`
+deshabilitado, `noeviction`, Valkey sin contraseña → `NOAUTH`, Nginx sirve `/healthz` y Kuma,
+rechaza el handshake TLS con otro Host, y un dump se restaura entero. **Falta en el VPS real:**
+el `nmap` desde fuera del tailnet y el acceso por la IP de Tailscale.
+
+## Esquema
+
+`deploy/vps/schema.sql` es idempotente. Para aplicar un cambio sin recrear el volumen:
+
+```bash
+$C exec -T timescaledb psql -U postgres -d csfinance -c "set role worker" -f /schema/schema.sql
+```
+
+## Restaurar un backup
+
+El `pg_dump` avisa de FK circulares en el catálogo de Timescale: es normal, pero la restauración
+tiene que ir entre `timescaledb_pre_restore()` y `timescaledb_post_restore()`:
+
+```bash
+$C exec -T timescaledb createdb -U postgres restaurada
+$C exec -T timescaledb psql -U postgres -d restaurada -c "create extension timescaledb; select timescaledb_pre_restore();"
+$C exec -T timescaledb pg_restore -U postgres -d restaurada < /opt/csfinance/backups/csfinance-AAAA-MM-DD.dump
+$C exec -T timescaledb psql -U postgres -d restaurada -c "select timescaledb_post_restore();"
+```
+
+## Operación
+
+- Logs: `$C logs -f --tail=200 <servicio>` (rotados a 3 × 10 MB por servicio).
+- Actualizar: `git -C /opt/csfinance/app pull && $C up -d --build`.
+- Uptime Kuma: `https://$TS_HOSTNAME/` desde el tailnet. Los monitores llegan en COST-08.

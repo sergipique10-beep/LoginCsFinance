@@ -1,0 +1,2 @@
+# Dependencias del worker. COST-02 añade taskiq y el resto; versiones fijadas.
+httpx==0.28.1

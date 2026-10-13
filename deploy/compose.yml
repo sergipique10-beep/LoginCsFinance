@@ -1,0 +1,111 @@
+# Stack del worker en el VPS (COST-01). Se despliega en /opt/csfinance:
+#   docker compose --env-file /opt/csfinance/.env -f deploy/compose.yml up -d
+#
+# Reglas que no se negocian:
+# - Ningún `ports:` público. El único publish es Nginx, atado a ${TAILSCALE_IP}.
+# - Valkey y Timescale solo en la red `internal` (internal: true, sin salida a internet).
+# - Secretos solo en /opt/csfinance/.env (chmod 600); aquí, solo nombres de variable.
+name: csfinance
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+networks:
+  internal:
+    internal: true
+  egress: {}
+
+volumes:
+  valkey-data: {}
+  pg-data: {}
+  kuma-data: {}
+
+services:
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "exec valkey-server /etc/valkey/valkey.conf --requirepass \"$$VALKEY_PASSWORD\""]
+    environment:
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD:?falta VALKEY_PASSWORD}
+    volumes:
+      - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
+      - valkey-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$VALKEY_PASSWORD\" valkey-cli ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: csfinance
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?falta PG_PASSWORD}
+      PG_WORKER_PASSWORD: ${PG_WORKER_PASSWORD:?falta PG_WORKER_PASSWORD}
+      # El VPS es pequeño: que timescaledb-tune no reparta como si tuviera la máquina entera.
+      TS_TUNE_MEMORY: ${PG_TUNE_MEMORY:-1GB}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./vps/initdb:/docker-entrypoint-initdb.d:ro
+      - ./vps/schema.sql:/schema/schema.sql:ro
+    networks: [internal]
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d csfinance"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  worker:
+    build: ./worker
+    profiles: ["worker"]          # sin código hasta COST-02: `--profile worker` para levantarlo
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    env_file: ${CSFINANCE_ENV_FILE:-/opt/csfinance/.env}
+    environment:
+      VALKEY_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
+      PG_DSN: postgresql://worker:${PG_WORKER_PASSWORD}@timescaledb:5432/csfinance
+    depends_on:
+      valkey: { condition: service_healthy }
+      timescaledb: { condition: service_healthy }
+    networks: [internal, egress]
+    logging: *logging
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    restart: unless-stopped
+    volumes:
+      - kuma-data:/app/data
+    networks: [internal, egress]  # internal: sondear valkey/timescale; egress: Render, Steam…
+    logging: *logging
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    environment:
+      TS_HOSTNAME: ${TS_HOSTNAME:?falta TS_HOSTNAME (p. ej. vps.tailnet-xxxx.ts.net)}
+    ports:
+      # Único puerto publicado del stack, y solo en la IP de Tailscale (nunca 0.0.0.0).
+      - "${TAILSCALE_IP:?falta TAILSCALE_IP}:443:443"
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ${TLS_DIR:-/opt/csfinance/tls}:/etc/nginx/tls:ro
+    depends_on: [uptime-kuma]
+    networks: [egress]
+    healthcheck:
+      # nginx -t: config y certificados cargan. La sonda externa (por la IP Tailscale) es de Kuma.
+      test: ["CMD", "nginx", "-t", "-q"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    logging: *logging
