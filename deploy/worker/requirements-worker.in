@@ -1,0 +1,11 @@
+# Dependencias directas del worker del VPS (COST-02). `requirements-worker.txt` se genera
+# desde aquí CON HASHES (pip-compile --generate-hashes, ver docs/features/worker.md) y es lo
+# que instala la imagen con --require-hashes. Mismas versiones que el backend donde coinciden.
+taskiq==0.13.0
+taskiq-redis==1.2.4
+redis==8.1.0
+pybreaker==1.4.1
+stamina==26.1.0
+asyncpg==0.32.0
+httpx==0.28.1
+supabase==2.31.0
