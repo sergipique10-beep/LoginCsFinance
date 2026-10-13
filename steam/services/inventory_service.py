@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import httpx
 
 from settings import INVENTORY_429_BACKOFF_BASE, INVENTORY_429_BACKOFF_CAP, INVENTORY_429_MAX_RETRIES
+import settings
 from steam import inventory_snapshot_repo
 from steam.adapters.steam_adapter import adapt_inventory
 from steam.api import steam_client
@@ -21,7 +22,7 @@ from steam.domain.models import Fetched, SkinCard
 from steam.errors import QuotaExhausted, RateLimited, StorageError, UpstreamError
 from steam.errors.handling import SOURCE_ERRORS, log_degraded, reason_of
 from steam.mappers.item_mapper import _map_item
-from steam.services import catalog_service, pricing_service
+from steam.services import catalog_service, own_inventory_service, pricing_service
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -206,6 +207,13 @@ async def get_inventory(client: httpx.AsyncClient, steam_id: str, *,
       `http_41x` (→ `[]`).
     403 y el resto de errores de la fuente suben tal cual para que la ruta los traduzca.
     """
+    # COST-07: con INVENTORY_SOURCE=own lo sirve el worker del VPS; con `shadow` se sirve lo de
+    # siempre y se pide al worker una descarga de fondo para compararla.
+    if settings.INVENTORY_SOURCE == "own":
+        return await own_inventory_service.get_inventory(steam_id, force=force)
+    if settings.INVENTORY_SOURCE == "shadow":
+        await own_inventory_service.enqueue_shadow(steam_id)
+
     now = time.monotonic()
     if not force:
         hit = _inventory_cache.fresh(steam_id, now)

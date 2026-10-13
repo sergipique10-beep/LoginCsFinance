@@ -21,6 +21,12 @@ files:
   - worker/sources/catalog.py
   - worker/sources/fx.py
   - worker/store/market.py
+  - worker/store/inventory.py
+  - worker/jobs/inventory.py
+  - worker/decode/certificate.py
+  - worker/decode/inventory.py
+  - worker/sources/steam_inventory.py
+  - worker/sources/steam_profile.py
   - worker/main.py
   - worker/health.py
   - worker/net/gate.py
@@ -76,6 +82,25 @@ Fuentes gratuitas → `market_quotes` (Timescale) → precio de referencia → `
 - La moneda de Buff no se supone: sin `BUFF_CURRENCY` el job falla visible («cifra de COST-00»).
 - Skinport: pedir confirmación escrita de redistribución antes del corte; `market_current` no
   publica el feed crudo, solo la referencia y el resumen por fuente.
+
+## Inventario y perfil (COST-07)
+
+Proceso aparte (`python -m worker.main inventory`, servicio `inventory` del compose, **uno**):
+
+- Render inserta en Supabase `fetch_requests(kind, steam_id, prio)` (`docs/sql/fetch_requests.sql`).
+- `ingress` (cada 3 s): `pending` → ZSET `inv:q` (score `prio·1e13 + ms`, miembro `{kind}:{steam_id}`,
+  `ZADD LT`: la misma petición repetida se queda con la prioridad más alta) → `queued`.
+- `fetcher` (una corutina): `ZPOPMIN` → candado `inv:inflight:{miembro}` 5 min → descarga → cierra
+  **todas** las peticiones abiertas de ese (kind, steam_id) en `done` o `error` (`private`,
+  `rate_limit`, `http_4xx`, `upstream`). Render decide el status HTTP con ese código.
+- `inventory`: `steamcommunity.com/inventory` (con `Referer`, paginado, por el gate) →
+  `decode/inventory.extract()` (float y patrón de `asset_properties`; fase Doppler del
+  `paintindex` del certificado) → Supabase `INVENTORY_SNAPSHOT_TABLE` (**`inventory_snapshots_shadow`**
+  hasta el corte; assets SIN precio) + VPS `inventory_assets`. Certificados en Valkey
+  `inv:cert:{assetid}` 7 d + `asset_decoded`. Log con `decode_missing_ratio`.
+- `profile`: `GetPlayerSummaries` (`STEAM_WEB_API_KEY`) → Supabase `steam_profiles`.
+- `delete`: borra `inventory_assets` del usuario (Render no llega a la Timescale del VPS).
+- Decodificador (`decode/certificate.py`): lector protobuf mínimo en vez de `econ_pb2.py` generado.
 
 ## Reglas
 

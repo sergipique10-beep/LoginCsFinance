@@ -2,6 +2,8 @@
 feature: steam
 files:
   - steam/cap_history_repo.py
+  - steam/own_source_repo.py
+  - steam/services/own_inventory_service.py
   - steam/adapters/__init__.py
   - steam/adapters/_common.py
   - steam/adapters/buff_adapter.py

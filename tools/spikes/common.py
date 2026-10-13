@@ -4,10 +4,10 @@ Sin red ni ficheros salvo `Recorder`: los scripts `spike_*.py` hacen las peticio
 delegan aquí todo lo que se puede testear (tests/test_spikes_common.py).
 """
 import json
-import struct
 import time
-import zlib
 from pathlib import Path
+
+from worker.decode import certificate
 
 # asset_properties del inventario de Steam (CS2, 2025+). Se casan por id y, si Valve
 # cambia los ids, por nombre: el spike informa de lo que encuentra.
@@ -16,72 +16,15 @@ PROP_WEAR = 2
 PROP_CERTIFICATE = 6
 PROP_NAMES = {PROP_PATTERN: "Pattern Template", PROP_WEAR: "Wear Rating", PROP_CERTIFICATE: "Item Certificate"}
 
-# CEconItemPreviewDataBlock: número de campo → nombre (solo los escalares que usamos).
-_PREVIEW_FIELDS = {1: "accountid", 2: "itemid", 3: "defindex", 4: "paintindex", 5: "rarity",
-                   6: "quality", 7: "paintwear", 8: "paintseed", 9: "killeaterscoretype",
-                   10: "killeatervalue", 14: "origin", 15: "questid", 16: "dropreason"}
-
-
-def _varint(buf, i):
-    shift = result = 0
-    while True:
-        if i >= len(buf):
-            raise ValueError("varint truncado")
-        b = buf[i]
-        i += 1
-        result |= (b & 0x7F) << shift
-        if not b & 0x80:
-            return result, i
-        shift += 7
-
-
-def _parse_proto(buf):
-    """Protobuf mínimo: devuelve {campo: valor} de los varint; salta el resto."""
-    out = {}
-    i = 0
-    while i < len(buf):
-        key, i = _varint(buf, i)
-        field, wire = key >> 3, key & 7
-        if wire == 0:
-            val, i = _varint(buf, i)
-            out[field] = val
-        elif wire == 2:
-            ln, i = _varint(buf, i)
-            i += ln
-        elif wire == 5:
-            out[field] = struct.unpack("<I", buf[i:i + 4])[0]
-            i += 4
-        elif wire == 1:
-            i += 8
-        else:
-            raise ValueError(f"wire type {wire} no soportado")
-    return out
 
 
 def certificate_checksum(proto):
-    """Checksum de 4 bytes que cierra un inspect enmascarado (sobre 0x00 + proto)."""
-    crc = zlib.crc32(b"\x00" + proto)
-    return struct.pack(">I", ((crc & 0xFFFF) ^ (len(proto) * crc)) & 0xFFFFFFFF)
+    return certificate.checksum(proto)
 
 
 def decode_certificate(hex_str):
-    """Decodifica un `Item Certificate` (inspect enmascarado de CS2).
-
-    Formato: byte 0 = clave XOR; tras el XOR, 0x00 + CEconItemPreviewDataBlock + 4 bytes de
-    checksum. `paintwear` llega como uint32 con los bits de un float32.
-    """
-    raw = bytes.fromhex(hex_str.strip())
-    if len(raw) < 6:
-        raise ValueError("certificado demasiado corto")
-    key = raw[0]
-    data = bytes(b ^ key for b in raw)
-    proto, checksum = data[1:-4], data[-4:]
-    fields = _parse_proto(proto)
-    out = {name: fields[n] for n, name in _PREVIEW_FIELDS.items() if n in fields}
-    if "paintwear" in out:
-        out["paintwear"] = struct.unpack("<f", struct.pack("<I", out["paintwear"]))[0]
-    out["checksum_ok"] = checksum == certificate_checksum(proto)
-    return out
+    """El decodificador vive en worker/decode/certificate.py (COST-07); el spike lo reutiliza."""
+    return certificate.decode(hex_str)
 
 
 def asset_props(inv_json):
