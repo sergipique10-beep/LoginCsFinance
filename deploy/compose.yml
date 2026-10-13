@@ -110,7 +110,8 @@ services:
       TS_HOSTNAME: ${TS_HOSTNAME:?falta TS_HOSTNAME (p. ej. vps.tailnet-xxxx.ts.net)}
     ports:
       # Único puerto publicado del stack, y solo en la IP de Tailscale (nunca 0.0.0.0).
-      - "${TAILSCALE_IP:?falta TAILSCALE_IP}:443:443"
+      # NGINX_PORT: otro puerto si el Nginx del host ya ocupa el 443 en todas las interfaces.
+      - "${TAILSCALE_IP:?falta TAILSCALE_IP}:${NGINX_PORT:-443}:443"
     volumes:
       - ./nginx/templates:/etc/nginx/templates:ro
       - ${TLS_DIR:-/opt/csfinance/tls}:/etc/nginx/tls:ro
