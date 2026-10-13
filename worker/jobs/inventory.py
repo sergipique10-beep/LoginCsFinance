@@ -48,6 +48,8 @@ def score(prio: int, created_at: str | None) -> float:
 
 
 async def ingress_once(state: Any) -> int:
+    if state.supabase is None:   # sin SUPABASE_URL/KEY no hay cola que leer (broker.open_resources ya avisa)
+        return 0
     rows = await sb_store.pending_requests(state.supabase)
     rows = [r for r in rows if r.get("kind") in KINDS and r.get("steam_id")]
     for r in rows:

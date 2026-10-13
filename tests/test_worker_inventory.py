@@ -207,6 +207,12 @@ async def test_cola_prioridad_y_dedupe(stores):
     assert order == ["inventory:B", "inventory:A"]            # A subió a prio 0 (ZADD LT) pero es posterior
 
 
+async def test_sin_supabase_no_hay_cola(stores):
+    st = make_state(lambda r: httpx.Response(200))
+    st.supabase = None
+    assert await job.ingress_once(st) == 0 and stores == []
+
+
 async def test_procesa_inventario_con_cache_de_certificados(stores):
     st = make_state(lambda r: httpx.Response(200, json=inventory_payload()))
     await st.redis.zadd(job.QUEUE, {"inventory:765": 1})
