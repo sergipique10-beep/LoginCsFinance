@@ -11,7 +11,9 @@
 --
 -- Datos públicos de mercado, pero solo los escribe el backend: RLS activa sin políticas.
 
-create extension if not exists pg_trgm;
+-- En Supabase las extensiones viven en el esquema `extensions` (el advisor marca las de public).
+create schema if not exists extensions;
+create extension if not exists pg_trgm with schema extensions;
 
 create table if not exists public.market_current (
     market_hash_name text primary key,
@@ -27,7 +29,7 @@ create table if not exists public.market_current (
 
 -- Búsqueda por nombre (sustituye a /market/items?q= de steamwebapi).
 create index if not exists market_current_name_trgm
-    on public.market_current using gin (market_hash_name gin_trgm_ops);
+    on public.market_current using gin (market_hash_name extensions.gin_trgm_ops);
 -- Rankings por turnover (trending/movers, COST-05).
 create index if not exists market_current_turnover
     on public.market_current (turnover_24h desc nulls last);
