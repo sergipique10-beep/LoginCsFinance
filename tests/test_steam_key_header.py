@@ -80,7 +80,8 @@ def test_no_steamwebapi_call_puts_key_in_query():
 def test_solo_el_cliente_conoce_las_urls_de_steamwebapi():
     # CLEAN-06: toda llamada a steamwebapi pasa por steam/api/steam_client.py, que es
     # el único sitio que pone la clave. Una URL fuera de él sería una llamada sin cliente.
-    pattern = re.compile(r"STEAM_WEB_API|STEAM_MARKET_API|steamwebapi\.com")
+    # \b: la constante STEAM_WEB_API sí; STEAM_WEB_API_KEY (clave de Valve del worker, COST-02) no.
+    pattern = re.compile(r"\bSTEAM_WEB_API\b|STEAM_MARKET_API|steamwebapi\.com")
     own = ROOT / "steam" / "api" / "steam_client.py"
     offenders = [
         str(p.relative_to(ROOT))
