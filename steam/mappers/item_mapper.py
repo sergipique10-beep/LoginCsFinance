@@ -63,9 +63,9 @@ def _inline_delta(current: float | None, raw_old: float | None) -> float | None:
 
 def _map_item(item: SteamItem) -> SkinCard:
     """`SteamItem` → tarjeta. La tarjeta es presentación y contrato con el front: los
-    volúmenes ausentes salen como `0` y los flags ausentes como su valor por defecto
-    (`tests/test_steam_contract_rows.py`). La distinción None/0 vive en `SteamItem`,
-    que es lo que recibe `compute_liquidity`."""
+    flags ausentes salen como su valor por defecto (`tests/test_steam_contract_rows.py`).
+    Precios y volúmenes ausentes salen como `None` y no como `0` (UX-46): el front pinta
+    «N/A» para «no hay datos» y deja el `0` para «no se vende»."""
     liquidity_score, liquidity_breakdown = compute_liquidity(item)
     real = item.price_real
 
@@ -94,12 +94,12 @@ def _map_item(item: SteamItem) -> SkinCard:
         "floatMax":       item.float_max,
         "paintIndex":     item.paint_index,
         "phase":          _resolve_phase(item),
-        "priceLatest":    item.latest_price or 0,
+        "priceLatest":    item.latest_price,
         "csfloatPrice":   None,
         "buffPrice":      None,
-        "priceSafe":      item.price_safe or 0,
-        "priceMin":       item.price_min or 0,
-        "priceMax":       item.price_max or 0,
+        "priceSafe":      item.price_safe,
+        "priceMin":       item.price_min,
+        "priceMax":       item.price_max,
         # Deltas contra la familia pricereal, la única cuyos campos por timeframe
         # traen valores históricos de verdad. pricelatestsell24h/7d/30d vienen
         # siempre iguales a pricelatestsell, así que daban None → "N/A" en todo.
@@ -113,14 +113,14 @@ def _map_item(item: SteamItem) -> SkinCard:
             {"market": q.market, "price": q.price, "quantity": q.quantity}
             for q in item.prices if q.market
         ],
-        "sold24h":        item.sold_24h or 0,
-        "sold7d":         item.sold_7d or 0,
-        "sold30d":        item.sold_30d or 0,
-        "soldTotal":      item.sold_total or 0,
-        "offerVolume":    item.offer_volume or 0,
-        "buyOrderVolume": item.buy_order_volume or 0,
-        "buyOrderPrice":  item.buy_order_price or 0,
-        "hoursToSold":    item.hours_to_sold or 0,
+        "sold24h":        item.sold_24h,
+        "sold7d":         item.sold_7d,
+        "sold30d":        item.sold_30d,
+        "soldTotal":      item.sold_total,
+        "offerVolume":    item.offer_volume,
+        "buyOrderVolume": item.buy_order_volume,
+        "buyOrderPrice":  item.buy_order_price,
+        "hoursToSold":    item.hours_to_sold,
         "liquidityScore":     liquidity_score,
         "liquidityBreakdown": liquidity_breakdown,
         "marketable":     True if item.marketable is None else item.marketable,

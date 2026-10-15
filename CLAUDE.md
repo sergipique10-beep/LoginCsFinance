@@ -306,7 +306,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
 | GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers/item_mapper.py:_map_item` + enrichment below). **Ante un 429 de steamwebapi (PERF-14)** devuelve el último snapshot con las cabeceras `X-Inventory-Stale: 1` y `X-Inventory-Captured-At` (ISO-8601); el cuerpo sigue siendo la lista. Ver «Degradación ante 429» |
 | POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio, `_inventory_refresh_cooldown` en `steam/cache/user_cache.py`). |
-| GET | `/market/movers` | Bearer | Top gainers/losers 24 h (hot & cold), servido del snapshot de `market_movers`. |
+| GET | `/market/movers` | Bearer | Top gainers/losers 24 h (hot & cold), servido del snapshot de `market_movers`. `X-Data-Status: stale` si el snapshot lleva más de 45 min sin escribirse (UX-46). |
 | GET | `/market/items` | Bearer | **Búsqueda** por nombre — `?q=` es obligatorio (400 si falta). No es un listado. |
 | GET | `/market/price` | Bearer | Datos completos de un item (incluye `liquidityBreakdown`). |
 | GET | `/market/prices` | Bearer | Precios en tiempo real de un item por mercado. |
@@ -408,7 +408,7 @@ Dos invariantes del troceado, ambos load-bearing:
 
 **`_MOVERS_SELECT` debe incluir `prices`** — es load-bearing: `/market/items` sí calcula el score, y sin ese campo la consistencia entre mercados se descartaría ahí pero no en `/inventory`, con lo que el mismo ítem puntuaría distinto según la pantalla.
 
-**Faltantes vs ceros** — la distinción de la que depende todo: `compute_liquidity` recibe el dict **crudo** de steamwebapi, no el mapeado, porque `_map_item` colapsa `None` a `0` (`d.get("sold24h") or 0`) y eso borraría la diferencia entre "no hay datos" (`None` → `"N/A"`) y "no se vende" (`0` → score bajo legítimo). Cuando un componente falta, su peso se **renormaliza** entre los disponibles. Cuidado con el corolario: **descartar un componente nunca puede hacer que un ítem parezca más líquido**. Por eso `buyorderprice == 0` ("nadie compra a ningún precio") es un dato real que da haircut `0.0`, no un faltante — tratarlo como faltante hacía que el ítem sin ningún comprador puntuara ~18 puntos MÁS ALTO que uno con un bid malo.
+**Faltantes vs ceros** — la distinción de la que depende todo: `compute_liquidity` recibe el `SteamItem` (con `None` para lo que no vino), no la tarjeta mapeada. Desde UX-46 la tarjeta también conserva `null` en precios y volúmenes ausentes (antes los colapsaba a `0`, y eso borraba la diferencia entre "no hay datos" (`None` → `"N/A"`) y "no se vende" (`0` → score bajo legítimo). Cuando un componente falta, su peso se **renormaliza** entre los disponibles. Cuidado con el corolario: **descartar un componente nunca puede hacer que un ítem parezca más líquido**. Por eso `buyorderprice == 0` ("nadie compra a ningún precio") es un dato real que da haircut `0.0`, no un faltante — tratarlo como faltante hacía que el ítem sin ningún comprador puntuara ~18 puntos MÁS ALTO que uno con un bid malo.
 
 **Compuerta**: el score es `None` si el peso disponible es < 0.5 **o** si faltan a la vez `timeToSell` y `haircut` (`_CORE_COMPONENTS`) — sin tiempo ni precio, el número no responde la pregunta que dice responder.
 
@@ -664,8 +664,11 @@ vacío o de respaldo) deja una línea a WARNING:
 En los logs de Render: `grep steam-degraded`, o `grep "flow=movers"` para un flujo. La
 lista de flows está en la columna «Log» del mapa de degradaciones de
 `docs/features/steam.md`. Los services con camino de degradación devuelven
-`Fetched[T]` (`steam/domain/models.py`) y las rutas responden con `.data`, idéntico a
-antes: exponer `status` al front es UX-46, que puede priorizar con estos conteos.
+`Fetched[T]` (`steam/domain/models.py`); las rutas responden `.data` como cuerpo y, si el
+`status` no es `ok`, las cabeceras `X-Data-Status`, `X-Data-Reason` (el mismo `reason` que
+esta línea) y `X-Data-Captured-At` (UX-46, `steam/routes/_response.py`). Conviven con
+`X-Inventory-*` en `/inventory` y con el `stale` del cuerpo en `/market/fx`; `main.py` las
+expone por CORS. Movers y trending las emiten por la edad del snapshot (45 min / 3 h).
 
 **Prefijos de log por fuente** (CLEAN-19): el resto de líneas de `steam/` llevan el prefijo
 de su fuente o tick, así que un solo `grep` recoge todo lo de una: `[catalog]`,

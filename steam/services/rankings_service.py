@@ -5,7 +5,8 @@ que los persisten (capture_trending, enrich_trending, capture_movers). Sin FastA
 import logging
 import time
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -254,7 +255,7 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
             await catalog_service.fetch_static_images(client)
             result = [_map_topmovers_item(mover) for mover in combined]
             catalog_service.enrich_images_from_cache(result)
-            result = sorted(result, key=lambda x: x["sold24h"], reverse=True)[:_TRENDING_FALLBACK_LIMIT]
+            result = sorted(result, key=lambda x: x["sold24h"] or 0, reverse=True)[:_TRENDING_FALLBACK_LIMIT]
             result = await pricing_service.enrich_market_prices(client, result)
             logger.info("[market-trending] serving from topmovers (%d items)", len(result))
             return degraded("trending", reason or "unknown", "fallback", result)
@@ -265,19 +266,57 @@ async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]
 
 # ── Lecturas de /market ───────────────────────────────────────────────────────
 
-async def get_movers() -> dict[str, list[RankedCard]]:
+# UX-46 (opción A): la lectura no sabe cómo le fue al tick, solo cuándo escribió. Tres
+# ticks perdidos seguidos marcan el snapshot como viejo; uno suelto es ruido del cron.
+_MOVERS_STALE_AFTER = timedelta(minutes=45)     # movers-tick cada 15 min
+_TRENDING_STALE_AFTER = timedelta(hours=3)      # trending-tick cada hora
+
+
+@dataclass(frozen=True)
+class RankingSnapshot:
+    """El ranking leído de Supabase y la fecha de su última escritura, si la hay."""
+    fetched: Fetched[Any]
+    captured_at: str | None
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    try:
+        ts = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
+def _snapshot(flow: str, rows: list[dict], column: str, max_age: timedelta,
+              data: Any) -> RankingSnapshot:
+    """`updated_at` (movers, replace-all) o `seen_at` (trending, upsert) de la fila más
+    reciente decide si el snapshot es viejo. Sin filas: `error`, la pantalla sale vacía."""
+    if not rows:
+        return RankingSnapshot(degraded(flow, "empty_snapshot", "empty", data), None)
+    stamps = [(ts, r[column]) for r in rows if (ts := _parse_ts(r.get(column))) is not None]
+    if not stamps:
+        return RankingSnapshot(Fetched(data), None)
+    newest, captured_at = max(stamps, key=lambda s: s[0])
+    if datetime.now(timezone.utc) - newest > max_age:
+        return RankingSnapshot(degraded(flow, "snapshot_age", "stale", data), captured_at)
+    return RankingSnapshot(Fetched(data), captured_at)
+
+
+async def get_movers() -> RankingSnapshot:
     rows = await movers_repo.fetch_snapshot()
-    hot  = [_row_to_item(r) for r in rows if r.get("bucket") == "hot"]
-    cold = [_row_to_item(r) for r in rows if r.get("bucket") == "cold"]
-    return {"hot": hot, "cold": cold}
+    hot: list[RankedCard] = [_row_to_item(r) for r in rows if r.get("bucket") == "hot"]
+    cold: list[RankedCard] = [_row_to_item(r) for r in rows if r.get("bucket") == "cold"]
+    return _snapshot("movers_snapshot", rows, "updated_at", _MOVERS_STALE_AFTER,
+                     {"hot": hot, "cold": cold})
 
 
-async def get_trending() -> list[RankedCard]:
+async def get_trending() -> RankingSnapshot:
     # Por turnover y no por `rank`: con upsert, un item que no aparece en una
     # captura conserva su rank viejo y ocuparía una posición alta como fantasma
     # hasta que la purga se lo lleve. El turnover se actualiza en cada captura.
     rows = await trending_repo.fetch_ranked()
-    return [_row_to_item(row) for row in rows]
+    items: list[RankedCard] = [_row_to_item(row) for row in rows]
+    return _snapshot("trending_snapshot", rows, "seen_at", _TRENDING_STALE_AFTER, items)
 
 
 # ── Respaldo: ranking hot/cold desde los topmovers de market-index ─────────────

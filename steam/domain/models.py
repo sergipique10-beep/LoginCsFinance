@@ -40,30 +40,30 @@ class RankedCard(TypedDict):
     floatMax: float | None
     paintIndex: int | None
     phase: str | None
-    priceLatest: float
+    priceLatest: float | None
     csfloatPrice: float | None
     buffPrice: float | None
-    priceSafe: float
-    priceMin: float
-    priceMax: float
+    priceSafe: float | None
+    priceMin: float | None
+    priceMax: float | None
     priceDelta24h: float | None
     priceDelta7d: float | None
     priceDelta30d: float | None
     priceReal: float | None
-    sold24h: int
-    sold7d: int
-    sold30d: int
-    soldTotal: int
-    offerVolume: int
-    hoursToSold: float
+    sold24h: int | None
+    sold7d: int | None
+    sold30d: int | None
+    soldTotal: int | None
+    offerVolume: int | None
+    hoursToSold: float | None
     steamUrl: str | None
 
 
 class SkinCard(RankedCard):
     """Tarjeta completa (`_map_item`): la de /inventory, /market/items y /market/price."""
     externalPrices: list[dict[str, Any]]
-    buyOrderVolume: int
-    buyOrderPrice: float
+    buyOrderVolume: int | None
+    buyOrderPrice: float | None
     liquidityScore: float | None
     liquidityBreakdown: dict[str, Any] | None
     marketable: bool
@@ -105,10 +105,10 @@ class RankingRow(TypedDict):
     price_delta_7d: float | None
     price_delta_30d: float | None
     price_real: float | None
-    sold_24h: int
-    sold_7d: int
-    sold_30d: int
-    offer_volume: int
+    sold_24h: int | None
+    sold_7d: int | None
+    sold_30d: int | None
+    offer_volume: int | None
     hours_to_sold: float | None
     steam_url: str | None
     turnover: float
@@ -154,8 +154,8 @@ class Fetched(Generic[T]):
 
     `status`: `ok` (dato bueno), `stale` (caché caducada), `partial` (respaldo
     incompleto: topmovers, proveedores estáticos) o `error` (vacío o nada que servir).
-    `reason` dice por qué. Las rutas devuelven `data` tal cual: exponer el estado al
-    front es UX-46.
+    `reason` dice por qué. Las rutas devuelven `data` como cuerpo y el estado en las
+    cabeceras `X-Data-*` (UX-46, `steam/routes/_response.py`).
     """
     data: T
     status: FetchStatus = "ok"

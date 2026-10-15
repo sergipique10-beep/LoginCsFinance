@@ -50,6 +50,7 @@ files:
   - steam/rankings_repo.py
   - steam/router.py
   - steam/routes/__init__.py
+  - steam/routes/_response.py
   - steam/routes/items.py
   - steam/routes/market.py
   - steam/routes/news.py
@@ -107,6 +108,28 @@ Qué hace cada flujo cuando una fuente falla. **Decisión**: *conservar* (degrad
 aceptada), *UX-46* (hacerla visible al usuario, necesita al front) o el issue del bug.
 "Invisible" = el cliente recibe un 200 normal sin ninguna señal.
 
+**Cabeceras de estado** (UX-46): toda ruta que sirve un `Fetched` con `status != "ok"`
+responde el mismo cuerpo con `X-Data-Status: stale|partial|error`,
+`X-Data-Reason: <reason>` (el mismo string que `[steam-degraded] reason=`) y, si se sabe la
+fecha del dato, `X-Data-Captured-At` (`steam/routes/_response.py:respond`). Con `ok` no hay
+cabecera. Van en cabecera y no en el cuerpo porque los contratos de claves son exactos y
+varios cuerpos son listas, igual que `X-Inventory-*` (PERF-14), que se conservan y conviven
+con las genéricas. `/market/fx` emite las dos señales (`stale` en el cuerpo es contrato de
+UX-08). Movers y trending (opción A del handoff): la ruta no sabe cómo le fue al tick, así
+que mira la edad del snapshot (`updated_at` en movers, más de 45 min; `seen_at` en
+trending, más de 3 h) y responde `stale` · `snapshot_age`, o `error` · `empty_snapshot` sin
+filas. Las prueba `tests/test_data_status_headers.py`; `main.py` las expone por CORS.
+Los pasos de enriquecimiento (`history`, `market_lookup`, `catalog`, `news_image`…) **no**
+cambian el estado de la ruta: su degradación ya se ve en el dato (`null`, `image: ""`).
+
+**Faltantes a `null`** (UX-46): las tarjetas (`_map_item`, `_map_topmovers_item`,
+`_row_to_item`) devuelven `null` en precios y volúmenes que no vinieron, en vez de `0`, para
+que el front distinga «N/A» de «no se vende». El respaldo de topmovers lleva su `change24h`
+en `priceDelta24h` y `null` en 7d/30d (antes `0.0`, que pintaba «0 %»). `_to_row` guarda
+el `null` en las columnas nullable de `market_*` (`sold_*`, `offer_volume`); `price_latest`
+es `not null` y sigue a `0`. Lo fijan `test_volumen_ausente_es_none_no_cero` y
+`test_movers_tick_fallback_topmovers`, cambiados a propósito.
+
 **Log** (CLEAN-12): las degradaciones que el cliente no ve dejan una línea
 `[steam-degraded] flow=<flow> reason=<reason> served=<stale|empty|fallback|error> last_hour=<n>`
 (`steam/errors/handling.py`), una por fila con algo en la última columna;
@@ -128,27 +151,28 @@ tick (`[catalog]`, `[item-history]`, `[market-items]`, `[market-prices]`, `[mark
 | Inventario | 429 / 402 con snapshot | snapshot | `X-Inventory-Stale` | conservar (PERF-14) | `inventory` · `rate_limit`/`quota`, `served=stale` (CLEAN-18; además la línea `[inventory-429]`) |
 | Inventario | 402 sin snapshot | 503 | `code: upstream_quota` | conservar (SEC-16) | — |
 | Inventario | 429 sin snapshot | 429, `detail` de texto | sin `code` | CAL-14 | — |
-| Inventario | 410 / 411 | snapshot con `X-Inventory-Stale` si lo hay, si no `[]`; **ni la caché ni el snapshot se pisan** | cabecera (con snapshot) | resuelto (CLEAN-15) | `inventory` · `http_410`/`http_411`, `served=stale` o `empty` |
+| Inventario | 410 / 411 | snapshot con `X-Inventory-Stale` si lo hay, si no `[]`; **ni la caché ni el snapshot se pisan** | `X-Inventory-Stale` (con snapshot); `X-Data-Status: error` (sin él) | resuelto (CLEAN-15) | `inventory` · `http_410`/`http_411`, `served=stale` o `empty` |
 | Inventario | JSON inválido | 502 | 502 | resuelto (CLEAN-15, `http_error_for`) | — |
 | Perfil `/me` | 402 / 429 | 503 | `code: upstream_quota` / `upstream_rate_limit` | resuelto (CLEAN-15) | — |
-| Perfil `/me` | 200 sin perfil | perfil en blanco **sin cachear** | invisible | resuelto (CLEAN-14) | `profile` · `empty_body` |
+| Perfil `/me` | 200 sin perfil | perfil en blanco **sin cachear** | `X-Data-Status: error` (UX-46) | resuelto (CLEAN-14) | `profile` · `empty_body` |
 | Histórico (enriquecimiento) | fallo de csfloat/history | `[]` 5 min; deltas de `_inline_delta` | invisible | conservar | `history` · `reason_of(exc)` |
-| `/item/history` | ventana llena / 429 | stale, o 503 + `Retry-After` | `code: upstream_rate_limit` | conservar (SEC-16) | `item_history` · `rate_limit` (solo stale) |
-| `/item/history` | 402 | stale, o 503 | `code: upstream_quota` | resuelto (CLEAN-15; como el 429) | `item_history` · `quota` (solo stale) |
-| `/item/history` | cuerpo no lista | `200 []` **sin cachear** | invisible | conservar (CLEAN-14): un histórico ilegible no deja sin detalle a la skin | `item_history` · `unexpected_format` |
+| `/item/history` | ventana llena / 429 | stale, o 503 + `Retry-After` | `X-Data-Status: stale` / `code: upstream_rate_limit` | conservar (SEC-16) | `item_history` · `rate_limit` (solo stale) |
+| `/item/history` | 402 | stale, o 503 | `X-Data-Status: stale` / `code: upstream_quota` | resuelto (CLEAN-15; como el 429) | `item_history` · `quota` (solo stale) |
+| `/item/history` | cuerpo no lista | `200 []` **sin cachear** | `X-Data-Status: error` (UX-46) | conservar (CLEAN-14): un histórico ilegible no deja sin detalle a la skin | `item_history` · `unexpected_format` |
 | Lookup CSFloat/Buff | fallo | stale o `{}`, backoff 5 min | precios a `null` | conservar (PERF-17) | `market_lookup` · motivo o `backoff` |
-| Proveedores | fallo | stale o `_FALLBACK_PROVIDERS` | invisible | conservar (PERF-17) | `providers` · motivo o `backoff` |
-| FX | fallo / tasa fuera de 0,5–2,0 | última tasa o ninguna | `stale` en el cuerpo | conservar (UX-08) | — |
-| Movers / trending | `/items` caído o ilegible | fallback a topmovers, deltas `0.0` | invisible | UX-46 (el JSON ilegible daba 500: resuelto, CLEAN-15) | `movers`/`trending` · motivo de `/items` (`invalid_json` si ilegible); `served=fallback`, o `error` sin fuentes |
+| Proveedores | fallo | stale o `_FALLBACK_PROVIDERS` | `X-Data-Status: stale`/`partial` (UX-46) | conservar (PERF-17) | `providers` · motivo o `backoff` |
+| FX | fallo / tasa fuera de 0,5–2,0 | última tasa o ninguna | `stale` en el cuerpo y `X-Data-Status` | conservar (UX-08) | — |
+| Movers / trending | `/items` caído o ilegible | fallback a topmovers: `priceDelta24h` = `change24h`, 7d/30d `null` | deltas «N/A» en vez de «0 %»; el tick escribe, así que la ruta no lo marca | resuelto (UX-46, opción A; el JSON ilegible daba 500: resuelto, CLEAN-15) | `movers`/`trending` · motivo de `/items` (`invalid_json` si ilegible); `served=fallback`, o `error` sin fuentes |
 | Movers / trending | topmovers cacheado caducado (`TOPMOVERS_RAW_TTL`) | no se usa: se pide market-index; si también falla, `error` | `kept_previous` en el tick | resuelto (CLEAN-15) | `topmovers` · motivo del respaldo (`served=empty`); `movers`/`trending` · `topmovers_stale` |
 | `movers-tick` | ninguna fuente | conserva el snapshot anterior | `kept_previous` | conservar (CAL-10) | — |
+| `/market/movers`, `/market/trending` | snapshot sin escribir en 45 min / 3 h, o vacío | el snapshot tal cual | `X-Data-Status: stale` · `snapshot_age` / `error` · `empty_snapshot` | resuelto (UX-46, opción A) | `movers_snapshot`/`trending_snapshot` · `snapshot_age` o `empty_snapshot` |
 | `trending-tick` | ninguna fuente | no inserta pero **sí purga** (`purged`) | `count: 0` | lo fija el contrato (`test_trending_tick_sin_fuentes_no_inserta_pero_purga`); el plan de CLEAN-15 proponía no purgar con `status="error"`: decisión pendiente del dueño del contrato | — |
 | Trending | sticker slabs | se filtran, como en movers y búsqueda (`rules.is_sticker_slab(item)`: por `item_type` y, si no lo dice, por el nombre) | — | resuelto (CLEAN-17; CAL-14) | — |
-| Búsqueda / precio | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `search`/`item_price` · `quota` (solo stale) |
+| Búsqueda / precio | 402 | stale, o 503 | `X-Data-Status: stale` / `code: upstream_quota` | conservar (SEC-16) | `search`/`item_price` · `quota` (solo stale) |
 | Búsqueda / precio | 429 | 503 + `Retry-After` | `code: upstream_rate_limit` | resuelto (CLEAN-15) | — |
 | Búsqueda | caché compartida con el chat | clave con namespace (`market:`/`chat:`, `search_cache_key`): cada uno la suya | — | resuelto (CLEAN-15) | — |
-| `/market/index` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_index` · `quota` (solo stale) |
-| `/market/prices` | 402 | stale, o 503 | `code: upstream_quota` | conservar (SEC-16) | `market_prices` · `quota` (solo stale) |
+| `/market/index` | 402 | stale, o 503 | `X-Data-Status: stale` / `code: upstream_quota` | conservar (SEC-16) | `market_index` · `quota` (solo stale) |
+| `/market/prices` | 402 | stale, o 503 | `X-Data-Status: stale` / `code: upstream_quota` | conservar (SEC-16) | `market_prices` · `quota` (solo stale) |
 | `/market/index` | gainer sin `markethashname` / sin `change24h` | se descarta / `0.0` | invisible | resuelto (CLEAN-14) | `market_index` · `invalid_field` (solo al descartar) |
 | Catálogo de imágenes | todas las fuentes caídas | backoff 5 min, `image: ""` | invisible | conservar (CAL-08) | `catalog` · `all_sources_failed` |
 | Catálogo de imágenes | una fuente caída o ilegible | se cargan las demás | invisible | conservar | `catalog` · `reason_of(exc)` (`served=empty`, una por fuente) |
@@ -156,10 +180,11 @@ tick (`[catalog]`, `[item-history]`, `[market-items]`, `[market-prices]`, `[mark
 | `/inventory`, `trending-tick` | `register_tracked` falla (Supabase) | la respuesta sigue; la skin no entra en la captura diaria | `tracked: 0` en el tick | conservar (best-effort) | `tracked_register` · `storage` |
 | `price-tick` | el lookup de una skin falla | se marca intentada, sin punto ese día | `errors` en la respuesta | conservar (PERF-11) | `price_capture` · `reason_of(exc)` |
 | Noticias | JSON que no es dict / ilegible | 502 | 502 | resuelto (CLEAN-15) | — |
+| Noticias | el filtro de alfabetos (UX-05) se lleva todas | las originales sin filtrar | `X-Data-Status: partial` (UX-46) | conservar | — |
 | Noticias | og:image falla o la página no lo trae | `imageUrl: ""` | invisible | conservar | `news_image` · `reason_of(exc)` o `no_og_tag` (solo con URL) |
 | Chat: precio / búsqueda | 402 / 429 / red / ilegible | `{"error": motivo}` (`user_message`) | el modelo lo explica | resuelto (CLEAN-15) | — |
 | Chat: inventario | cualquier error | `{"error": motivo}` (`user_message`) | el modelo lo explica | resuelto (CLEAN-15); ya no hay línea: el fallo se ve | — |
-| Mappers | campos ausentes | `0`, `"Base Grade"`, `True`… | invisible | UX-46 | — |
+| Mappers | campos ausentes | precios y volúmenes `null`; `"Base Grade"`, `True`… en los flags | «N/A» en el front | resuelto (UX-46) para precios y volúmenes; los flags se conservan | — |
 
 El detalle por función (con número de línea aproximado) está en el primer comentario de
 CAL-09 en Plane.

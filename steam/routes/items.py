@@ -11,6 +11,7 @@ from ..errors.handling import SOURCE_ERRORS, http_error_for
 from ..errors import UPSTREAM_QUOTA_DETAIL, UpstreamError
 from ..services import inventory_service, pricing_service, profile_service
 from ..services.inventory_service import Inventory
+from ._response import data_headers, respond
 
 # SEC-16: espera máxima por un hueco en `_history_limiter` (como el chat en PERF-03).
 # Un detalle de skin no puede quedarse 60 s cargando mientras un cron llena la ventana.
@@ -24,9 +25,10 @@ router = APIRouter()
 async def get_me(request: Request, user: dict = Depends(require_jwt)):
     steam_id: str = user["sub"]
     try:
-        return (await profile_service.get_profile(request.app.state.http_client, steam_id)).data
+        fetched = await profile_service.get_profile(request.app.state.http_client, steam_id)
     except SOURCE_ERRORS as exc:
         raise http_error_for(exc, timeout_status=504) from exc
+    return respond(fetched)
 
 
 def _inventory_http_error(exc: Exception) -> HTTPException:
@@ -40,16 +42,20 @@ def _inventory_http_error(exc: Exception) -> HTTPException:
 
 
 def _inventory_response(fetched: Fetched[Inventory]) -> JSONResponse | list:
-    """Cuerpo = la lista; dato viejo en cabeceras (PERF-14); sin snapshot 429 o 503 (SEC-16)."""
+    """Cuerpo = la lista; dato viejo en cabeceras (PERF-14); sin snapshot 429 o 503 (SEC-16).
+
+    Las `X-Inventory-*` se quedan (el front y los tests las leen); las genéricas de
+    UX-46 van además, también en el `error` por 410/411 que sirve `[]` (CAL-13)."""
     if fetched.status == "error" and fetched.reason == "rate_limit":
         raise HTTPException(status_code=429, detail="Steam rate limit — retry later")
     if fetched.status == "error" and fetched.reason == "quota":
         raise HTTPException(status_code=503, detail=UPSTREAM_QUOTA_DETAIL)
+    headers = data_headers(fetched.status, fetched.reason, fetched.data.captured_at)
     if fetched.status == "stale":
-        return JSONResponse(fetched.data.items, headers={
-            "X-Inventory-Stale": "1", "X-Inventory-Captured-At": fetched.data.captured_at or "",
-        })
-    return fetched.data.items   # `ok`, o `error` por 410/411: `[]` (CAL-13)
+        headers |= {"X-Inventory-Stale": "1", "X-Inventory-Captured-At": fetched.data.captured_at or ""}
+    if not headers:
+        return fetched.data.items
+    return JSONResponse(fetched.data.items, headers=headers)
 
 
 @router.get("/inventory", summary="Inventario CS2 del usuario autenticado")
@@ -96,4 +102,4 @@ async def get_item_history(
     except SOURCE_ERRORS as exc:
         # Ventana llena / 429 sin caché caducada → 503 + Retry-After; 402 → 503 upstream_quota.
         raise http_error_for(exc, timeout_status=504) from exc
-    return fetched.data
+    return respond(fetched)

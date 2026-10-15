@@ -150,7 +150,11 @@ def test_movers_tick_fallback_topmovers(steam_api, repos, client, items_route):
     rows = _rows(repos["replace_snapshot"])
     assert [r["name"] for r in rows if r["bucket"] == "hot"] == ["Gainer A", "Gainer B"]
     assert [r["name"] for r in rows if r["bucket"] == "cold"] == ["Loser B", "Loser A"]
-    assert {r["price_delta_7d"] for r in rows} == {0.0}   # UX-46: deltas fijos
+    # UX-46: el 24 h es el change24h de topmovers; 7d/30d no vienen en el payload y van
+    # a null («N/A»), no a 0.0 («0 %»).
+    assert {r["name"]: r["price_delta_24h"] for r in rows} == {
+        "Gainer A": 50, "Gainer B": 20, "Loser B": -40, "Loser A": -10}
+    assert {r["price_delta_7d"] for r in rows} == {r["price_delta_30d"] for r in rows} == {None}
 
 
 def test_movers_tick_fallback_reutiliza_topmovers_de_market_index(steam_api, repos, client):
