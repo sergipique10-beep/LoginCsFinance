@@ -96,7 +96,7 @@ services:
     command: ["inventory"]
 
   uptime-kuma:
-    image: louislam/uptime-kuma:1
+    image: louislam/uptime-kuma:2  # la etiqueta 1/latest ya no recibe parches (aviso en la UI, 2026-10-16)
     restart: unless-stopped
     volumes:
       - kuma-data:/app/data
