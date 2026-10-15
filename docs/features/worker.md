@@ -50,7 +50,7 @@ nada del backend** (la imagen solo lleva `worker/`) y el backend no importa nada
 | `broker.py` | Taskiq: `RedisStreamBroker` (streams + consumer group + ack) y `TaskiqScheduler` con `LabelScheduleSource`. Recursos por proceso en `WORKER_STARTUP` (`state.http`, `.redis`, `.gate`, `.breakers`, `.pg`, `.supabase`) |
 | `jobs/` | `noop` (cada minuto: `SELECT 1` en Supabase y Timescale + push a Kuma) y `market_sync.py` (abajo). `jobs/__init__.py` importa los módulos hermanos para registrarlos |
 | `main.py` | `python -m worker.main worker\|scheduler` → CLI de Taskiq. **Un único `scheduler`** |
-| `net/gate.py` | GCRA en Valkey por host (`rl:{host}`), jitter, cooldown tras 429 (`cool:{host}`: 1 h, ×2, tope 6 h) y presupuestos diarios (`budget:{kind}:{yyyymmdd}`) |
+| `net/gate.py` | GCRA en Valkey por ámbito (`rl:{scope}`: el host o `host/prefijo` si está declarado, `Gate.scope(url)`), jitter, cooldown tras 429 (`cool:{scope}`: 1 h, ×2, tope 6 h) y presupuestos diarios (`budget:{kind}:{yyyymmdd}`) |
 | `net/breaker.py` | pybreaker por host con estado en Valkey (`cb:{host}`): 5 fallos → abierto 300 s (Steam 900). Logs `[breaker]` |
 | `net/retry.py` | `request()`: **la única puerta a Internet**. Gate → breaker → petición → stamina (3 intentos en 5xx / transporte / 429 sin Retry-After fuera de Steam) |
 | `store/` | Clientes de Valkey (async + sync, reconectan con backoff), Timescale (asyncpg) y Supabase (service_role) |
@@ -113,6 +113,11 @@ Proceso aparte (`python -m worker.main inventory`, servicio `inventory` del comp
 - Los límites del diseño (Steam Community 10/min ráfaga 2, Web API 60/min, Skinport 8/5 min)
   son el punto de partida; **se ajustan con las cifras de COST-00** vía `GATE_LIMITS` (JSON)
   en el `.env`, sin tocar código.
+- **Un mismo host puede tener límites distintos por ruta.** Medido en COST-00 (2026-10-15):
+  el inventario de `steamcommunity.com` corta a ~10 peticiones por ventana y bloquea ≤ 10 min,
+  mientras `priceoverview` aguanta 10/min sin 429. Por eso `steamcommunity.com/inventory` tiene
+  su propia entrada (6 por 10 min, ráfaga 2): cubo y cooldown aparte, breaker compartido con el
+  host. Una clave `host/prefijo` en `GATE_LIMITS` declara otro ámbito igual.
 - Garantía de la cola: *at-least-once*. Un job encolado durante un corte de Valkey puede
   tardar hasta `idle_timeout` (10 min) en reentregarse; los jobs tienen que ser idempotentes.
 

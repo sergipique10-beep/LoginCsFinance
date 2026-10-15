@@ -3,6 +3,11 @@
 Los límites por host son los del diseño y la tarjeta COST-02. Se ajustan con las cifras de
 COST-00 sin tocar código: `GATE_LIMITS` (JSON) sustituye campos de un host concreto, p. ej.
 `GATE_LIMITS='{"steamcommunity.com": {"rate": 6}}'`.
+
+Una clave `host/prefijo` declara un ámbito propio para las URL de ese host cuya ruta empiece
+por el prefijo (cubo y cooldown aparte; el breaker sigue siendo del host). Medido en COST-00
+(2026-10-15): el inventario de steamcommunity.com corta a ~10 peticiones por ventana y
+bloquea ≤ 10 min, mientras priceoverview aguanta 10/min sin 429. Mismo host, límites distintos.
 """
 import json
 import os
@@ -26,6 +31,8 @@ class HostLimit:
 # Hosts sin entrada aquí no pasan el gate: un host nuevo se declara, no se cuela.
 DEFAULT_LIMITS: dict[str, HostLimit] = {
     "steamcommunity.com": HostLimit(rate=10, per_s=60, burst=2, reset_timeout=900, steam=True),
+    # COST-00: ~10 páginas seguidas → 429 durante ≤ 10 min. 6 por 10 min deja margen.
+    "steamcommunity.com/inventory": HostLimit(rate=6, per_s=600, burst=2, reset_timeout=900, steam=True),
     "api.steampowered.com": HostLimit(rate=60, per_s=60, reset_timeout=900, steam=True),
     "api.skinport.com": HostLimit(rate=8, per_s=300),
     # Feeds de volcado (COST-03): una descarga cada 15–60 min. Tope conservador, no medido:

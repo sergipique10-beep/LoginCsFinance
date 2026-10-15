@@ -44,19 +44,20 @@ def retryable(exc: Exception) -> bool:
 async def request(client: httpx.AsyncClient, method: str, url: str, *, gate: Gate, breakers: Breakers,
                   max_wait_s: float = 600, wait_initial: float = 1.0, **kwargs: Any) -> httpx.Response:
     host = urlsplit(url).hostname or ""
-    lim = gate.limit(host)
-    breaker = breakers.for_host(host)
+    scope = gate.scope(url)          # cubo y cooldown por ámbito (host o host/prefijo)
+    lim = gate.limit(scope)
+    breaker = breakers.for_host(host)  # el breaker protege al host entero
     async for attempt in stamina.retry_context(on=retryable, attempts=settings.RETRY_ATTEMPTS,
                                                timeout=None, wait_initial=wait_initial, wait_max=60):
         with attempt:
-            await gate.acquire(host, max_wait_s=max_wait_s)
+            await gate.acquire(scope, max_wait_s=max_wait_s)
             with breaker.calling():
                 r = await client.request(method, url, **kwargs)
                 if r.status_code == 429:
                     retry_after = parse_retry_after(r.headers.get("Retry-After"))
                     if lim.steam:
-                        await gate.open_cooldown(host)
-                        raise RateLimited(host, retry_after)
+                        await gate.open_cooldown(scope)
+                        raise RateLimited(scope, retry_after)
                     if retry_after is None:
                         raise RetryableRateLimited(host, None)
                     raise RateLimited(host, retry_after)

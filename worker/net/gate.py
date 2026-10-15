@@ -3,8 +3,11 @@
 Todo el estado vive en Valkey, así que varios procesos (worker, scheduler, un script a mano)
 comparten el mismo cubo por host: `rl:{host}`. Claves:
 
-  rl:{host}               TAT del GCRA (ms epoch), con TTL
-  cool:{host}             duración del cooldown vigente en s, con TTL = esa duración
+  rl:{scope}              TAT del GCRA (ms epoch), con TTL
+  cool:{scope}            duración del cooldown vigente en s, con TTL = esa duración
+
+`scope` es el host o, si está declarado en settings, `host/prefijo` (`scope(url)`): el inventario
+de Steam y priceoverview comparten host pero no límite.
   budget:{kind}:{yyyymmdd} contador de gasto del día (TTL 3 días)
 
 El reloj es el de Valkey (TIME), no el de cada proceso: dos máquinas con la hora movida
@@ -15,6 +18,7 @@ import datetime as dt
 import logging
 import random
 from typing import Any
+from urllib.parse import urlsplit
 
 from worker import settings
 from worker.settings import HostLimit
@@ -90,6 +94,13 @@ class Gate:
             return self.limits[host]
         except KeyError:
             raise UnknownHost(host) from None
+
+    def scope(self, url: str) -> str:
+        """Clave del cubo para una URL: `host/prefijo` si hay uno declarado que case, si no el host."""
+        parts = urlsplit(url)
+        host, path = parts.hostname or "", parts.path
+        prefixes = (k for k in self.limits if k.startswith(host + "/") and path.startswith(k[len(host):]))
+        return max(prefixes, key=len, default=host)
 
     async def try_acquire(self, host: str, now_ms: int = 0) -> int:
         """Una pasada del GCRA: 0 = concedida; si no, ms de espera. No duerme."""

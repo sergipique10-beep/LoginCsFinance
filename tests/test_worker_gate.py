@@ -16,6 +16,7 @@ from worker.settings import HostLimit
 
 STEAM = "steamcommunity.com"
 LIMITS = {STEAM: HostLimit(rate=10, per_s=60, burst=2, jitter=(0.5, 2.0), steam=True),
+          STEAM + "/inventory": HostLimit(rate=6, per_s=600, burst=2, jitter=(0, 0), steam=True),
           "api.skinport.com": HostLimit(rate=8, per_s=300, jitter=(0, 0))}
 
 
@@ -133,3 +134,21 @@ def test_reloj_de_valkey_por_defecto():
         assert await g.try_acquire(STEAM) == 0
         return await g.try_acquire(STEAM)
     assert 5000 < asyncio.run(m()) <= 6000
+
+
+def test_scope_por_ruta_declarada():
+    g = _gate(fakeredis.FakeServer())
+    assert g.scope(f"https://{STEAM}/inventory/7656/730/2") == STEAM + "/inventory"
+    assert g.scope(f"https://{STEAM}/market/priceoverview/?x=1") == STEAM
+    assert g.scope("https://api.skinport.com/v1/items") == "api.skinport.com"
+    assert g.scope("https://desconocido.test/inventory") == "desconocido.test"  # limit() lo rechaza luego
+
+
+async def test_inventario_y_priceoverview_no_comparten_cubo():
+    g = _gate(fakeredis.FakeServer())
+    inv, host = STEAM + "/inventory", STEAM
+    assert [await g.try_acquire(inv, now_ms=1_000) for _ in range(3)] == [0, 0, 100_000]
+    assert await g.try_acquire(host, now_ms=1_000) == 0
+    assert await g.cooldown_left(host) == 0 and await g.cooldown_left(inv) == 0
+    await g.open_cooldown(inv)
+    assert await g.cooldown_left(inv) > 0 and await g.cooldown_left(host) == 0
