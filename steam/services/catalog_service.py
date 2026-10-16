@@ -21,7 +21,6 @@ logger = logging.getLogger("uvicorn.error")
 _STATIC_SKINS_URL     = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins.json"
 _STATIC_STICKERS_URL  = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/stickers.json"
 _STATIC_KEYCHAINS_URL = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/keychains.json"
-_STATIC_KNIVES_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/knives.json"
 _STATIC_CRATES_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/crates.json"
 _STATIC_AGENTS_URL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/agents.json"
 _STATIC_PATCHES_URL   = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/patches.json"
@@ -110,9 +109,10 @@ def _log_catalog_failure(label: str, exc: Exception) -> None:
 
 
 async def _load_static_images(client: httpx.AsyncClient, now: float) -> None:
+    # knives.json ya no existe en ByMykel (404 en cada arranque, CLEAN-13): los 670 cuchillos y
+    # guantes (nombres con «★») vienen dentro de skins.json desde hace tiempo.
     sources_with_wears = [
         ("skins",  _STATIC_SKINS_URL),
-        ("knives", _STATIC_KNIVES_URL),
     ]
     sources_flat = [
         ("stickers",  _STATIC_STICKERS_URL),
