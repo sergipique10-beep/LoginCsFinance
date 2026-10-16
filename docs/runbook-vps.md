@@ -102,6 +102,9 @@ $C exec -T timescaledb psql -U postgres -d restaurada -c "select timescaledb_pos
 - Actualizar: `git -C /opt/csfinance/app pull && $C up -d --build`.
 - Uptime Kuma: `https://$TS_HOSTNAME:$NGINX_PORT/` desde el tailnet. Nueve monitores **push** (uno por job del
   worker más `noop` e `inventory`; intervalo 1,3–2,5× la cadencia, `maxretries` 1) y el de **disco** (abajo).
+  COST-04 añade dos push más: `steam_topn` (cada hora, intervalo 7 200 s) y `steam_priceoverview` (cada
+  5 min, 600 s); sus tokens van en `KUMA_PUSH_TOKENS` con esos nombres. Un 429 de Steam deja
+  `steam_priceoverview` en DOWN mientras dure el cooldown (1 h, ×2 por reincidencia): es la señal, no un fallo.
 - Alertas (COST-08): una notificación de Kuma (Telegram o email, creada en la UI con «Default enabled» y
   «Apply on all existing monitors») enlazada a todos los monitores. Comprobar el enlace en la sqlite, no en la
   UI: `docker exec csfinance-uptime-kuma-1 sqlite3 /app/data/kuma.db 'select count(*) from monitor_notification'`

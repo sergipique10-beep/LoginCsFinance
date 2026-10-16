@@ -37,4 +37,4 @@ async def noop(context: Annotated[Context, TaskiqDepends()]) -> dict[str, Any]:
 
 
 # Registra los jobs de los módulos hermanos en el broker (la CLI de Taskiq importa este paquete).
-from worker.jobs import market_sync  # noqa: E402, F401
+from worker.jobs import market_sync, steam_topn  # noqa: E402, F401

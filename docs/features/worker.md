@@ -6,6 +6,9 @@ files:
   - worker/broker.py
   - worker/jobs/__init__.py
   - worker/jobs/market_sync.py
+  - worker/jobs/steam_topn.py
+  - worker/sources/steam_market.py
+  - worker/adapters/steam_market.py
   - worker/models.py
   - worker/pricing/reference.py
   - worker/adapters/_common.py

@@ -76,6 +76,12 @@ KUMA_URL = os.environ.get("KUMA_URL", "http://uptime-kuma:3001")
 # Moneda de buff163.json de csgotrader: USD o CNY. La resuelve el spike COST-00; vacía = el job
 # de csgotrader no corre (no se supone una moneda).
 BUFF_CURRENCY = os.environ.get("BUFF_CURRENCY", "").strip().upper()
+# Steam top-N (COST-04): tamaño de la lista, cuántos priceoverview por tick de 5 min y
+# presupuesto diario (spec § 1.5: ≤ 6 000/día). 20 × 288 ticks = 5 760 < 6 000.
+STEAM_TOPN = int(os.environ.get("STEAM_TOPN", "300"))
+STEAM_TOPN_MIN_PRICE = float(os.environ.get("STEAM_TOPN_MIN_PRICE", "10"))
+STEAM_PRICEOVERVIEW_PER_TICK = int(os.environ.get("STEAM_PRICEOVERVIEW_PER_TICK", "20"))
+STEAM_BUDGET_PRICEOVERVIEW = int(os.environ.get("STEAM_BUDGET_PRICEOVERVIEW", "6000"))
 # Tabla de Supabase donde compute_reference publica el precio de referencia (sombra hasta COST-06).
 MARKET_CURRENT_TABLE = os.environ.get("MARKET_CURRENT_TABLE", "market_current")
 # Valores que nunca pueden salir en un log (worker/logs.py los enmascara).
