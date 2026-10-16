@@ -28,7 +28,11 @@ scheduler = TaskiqScheduler(broker=broker, sources=[LabelScheduleSource(broker)]
 
 
 async def open_resources(state: Any) -> None:
-    state.http = httpx.AsyncClient(timeout=30, headers={"User-Agent": "cs-finance-worker/1.0"})
+    # El UA lleva el de httpx: steamcommunity.com/inventory responde 429 a los UA propios
+    # ("cs-finance-worker/1.0", "Mozilla/5.0" sin cookies) y 200 a "python-httpx/x" o "curl/x"
+    # desde la misma IP (medido en el VPS el 2026-10-16, COST-07/COST-12).
+    ua = f"cs-finance-worker/1.0 python-httpx/{httpx.__version__}"
+    state.http = httpx.AsyncClient(timeout=30, headers={"User-Agent": ua})
     state.redis = redis.async_client(settings.VALKEY_URL)
     state.gate = Gate(state.redis)
     state.breakers = Breakers(redis.sync_client(settings.VALKEY_URL))
