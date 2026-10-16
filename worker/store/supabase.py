@@ -57,3 +57,19 @@ async def finish(sb: Any, kind: str, steam_id: str, status: str, error: str | No
         return (sb.table("fetch_requests").update({"status": status, "error": error, "updated_at": _now()})
                 .eq("kind", kind).eq("steam_id", steam_id).in_("status", ["pending", "queued"]).execute())
     await asyncio.to_thread(_q)
+
+
+async def active_alert_names(sb: Any) -> list[str]:
+    """Nombres con alguna alerta de precio sin disparar (prio 0 del top-N de COST-04)."""
+    def _q() -> Any:
+        return sb.table("price_alerts").select("market_hash_name").is_("triggered_at", "null").execute()
+    rows = (await asyncio.to_thread(_q)).data or []
+    return sorted({r["market_hash_name"] for r in rows if r.get("market_hash_name")})
+
+
+async def top_turnover_names(sb: Any, n: int) -> list[str]:
+    """Los n ítems con más turnover de 24 h en market_current (el grueso del top-N)."""
+    def _q() -> Any:
+        return (sb.table("market_current").select("market_hash_name")
+                .order("turnover_24h", desc=True, nullsfirst=False).limit(n).execute())
+    return [r["market_hash_name"] for r in (await asyncio.to_thread(_q)).data or []]

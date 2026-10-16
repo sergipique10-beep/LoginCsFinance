@@ -108,6 +108,21 @@ async def upsert_catalog(pool: Any, items: list[CatalogItem]) -> None:
         await conn.executemany(UPSERT_CATALOG, rows)
 
 
+# Ítems de inventarios vistos en los últimos 7 días que cotizan ≥ $1 (min_price) en Skinport (top-N, COST-04).
+RECENT_INVENTORY_NAMES = """
+select distinct a.market_hash_name
+from inventory_assets a
+join market_latest l on l.market_hash_name = a.market_hash_name and l.source = 'skinport'
+where a.seen_at > now() - interval '7 days' and l.price_usd >= $1
+order by 1
+"""
+
+
+async def recent_inventory_names(pool: Any, min_price: float) -> list[str]:
+    async with pool.acquire() as conn:
+        return [r[0] for r in await conn.fetch(RECENT_INVENTORY_NAMES, min_price)]
+
+
 async def source_ok(pool: Any, source: str) -> None:
     async with pool.acquire() as conn:
         await conn.execute(SOURCE_OK, source)
