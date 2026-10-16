@@ -100,4 +100,14 @@ $C exec -T timescaledb psql -U postgres -d restaurada -c "select timescaledb_pos
 
 - Logs: `$C logs -f --tail=200 <servicio>` (rotados a 3 × 10 MB por servicio).
 - Actualizar: `git -C /opt/csfinance/app pull && $C up -d --build`.
-- Uptime Kuma: `https://$TS_HOSTNAME/` desde el tailnet. Los monitores llegan en COST-08.
+- Uptime Kuma: `https://$TS_HOSTNAME:$NGINX_PORT/` desde el tailnet. Nueve monitores **push** (uno por job del
+  worker más `noop` e `inventory`; intervalo 1,3–2,5× la cadencia, `maxretries` 1) y el de **disco** (abajo).
+- Alertas (COST-08): una notificación de Kuma (Telegram o email, creada en la UI con «Default enabled» y
+  «Apply on all existing monitors») enlazada a todos los monitores. Comprobar el enlace en la sqlite, no en la
+  UI: `docker exec csfinance-uptime-kuma-1 sqlite3 /app/data/kuma.db 'select count(*) from monitor_notification'`
+  tiene que dar el número de monitores. Prueba: `$C stop worker`, esperar a que `noop` pase a DOWN (150 s de
+  intervalo + 1 reintento ≈ 5 min), `$C start worker` → llegan el aviso de DOWN y el de UP.
+- Disco (COST-08): `deploy/vps/disk-check.sh` empuja `up`/`down` al monitor push `disk` según `df /` supere el
+  80 % (`DISK_MAX_PCT`). Lo lanza un cron de root cada 5 min (línea en la cabecera del script); el token va en
+  `KUMA_PUSH_TOKENS` como `disk=<token>`. Si el disco ya está por encima al instalarlo, el primer aviso es real:
+  la mitad del uso es de otros stacks del host (IRIS/n8n), no del worker.
