@@ -32,7 +32,10 @@ async def open_resources(state: Any) -> None:
     # ("cs-finance-worker/1.0", "Mozilla/5.0" sin cookies) y 200 a "python-httpx/x" o "curl/x"
     # desde la misma IP (medido en el VPS el 2026-10-16, COST-07/COST-12).
     ua = f"cs-finance-worker/1.0 python-httpx/{httpx.__version__}"
-    state.http = httpx.AsyncClient(timeout=30, headers={"User-Agent": ua})
+    # Sin `br`: con `brotli` instalado httpx anuncia "gzip, deflate, br" y steamcommunity.com responde 429
+    # a esa cabecera (aislado el 2026-10-16: misma IP, mismo UA, mismo instante; sin br → 200). Skinport,
+    # que exige br, lo pide por petición en worker/sources/skinport.py.
+    state.http = httpx.AsyncClient(timeout=30, headers={"User-Agent": ua, "Accept-Encoding": "gzip, deflate"})
     state.redis = redis.async_client(settings.VALKEY_URL)
     state.gate = Gate(state.redis)
     state.breakers = Breakers(redis.sync_client(settings.VALKEY_URL))
