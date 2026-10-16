@@ -23,6 +23,46 @@ JWT_SECRET=your-random-64-char-secret-here
 STEAM_API_KEY=
 ```
 
+## Segundo servicio de Render: `cs-finance-api-next` (COST-12)
+
+Desde el 2026-10-16 hay **dos** web services en Render sobre el mismo repo:
+
+| Servicio | Rama | URL | Para qué |
+|---|---|---|---|
+| `cs-finance-api` | `master` | `https://cs-finance-api.onrender.com` | Producción (APK publicado) |
+| `cs-finance-api-next` | `feat/migracion-steamwebapi` | `https://cs-finance-api-next.onrender.com` | Rama de integración de la migración (COST-xx): sombra del inventario, pruebas con el APK `next` |
+
+Mismo runtime (Python), build (`pip install -r requirements.txt`) y arranque (`uvicorn main:app --host 0.0.0.0`),
+plan free. **`master` no recibe nada de la migración hasta el final**: la app cambia de backend tocando solo la
+URL (`CS-FINANCE-ionic`: `npm run build:next` usa `environment.next.ts`); ningún endpoint se renombra.
+
+Variables **iguales** a producción: `STEAM_API_KEY`, `STEAM_GAME`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`,
+`GEMINI_API_KEY`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `REVIEW_*`, `ENV=production`, `COOKIE_SECURE=true`,
+`DEBUG=false`. Variables que **difieren**, y por qué:
+
+| Variable | En `next` | Por qué |
+|---|---|---|
+| `BASE_URL` | URL del servicio `next` | Es el `return_to` del callback de Steam OpenID: con la de producción el login volvería al otro backend |
+| `JWT_SECRET` | Distinto (`secrets.token_urlsafe(48)`) | Un token emitido por un backend no debe valer en el otro (verificado: 401 cruzado) |
+| `CHAT_ENABLED` | `false` | La cuota de Gemini (20 req/día) es por proyecto de Google y se compartiría con producción |
+| `CHAT_RAG_PRELOAD` | `false` | Sin chat, el precalentamiento del RAG solo gastaría embeddings |
+| `INVENTORY_SOURCE`, `PROFILE_SOURCE` | `shadow` | Sirve steamwebapi y encola `fetch_requests` para que el worker del VPS rellene `inventory_snapshots_shadow` (COST-07) |
+| `ALERTS_TICK_INTERVAL` | `0` | Supabase y Firebase son compartidos: el tick interno (PUSH-10) enviaría a los usuarios reales **cada alerta dos veces** |
+| `PRICE_TICK_TOKEN`, `CAP_TICK_TOKEN`, `ALERTS_TICK_TOKEN`, `NEWS_TICK_TOKEN`, `RAG_INGEST_TOKEN`, `BROADCAST_TOKEN` | Ausentes | Con el token esperado vacío `token_matches` devuelve siempre `False`: los `/internal/*` quedan deshabilitados. `BACKEND_BASE_URL` de GitHub Actions sigue apuntando a producción; los precios nuevos los produce el worker del VPS |
+| `LEETIFY_API_KEY` | Ausente | `/me/stats*` responde 503 en `next`; la clave está pendiente de rotación (SEC-09) |
+| `FRONTEND_URL`, `ALLOWED_REDIRECT_ORIGINS` | `https://localhost` y `myapp://auth/callback` | Solo se usa desde el APK: el login Android redirige al esquema `myapp://`; `https://localhost` es el origen del WebView de Capacitor |
+| `PYTHON_VERSION` | `3.12.7` | Fijada explícitamente (la del `venv` local) |
+
+Avisos:
+
+- **Supabase es compartido.** `DELETE /me` desde `next` borra `device_tokens`, `price_alerts` y `refresh_tokens`
+  reales del usuario. Solo con la cuenta de pruebas (`REVIEW_*`).
+- Con `INVENTORY_SOURCE=shadow` cada `GET /inventory` desde `next` gasta cuota de steamwebapi (es una sola
+  para los dos backends). En `own` (tras COST-06), cero.
+- Render free duerme: la primera petición tarda 30–50 s. No es un fallo.
+- Tras cada deploy: `curl https://cs-finance-api-next.onrender.com/` → 200 y
+  `curl -X POST https://cs-finance-api-next.onrender.com/auth/dev-token` → 404.
+
 ## Angular environment files
 
 Two environment files control where HTTP calls go:
