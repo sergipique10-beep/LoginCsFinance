@@ -119,6 +119,8 @@ async def test_open_y_close_resources(monkeypatch):
     state = SimpleNamespace()
     await broker.open_resources(state)
     assert state.pg is None and state.supabase is None and state.gate.limit("steamcommunity.com").steam
+    # Steam devuelve 429 a los UA propios y 200 a "python-httpx/x": el UA debe llevarlo (COST-07)
+    assert f"python-httpx/{httpx.__version__}" in state.http.headers["User-Agent"]
     await broker.close_resources(state)
     assert state.http.is_closed
 
