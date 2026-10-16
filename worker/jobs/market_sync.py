@@ -155,9 +155,12 @@ async def run_compute_reference(state: Any) -> dict[str, Any]:
         by_name = await market.latest_quotes(state.pg, now - REF_WINDOW)
         k = reference.market_k()
         refs = [reference.compute(name, qs, now, k) for name, qs in by_name.items()]
-        await market.insert_refs(state.pg, now, refs)
         rows = [current_row(r) for r in refs]
         changed = await changed_rows(state.redis, rows)
+        # market_ref es una serie: solo entra lo que cambia (como market_current). Con todas las
+        # referencias cada 15 min eran 2 M de filas y 400 MB en 18 h, el 90 % repetidas.
+        changed_names = {row["market_hash_name"] for row, _ in changed}
+        await market.insert_refs(state.pg, now, [r for r in refs if r.market_hash_name in changed_names])
         if changed and state.supabase is not None:
             stamp = now.isoformat()
             await sb_store.upsert(state.supabase, settings.MARKET_CURRENT_TABLE,

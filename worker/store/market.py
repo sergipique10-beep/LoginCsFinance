@@ -5,17 +5,39 @@ from typing import Any
 from worker.models import CatalogItem, Quote
 from worker.pricing.reference import Reference
 
-INSERT_QUOTE = """
+# Un lote entero en una sentencia: actualiza market_latest (seen_at siempre; ts y valores solo si
+# cambian) y escribe en la serie market_quotes únicamente las cotizaciones cuyo valor ha cambiado.
+# Sin esto la serie crecía una fila por captura (8,6 M filas / 1,8 GB en 18 h) y la lectura de
+# «la última de cada fuente» pasó de milisegundos a 63 s (deploy/vps/schema.sql, market_latest).
+INSERT_QUOTES = """
+with q as (
+    select * from unnest($1::timestamptz[], $2::text[], $3::text[], $4::float8[], $5::int[], $6::int[])
+        as t(ts, market_hash_name, source, price_usd, volume, listings)
+), changed as (
+    insert into market_latest (market_hash_name, source, ts, seen_at, price_usd, volume, listings)
+    select market_hash_name, source, ts, ts, price_usd::numeric(12, 4), volume, listings from q
+    on conflict (market_hash_name, source) do update set
+        seen_at   = excluded.seen_at,
+        ts        = case when (market_latest.price_usd, market_latest.volume, market_latest.listings)
+                              is distinct from (excluded.price_usd, excluded.volume, excluded.listings)
+                         then excluded.ts else market_latest.ts end,
+        price_usd = excluded.price_usd, volume = excluded.volume, listings = excluded.listings
+    where (market_latest.price_usd, market_latest.volume, market_latest.listings)
+          is distinct from (excluded.price_usd, excluded.volume, excluded.listings)
+       or market_latest.seen_at < excluded.seen_at
+    returning market_hash_name, source, ts, seen_at, price_usd, volume, listings
+)
 insert into market_quotes (ts, market_hash_name, source, price_usd, volume, listings)
-values ($1, $2, $3, $4, $5, $6) on conflict do nothing
+select ts, market_hash_name, source, price_usd, volume, listings from changed where ts = seen_at
+on conflict do nothing
 """
 
-# La última cotización de cada (ítem, fuente) dentro de la ventana.
+# La última cotización de cada (ítem, fuente) confirmada dentro de la ventana. `seen_at` hace de
+# `ts` de la Quote: la edad que pesa la referencia es la de la última confirmación, no la del
+# último cambio (un precio que lleva 6 h sin moverse sigue siendo un precio vigente).
 LATEST = """
-select distinct on (market_hash_name, source)
-       ts, market_hash_name, source, price_usd::float8, volume, listings
-from market_quotes where ts > $1
-order by market_hash_name, source, ts desc
+select seen_at, market_hash_name, source, price_usd::float8, volume, listings
+from market_latest where seen_at > $1
 """
 
 INSERT_REF = """
@@ -46,11 +68,23 @@ on conflict (source) do update set last_error_at = now(), last_error = $2,
 """
 
 
-async def insert_quotes(pool: Any, quotes: list[Quote]) -> int:
-    rows = [(q.ts, q.market_hash_name, q.source, q.price_usd, q.volume, q.listings) for q in quotes]
+async def insert_quotes(pool: Any, quotes: list[Quote], chunk: int = 5000) -> int:
+    """Escribe un lote; devuelve cuántas cotizaciones llegaron (no cuántas cambiaron)."""
+    # Un (ítem, fuente) repetido dentro del mismo lote rompería el ON CONFLICT DO UPDATE
+    # («cannot affect row a second time»): se queda la más reciente.
+    uniq: dict[tuple[str, str], Quote] = {}
+    for q in quotes:
+        cur = uniq.get((q.market_hash_name, q.source))
+        if cur is None or q.ts >= cur.ts:
+            uniq[(q.market_hash_name, q.source)] = q
+    rows = list(uniq.values())
     async with pool.acquire() as conn:
-        await conn.executemany(INSERT_QUOTE, rows)
-    return len(rows)
+        for i in range(0, len(rows), chunk):
+            part = rows[i:i + chunk]
+            await conn.execute(INSERT_QUOTES,
+                               [q.ts for q in part], [q.market_hash_name for q in part], [q.source for q in part],
+                               [q.price_usd for q in part], [q.volume for q in part], [q.listings for q in part])
+    return len(quotes)
 
 
 async def latest_quotes(pool: Any, since: dt.datetime) -> dict[str, list[Quote]]:

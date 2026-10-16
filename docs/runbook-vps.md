@@ -71,6 +71,12 @@ el `nmap` desde fuera del tailnet y el acceso por la IP de Tailscale.
 $C exec -T timescaledb psql -U postgres -d csfinance -c "set role worker" -f /schema/schema.sql
 ```
 
+Cuando un cambio de código depende de un objeto nuevo del esquema, **primero el esquema y después
+`up -d --build`**: el worker viejo ignora la tabla nueva, pero el nuevo falla sin ella. Ejemplo:
+`market_latest` (2026-10-16): su relleno inicial desde `market_quotes` tarda ~1 min con 8,6 M de
+filas y solo se ejecuta si la tabla está vacía. Comprobar después que `compute_reference` vuelve a
+UP en Kuma en el siguiente cuarto de hora (2, 17, 32, 47).
+
 ## Restaurar un backup
 
 El `pg_dump` avisa de FK circulares en el catálogo de Timescale: es normal, pero la restauración

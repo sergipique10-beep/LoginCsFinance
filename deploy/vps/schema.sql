@@ -23,6 +23,29 @@ create table if not exists market_quotes (
 );
 select create_hypertable('market_quotes', by_range('ts', interval '1 day'), if_not_exists => true);
 
+-- Última cotización por (ítem, fuente). market_quotes solo recibe una fila cuando el valor
+-- CAMBIA respecto a esta tabla (el 2026-10-16, con una fila por captura, llegaron 8,6 M de filas
+-- y 1,8 GB en 18 h: el 95 % de Skinport repetía el valor anterior, y la lectura
+-- «distinct on … where ts > now()-24h» tardaba 63 s con un timeout de 30 s). `ts` es el último
+-- cambio (= la fila de market_quotes); `seen_at`, la última vez que la fuente lo confirmó.
+create table if not exists market_latest (
+    market_hash_name text        not null,
+    source           text        not null,
+    ts               timestamptz not null,
+    seen_at          timestamptz not null,
+    price_usd        numeric(12, 4),
+    volume           integer,
+    listings         integer,
+    primary key (market_hash_name, source)
+);
+-- Relleno inicial desde la serie, solo si la tabla está vacía (idempotente y barato al repetir).
+insert into market_latest (market_hash_name, source, ts, seen_at, price_usd, volume, listings)
+select distinct on (market_hash_name, source) market_hash_name, source, ts, ts, price_usd, volume, listings
+from market_quotes
+where not exists (select 1 from market_latest)
+order by market_hash_name, source, ts desc
+on conflict do nothing;
+
 create table if not exists market_ref (
     ts               timestamptz not null,
     market_hash_name text        not null,
