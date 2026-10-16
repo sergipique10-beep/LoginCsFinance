@@ -68,8 +68,15 @@ el `nmap` desde fuera del tailnet y el acceso por la IP de Tailscale.
 `deploy/vps/schema.sql` es idempotente. Para aplicar un cambio sin recrear el volumen:
 
 ```bash
-$C exec -T timescaledb psql -U postgres -d csfinance -c "set role worker" -f /schema/schema.sql
+$C exec -T timescaledb psql -U postgres -d csfinance -v ON_ERROR_STOP=1 -c "set role worker" -f - \
+    < /opt/csfinance/app/deploy/vps/schema.sql
 ```
+
+⚠️ **No usar `-f /schema/schema.sql`** (el fichero montado en el contenedor): `./vps/schema.sql` se monta
+como **fichero**, y un `git pull` que lo cambie escribe un inode nuevo que el contenedor no ve. El
+2026-10-16 así se aplicó una versión vieja sin `market_latest` y el worker nuevo falló dos ticks con
+`UndefinedTableError`. El fichero del host por stdin es siempre el del repo. Comprobar al final con
+`\d <tabla nueva>` o con la salida (`CREATE TABLE`, `INSERT 0 n`).
 
 Cuando un cambio de código depende de un objeto nuevo del esquema, **primero el esquema y después
 `up -d --build`**: el worker viejo ignora la tabla nueva, pero el nuevo falla sin ella. Ejemplo:
