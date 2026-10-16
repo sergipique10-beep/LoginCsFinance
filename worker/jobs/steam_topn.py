@@ -21,6 +21,7 @@ from typing import Any
 from worker import settings
 from worker.adapters import steam_market as adapter
 from worker.broker import broker
+from worker.models import Quote
 from worker.jobs.market_sync import Ctx, _run, now_utc
 from worker.net import retry
 from worker.net.breaker import RateLimited
@@ -72,7 +73,8 @@ async def run_topn(state: Any) -> dict[str, Any]:
 async def run_priceoverview(state: Any) -> dict[str, Any]:
     async def go() -> dict[str, Any]:
         now = now_utc()
-        quotes, misses, stop = [], 0, ""
+        quotes: list[Quote] = []
+        misses, stop = 0, ""
         # Nunca más vueltas que nombres: con una lista corta, un tick no repite el mismo ítem.
         for _ in range(min(settings.STEAM_PRICEOVERVIEW_PER_TICK, await state.redis.llen(TOPN_KEY))):
             raw_name = await state.redis.lmove(TOPN_KEY, TOPN_KEY, "LEFT", "RIGHT")  # rotación atómica
