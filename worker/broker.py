@@ -35,7 +35,11 @@ async def open_resources(state: Any) -> None:
     # Sin `br`: con `brotli` instalado httpx anuncia "gzip, deflate, br" y steamcommunity.com responde 429
     # a esa cabecera (aislado el 2026-10-16: misma IP, mismo UA, mismo instante; sin br → 200). Skinport,
     # que exige br, lo pide por petición en worker/sources/skinport.py.
-    state.http = httpx.AsyncClient(timeout=30, headers={"User-Agent": ua, "Accept-Encoding": "gzip, deflate"})
+    # Sin keep-alive: el worker recibía 429 de priceoverview a las ~20 peticiones del mismo cliente mientras
+    # 70 sondas con las mismas cabeceras y ritmo, cada una en conexión nueva, daban 200 (2026-10-16 23:25-23:46).
+    # Hipótesis en prueba: Steam cuenta por conexión. Coste: un handshake TLS por petición, irrelevante a 6/min.
+    state.http = httpx.AsyncClient(timeout=30, headers={"User-Agent": ua, "Accept-Encoding": "gzip, deflate",
+                                                        "Connection": "close"})
     state.redis = redis.async_client(settings.VALKEY_URL)
     state.gate = Gate(state.redis)
     state.breakers = Breakers(redis.sync_client(settings.VALKEY_URL))

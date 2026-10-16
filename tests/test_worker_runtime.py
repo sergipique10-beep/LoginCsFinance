@@ -123,6 +123,7 @@ async def test_open_y_close_resources(monkeypatch):
     assert f"python-httpx/{httpx.__version__}" in state.http.headers["User-Agent"]
     # Steam responde 429 a cualquier petición que anuncie `br` (COST-04, 2026-10-16); Skinport lo pide aparte.
     assert "br" not in state.http.headers["Accept-Encoding"]
+    assert state.http.headers["Connection"] == "close"   # conexión nueva por petición (COST-04, 2026-10-16)
     await broker.close_resources(state)
     assert state.http.is_closed
 
