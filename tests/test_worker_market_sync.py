@@ -171,7 +171,8 @@ async def test_compute_reference_solo_sube_lo_que_cambia(fake_market, monkeypatc
     fake_market.latest["M4"] = [Quote(later, "M4", "skinport", 6.0, None, 1)]
     third = await ms.run_compute_reference(st)
     assert third["changed"] == 1 and sent[-1][1] == ["M4"] and third["changed_pct"] == 50.0
-    assert len(fake_market.refs) == 6
+    # market_ref solo recibe las referencias que cambian: 2 + 0 + 1, no 3 por tick.
+    assert [r.market_hash_name for r in fake_market.refs] == ["AK", "M4", "M4"]
 
 
 def test_tareas_registradas_con_su_cron():
@@ -234,13 +235,20 @@ def test_store_market_contra_timescale():
         pool = await pg.create_pool(DSN)
         try:
             async with pool.acquire() as c:
-                await c.execute("truncate market_quotes, market_ref, catalog_items, source_health")
+                await c.execute("truncate market_quotes, market_latest, market_ref, catalog_items, source_health")
             old = NOW - dt.timedelta(hours=1)
-            await market.insert_quotes(pool, [Quote(old, "AK", "skinport", 9.0, None, 2),
-                                              Quote(NOW, "AK", "skinport", 10.0, None, 3),
+            await market.insert_quotes(pool, [Quote(old, "AK", "skinport", 9.0, None, 2)])
+            await market.insert_quotes(pool, [Quote(NOW, "AK", "skinport", 10.0, None, 3),
                                               Quote(NOW, "AK", "marketcsgo", 10.5, 4, None)])
             latest = await market.latest_quotes(pool, NOW - dt.timedelta(days=1))
             assert sorted((q.source, q.price_usd) for q in latest["AK"]) == [("marketcsgo", 10.5), ("skinport", 10.0)]
+            # Misma cotización más tarde: market_latest avanza seen_at, la serie no crece.
+            later = NOW + dt.timedelta(minutes=5)
+            await market.insert_quotes(pool, [Quote(later, "AK", "skinport", 10.0, None, 3)])
+            async with pool.acquire() as c:
+                assert await c.fetchval("select count(*) from market_quotes") == 3
+                assert await c.fetchval("select seen_at from market_latest where source = 'skinport'") == later
+                assert await c.fetchval("select ts from market_latest where source = 'skinport'") == NOW
             await market.insert_refs(pool, NOW, [Reference("AK", 10.2, 2, NOW, 2, 4)])
             await market.upsert_catalog(pool, [CatalogItem("AK", "AK-47", "Rifles", "Classified", "#fff", None)])
             await market.upsert_catalog(pool, [CatalogItem("AK", "AK-47", "Rifles", "Covert", "#f00", None)])
