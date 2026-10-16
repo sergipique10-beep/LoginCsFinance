@@ -121,6 +121,8 @@ async def test_open_y_close_resources(monkeypatch):
     assert state.pg is None and state.supabase is None and state.gate.limit("steamcommunity.com").steam
     # Steam devuelve 429 a los UA propios y 200 a "python-httpx/x": el UA debe llevarlo (COST-07)
     assert f"python-httpx/{httpx.__version__}" in state.http.headers["User-Agent"]
+    # Steam responde 429 a cualquier petición que anuncie `br` (COST-04, 2026-10-16); Skinport lo pide aparte.
+    assert "br" not in state.http.headers["Accept-Encoding"]
     await broker.close_resources(state)
     assert state.http.is_closed
 
