@@ -175,12 +175,13 @@ async def test_nombre_desconocido_cuenta_como_miss(fake_store):
     assert res2["spent_today"] == 3
 
 
-async def test_429_abre_cooldown_y_el_tick_falla(fake_store):
+async def test_429_abre_cooldown_y_el_tick_falla(fake_store, caplog):
     handler, seen = _steam({"a": 429, "b": "1.00"})
     state = make_state(handler)
     await state.redis.rpush(st.TOPN_KEY, "a", "b")
     res = await st.run_priceoverview(state)
     assert res["ok"] is False and "RateLimited" in res["error"]
+    assert "429 en la petición 1 del tick, nombre='a'" in caplog.text
     assert seen == ["a"]                                   # no se sigue pidiendo
     assert await state.gate.cooldown_left("steamcommunity.com") > 0
     assert await state.gate.cooldown_left("steamcommunity.com/inventory") == 0   # ámbito aparte

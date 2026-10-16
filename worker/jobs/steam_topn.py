@@ -23,6 +23,7 @@ from worker.adapters import steam_market as adapter
 from worker.broker import broker
 from worker.jobs.market_sync import Ctx, _run, now_utc
 from worker.net import retry
+from worker.net.breaker import RateLimited
 from worker.sources import steam_market
 from worker.store import market
 from worker.store import supabase as sb_store
@@ -83,6 +84,11 @@ async def run_priceoverview(state: Any) -> dict[str, Any]:
                 break
             try:
                 q = adapter.adapt_priceoverview(await steam_market.priceoverview(state, name), name, now)
+            except RateLimited:
+                # Para medir la ventana de Steam: cuántas iban en este tick y en cuál cayó.
+                log.warning("[steam-topn] 429 en la petición %d del tick, nombre=%r, quotes=%d misses=%d",
+                            len(quotes) + misses + 1, name, len(quotes), misses)
+                raise
             except (steam_market.PriceUnavailable, retry.ServerError) as e:
                 log.info("[steam-topn] %s: %s", name, e)
                 q = None
