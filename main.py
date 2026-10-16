@@ -59,10 +59,16 @@ async def lifespan(app: FastAPI):
             "STEAM_API_KEY no está configurada — "
             "los endpoints de Steam Web API no funcionarán"
         )
-    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY and CAP_TICK_TOKEN):
+    _cap_missing = [name for name, value in (("SUPABASE_URL", SUPABASE_URL),
+                                              ("SUPABASE_SERVICE_KEY", SUPABASE_SERVICE_KEY),
+                                              ("CAP_TICK_TOKEN", CAP_TICK_TOKEN)) if not value]
+    if _cap_missing:
+        # Nombrar solo lo que falta: el aviso antiguo listaba las tres y hacía creer que Supabase
+        # estaba sin configurar cuando solo faltaba el token del tick (COST-12, servicio `next`).
         logger.warning(
-            "SUPABASE_URL / SUPABASE_SERVICE_KEY / CAP_TICK_TOKEN incompletas — "
-            "el histórico del índice de precio (cap-history) no funcionará"
+            "%s no está configurada — "
+            "el histórico del índice de precio (POST /internal/cap-tick) no funcionará",
+            " / ".join(_cap_missing),
         )
     if not (REVIEW_USER and REVIEW_PASSWORD and REVIEW_STEAM_ID):
         logger.info("[startup] review-login desactivado (REVIEW_USER/PASSWORD/STEAM_ID incompletos)")
