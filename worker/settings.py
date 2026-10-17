@@ -91,6 +91,12 @@ STEAM_PRICEOVERVIEW_CRON = os.environ.get("STEAM_PRICEOVERVIEW_CRON", "*/30 * * 
 STEAM_BUDGET_PRICEOVERVIEW = int(os.environ.get("STEAM_BUDGET_PRICEOVERVIEW", "120"))
 # Tabla de Supabase donde compute_reference publica el precio de referencia (sombra hasta COST-06).
 MARKET_CURRENT_TABLE = os.environ.get("MARKET_CURRENT_TABLE", "market_current")
+# Tablas sombra de COST-05 (rankings, índice y cierre diario). En el corte (COST-06) pasan a las de
+# producción cambiando solo estas variables.
+MARKET_TRENDING_TABLE = os.environ.get("MARKET_TRENDING_TABLE", "market_trending_own")
+MARKET_MOVERS_TABLE = os.environ.get("MARKET_MOVERS_TABLE", "market_movers_own")
+MARKET_CAP_HISTORY_TABLE = os.environ.get("MARKET_CAP_HISTORY_TABLE", "market_cap_history_own")
+PRECIOS_HISTORICOS_TABLE = os.environ.get("PRECIOS_HISTORICOS_TABLE", "precios_historicos_own")
 # Valores que nunca pueden salir en un log (worker/logs.py los enmascara).
 SECRET_ENV = ("STEAM_WEB_API_KEY", "CSFLOAT_API_KEY", "WAXPEER_API_KEY", "SUPABASE_SERVICE_KEY",
               "VALKEY_PASSWORD", "PG_PASSWORD", "PG_WORKER_PASSWORD")

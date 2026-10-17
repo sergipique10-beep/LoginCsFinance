@@ -131,3 +131,40 @@ async def source_ok(pool: Any, source: str) -> None:
 async def source_fail(pool: Any, source: str, error: str) -> None:
     async with pool.acquire() as conn:
         await conn.execute(SOURCE_FAIL, source, error[:500])
+
+
+# ---------------------------------------------------------------- rankings e índice (COST-05)
+
+# Cierres de la serie propia en los días que piden los deltas (hace 1, 7 y 30 días).
+DAILY_CLOSES = """
+select market_hash_name, day::date, close_usd::float8 from market_ref_daily where day::date = any($1::date[])
+"""
+
+CATALOG_ALL = "select market_hash_name, weapon, category, rarity, rarity_color, image_url from catalog_items"
+
+# Ventas de un día (máximo del volumen 24 h de Skinport observado ese día): el `volume` de precios_historicos.
+DAILY_VOLUME = """
+select market_hash_name, max(volume) from market_daily
+where day::date = $1 and source = 'skinport_sales' group by 1
+"""
+
+
+async def daily_closes(pool: Any, days: list[dt.date]) -> dict[str, dict[dt.date, float]]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(DAILY_CLOSES, days)
+    out: dict[str, dict[dt.date, float]] = {}
+    for name, day, close in rows:
+        if close is not None:
+            out.setdefault(name, {})[day] = close
+    return out
+
+
+async def catalog_all(pool: Any) -> dict[str, CatalogItem]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(CATALOG_ALL)
+    return {r[0]: CatalogItem(*r) for r in rows}
+
+
+async def daily_volume(pool: Any, day: dt.date) -> dict[str, int]:
+    async with pool.acquire() as conn:
+        return {r[0]: r[1] for r in await conn.fetch(DAILY_VOLUME, day) if r[1] is not None}

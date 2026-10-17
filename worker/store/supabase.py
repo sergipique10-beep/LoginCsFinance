@@ -66,3 +66,47 @@ async def active_alert_names(sb: Any) -> list[str]:
     rows = (await asyncio.to_thread(_q)).data or []
     return sorted({r["market_hash_name"] for r in rows if r.get("market_hash_name")})
 
+
+
+# ---------------------------------------------------------------- rankings, índice y cierre (COST-05)
+
+async def select_all(sb: Any, table: str, columns: str, page: int = 1000, **eq: Any) -> list[dict[str, Any]]:
+    """Toda la tabla por páginas (PostgREST corta en `db-max-rows`, 1000 en Supabase)."""
+    def _q(lo: int) -> Any:
+        q = sb.table(table).select(columns)
+        for k, v in eq.items():
+            q = q.eq(k, v)
+        return q.range(lo, lo + page - 1).execute()
+    out: list[dict[str, Any]] = []
+    lo = 0
+    while True:
+        rows = list((await asyncio.to_thread(_q, lo)).data or [])
+        out += rows
+        if len(rows) < page:
+            return out
+        lo += page
+
+
+async def last_cap_point(sb: Any, table: str = "market_cap_history") -> dict[str, Any] | None:
+    """El último punto del índice de steamwebapi: el I_0 del índice propio."""
+    def _q() -> Any:
+        return sb.table(table).select("ts, priceindex, realpriceindex").order("ts", desc=True).limit(1).execute()
+    rows = (await asyncio.to_thread(_q)).data or []
+    return rows[0] if rows else None
+
+
+async def replace_all(sb: Any, table: str, rows: list[dict[str, Any]], key: str = "name") -> int:
+    """DELETE de todo + INSERT (los movers de hoy: `RankingRepo.replace_snapshot`)."""
+    def _q() -> Any:
+        sb.table(table).delete().neq(key, "").execute()
+        if rows:
+            sb.table(table).insert(rows).execute()
+        return len(rows)
+    return int(await asyncio.to_thread(_q))
+
+
+async def delete_older(sb: Any, table: str, column: str, before_iso: str) -> None:
+    """La purga del trending: fuera lo que no aparece desde `before_iso`."""
+    def _q() -> Any:
+        return sb.table(table).delete().lt(column, before_iso).execute()
+    await asyncio.to_thread(_q)

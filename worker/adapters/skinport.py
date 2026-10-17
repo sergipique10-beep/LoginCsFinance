@@ -35,3 +35,19 @@ def adapt_sales(raw: Any, ts: dt.datetime) -> list[Quote]:
         price = to_float(d1.get("median")) if vol else to_float(d7.get("median"))
         out.append(Quote(ts, name, "skinport_sales", price, volume=vol or 0))
     return out
+
+
+def sales_stats(raw: Any) -> dict[str, dict[str, Any]]:
+    """Resumen por nombre de /v1/sales/history para rankings e índice (COST-05): volúmenes y medianas
+    de 24 h, 7 d y 30 d, y la media de 30 d. Es lo que `SalesStats` (worker/pricing/index.py) recibe."""
+    out: dict[str, dict[str, Any]] = {}
+    for row in raw if isinstance(raw, list) else []:
+        name = name_of(row)
+        if not name or row.get("currency", "USD") != "USD":
+            continue
+        d1, d7, d30 = (row.get(k) or {} for k in ("last_24_hours", "last_7_days", "last_30_days"))
+        out[name] = {"volume_24h": to_int(d1.get("volume")) or 0, "volume_7d": to_int(d7.get("volume")) or 0,
+                     "volume_30d": to_int(d30.get("volume")) or 0, "median_24h": to_float(d1.get("median")),
+                     "median_7d": to_float(d7.get("median")), "median_30d": to_float(d30.get("median")),
+                     "avg_30d": to_float(d30.get("avg"))}
+    return out
