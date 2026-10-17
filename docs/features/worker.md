@@ -56,7 +56,7 @@ nada del backend** (la imagen solo lleva `worker/`) y el backend no importa nada
 | `broker.py` | Taskiq: `RedisStreamBroker` (streams + consumer group + ack) y `TaskiqScheduler` con `LabelScheduleSource`. Recursos por proceso en `WORKER_STARTUP` (`state.http`, `.redis`, `.gate`, `.breakers`, `.pg`, `.supabase`) |
 | `jobs/` | `noop` (cada minuto: `SELECT 1` en Supabase y Timescale + push a Kuma) y `market_sync.py` (abajo). `jobs/__init__.py` importa los módulos hermanos para registrarlos |
 | `main.py` | `python -m worker.main worker\|scheduler` → CLI de Taskiq. **Un único `scheduler`** |
-| `net/gate.py` | GCRA en Valkey por ámbito (`rl:{scope}`: el host o `host/prefijo` si está declarado, `Gate.scope(url)`), jitter, cooldown tras 429 (`cool:{scope}`: 1 h, ×2, tope 6 h) y presupuestos diarios (`budget:{kind}:{yyyymmdd}`) |
+| `net/gate.py` | GCRA en Valkey por ámbito (`rl:{scope}`: el host o `host/prefijo` si está declarado, `Gate.scope(url)`), jitter, cooldown tras 429 (`cool:{scope}`: 2 h, ×2, tope 6 h) y presupuestos diarios (`budget:{kind}:{yyyymmdd}`) |
 | `net/breaker.py` | pybreaker por host con estado en Valkey (`cb:{host}`): 5 fallos → abierto 300 s (Steam 900). Logs `[breaker]` |
 | `net/retry.py` | `request()`: **la única puerta a Internet**. Gate → breaker → petición → stamina (3 intentos en 5xx / transporte / 429 sin Retry-After fuera de Steam) |
 | `store/` | Clientes de Valkey (async + sync, reconectan con backoff), Timescale (asyncpg) y Supabase (service_role) |
