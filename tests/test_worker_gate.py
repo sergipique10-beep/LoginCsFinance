@@ -91,7 +91,7 @@ async def test_cooldown_dobla_aunque_el_anterior_haya_expirado():
     assert await g.open_cooldown(STEAM) == 7200
     await g.redis.delete(f"cool:{STEAM}")          # expiró
     assert await g.cooldown_left(STEAM) == 0
-    assert await g.open_cooldown(STEAM) == 7200
+    assert await g.open_cooldown(STEAM) == 14400
     await g.redis.delete(f"cool:{STEAM}", f"cool:last:{STEAM}")   # 24 h sin 429: vuelve a empezar
     assert await g.open_cooldown(STEAM) == 7200
 
