@@ -4,6 +4,7 @@ files:
   - tools/spikes/common.py
   - tools/spikes/spike_inventory.py
   - tools/spikes/spike_priceoverview.py
+  - tools/spikes/spike_priceoverview_quota.py
   - tools/spikes/spike_sources.py
 ---
 

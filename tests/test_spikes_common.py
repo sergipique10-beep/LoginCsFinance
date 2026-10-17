@@ -4,7 +4,7 @@ import struct
 import httpx
 import pytest
 
-from tools.spikes import spike_inventory, spike_priceoverview, spike_sources
+from tools.spikes import spike_inventory, spike_priceoverview, spike_priceoverview_quota, spike_sources
 from tools.spikes.common import (certificate_checksum, compare_certificates, currency_ratio,
                                  decode_certificate, guess_currency, name_coverage, parse_money,
                                  parse_volume, property_coverage, rate_headers)
@@ -148,3 +148,9 @@ def test_sources_keyed_sin_clave_no_llama(monkeypatch):
     rec = _Rec()
     spike_sources.keyed(_client(lambda r: pytest.fail("no debe llamar")), rec)
     assert [d["skipped"] for _, d in rec.lines] == ["falta CSFLOAT_API_KEY", "falta WAXPEER_API_KEY"]
+
+
+def test_spike_cuota_usa_el_cubo_del_worker():
+    # Mide el cubo real de producción: UA y Accept-Encoding del worker, sin br (COST-04, EL-22).
+    assert spike_priceoverview_quota.HEADERS["Accept-Encoding"] == "gzip, deflate"
+    assert "python-httpx" in spike_priceoverview_quota.UA and spike_priceoverview_quota.RATE_S >= 60
