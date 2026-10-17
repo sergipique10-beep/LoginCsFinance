@@ -12,7 +12,13 @@ Las tarjetas salen de la MISMA lectura que market_current (market_sync.compute_r
 tabla de Supabase: mismos números, sin paginar 47 k filas por PostgREST. Las reglas (elegibilidad,
 turnover, diversificación, slabs) y la fila (`_to_row`) son las del backend: mismo JSON que hoy. El
 worker no escribe `liquidity_breakdown` (invariante del detail sheet). Nada de aquí toca Steam.
+
+La parte de CPU pura (37 k tarjetas, elegibilidad, diversificación) va en un hilo (`asyncio.to_thread`):
+el 2026-10-17 bloqueó el event loop > 10 s en el VPS y el consumidor del stream de Valkey (XREADGROUP,
+`xread_block` 2 s) murió con `redis.TimeoutError` tres ticks seguidos; Taskiq reinició el proceso y el
+job nunca terminó (EL-24).
 """
+import asyncio
 import datetime as dt
 import json
 import logging
@@ -94,14 +100,17 @@ async def build_cards(state: Any, now: dt.datetime) -> tuple[list[Card], dict[st
     stats = await load_stats(state.redis)
     today = now.date()
     closes = await market.daily_closes(state.pg, [today - dt.timedelta(days=d) for d in (1, 7, 30)])
-    cards = []
-    for r in refs:
-        if not r.ref_price_usd:
-            continue
-        c = closes.get(r.market_hash_name, {})
-        cl = own_card.Closes(*(c.get(today - dt.timedelta(days=d)) for d in (1, 7, 30)))
-        cards.append(own_card.card(r, cat.get(r.market_hash_name), stats.get(r.market_hash_name), cl))
-    return cards, stats, refs
+
+    def build() -> list[Card]:
+        cards = []
+        for r in refs:
+            if not r.ref_price_usd:
+                continue
+            c = closes.get(r.market_hash_name, {})
+            cl = own_card.Closes(*(c.get(today - dt.timedelta(days=d)) for d in (1, 7, 30)))
+            cards.append(own_card.card(r, cat.get(r.market_hash_name), stats.get(r.market_hash_name), cl))
+        return cards
+    return await asyncio.to_thread(build), stats, refs
 
 
 # ---------------------------------------------------------------- jobs
@@ -110,8 +119,7 @@ async def run_compute_rankings(state: Any) -> dict[str, Any]:
     async def go() -> dict[str, Any]:
         now = ms.now_utc()
         cards, _, _ = await build_cards(state, now)
-        trending = compute_trending(cards)
-        movers = compute_movers(cards)
+        trending, movers = await asyncio.to_thread(lambda: (compute_trending(cards), compute_movers(cards)))
         stamp = now.isoformat()
         rows: list[dict[str, Any]] = [{**_to_row(c, i), "seen_at": stamp} for i, c in enumerate(trending)]
         mrows: list[dict[str, Any]] = [dict(_to_row(c, i, "hot")) for i, c in enumerate(movers["hot"])] \

@@ -21,6 +21,7 @@ from worker.pricing.index import SalesStats
 from worker.pricing.reference import Reference
 
 STEAM_LISTING = "https://steamcommunity.com/market/listings/730/{name}"
+_ITEM_FIELDS = tuple(f.name for f in fields(SteamItem))   # una vez, no en cada una de las 37 k tarjetas
 _PREFIXES = ("★ ", "StatTrak™ ", "Souvenir ")
 
 
@@ -95,7 +96,7 @@ def card(ref: Reference, cat: CatalogItem | None, s: SalesStats | None, closes: 
 
 def steam_item(c: dict[str, Any]) -> SteamItem:
     """Lo mínimo de `SteamItem` que miran `ranking_eligible` e `is_sticker_slab`."""
-    values: dict[str, Any] = {f.name: None for f in fields(SteamItem)}
+    values: dict[str, Any] = dict.fromkeys(_ITEM_FIELDS)
     values.update(id=c["name"], market_hash_name=c["name"], market_name=c["name"], item_type=c["itemType"],
                   price_latest_sell=c["priceLatest"] or None, sold_24h=c["sold24h"], variants=(), prices=())
     return SteamItem(**values)

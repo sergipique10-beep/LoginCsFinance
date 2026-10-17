@@ -188,6 +188,22 @@ async def test_compute_rankings_escribe_sombra_y_trae_catalogo_si_falta(fake):
     assert fake.ok == ["compute_rankings"]
 
 
+async def test_compute_rankings_no_bloquea_el_event_loop(fake, monkeypatch):
+    """EL-24: la CPU de las tarjetas y los rankings va en un hilo; si vuelve al loop, el consumidor del
+    stream de Valkey muere por timeout en el VPS y Taskiq reinicia el proceso a mitad del job."""
+    import asyncio
+    calls = []
+    real = asyncio.to_thread
+
+    async def spy(fn, *a, **k):
+        calls.append(fn.__name__)
+        return await real(fn, *a, **k)
+    monkeypatch.setattr(rk.asyncio, "to_thread", spy)
+    fake.refs = [ref(f"AK-47 | Skin{i} (Field-Tested)", 20.0 + i, vol=6) for i in range(3)]
+    assert (await rk.run_compute_rankings(state()))["trending"] == 3
+    assert calls == ["build", "<lambda>"]
+
+
 async def test_compute_rankings_sin_elegibles_conserva_movers(fake):
     fake.refs = [ref("AK-47 | Skin0 (Field-Tested)", 5.0)]
     res = await rk.run_compute_rankings(state())
