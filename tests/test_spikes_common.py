@@ -1,4 +1,5 @@
 """Spike COST-00: lógica pura (tools/spikes/common.py) y los scripts contra un transporte falso."""
+import os
 import struct
 
 import httpx
@@ -148,6 +149,17 @@ def test_sources_keyed_sin_clave_no_llama(monkeypatch):
     rec = _Rec()
     spike_sources.keyed(_client(lambda r: pytest.fail("no debe llamar")), rec)
     assert [d["skipped"] for _, d in rec.lines] == ["falta CSFLOAT_API_KEY", "falta WAXPEER_API_KEY"]
+
+
+def test_spike_cuota_no_arranca_dos_veces(tmp_path):
+    lock = tmp_path / "quota.pid"
+    lock.write_text("4242")
+    with pytest.raises(SystemExit, match="pid 4242"):
+        spike_priceoverview_quota.single_instance(lock, alive=lambda pid: pid == 4242)
+    assert lock.read_text() == "4242"                       # no se pisa un spike vivo
+    spike_priceoverview_quota.single_instance(lock, alive=lambda pid: False)   # pid muerto: se pisa
+    assert lock.read_text() == str(os.getpid())
+    spike_priceoverview_quota.single_instance(tmp_path / "nuevo" / "quota.pid", alive=lambda pid: True)
 
 
 def test_spike_cuota_usa_el_cubo_del_worker():
