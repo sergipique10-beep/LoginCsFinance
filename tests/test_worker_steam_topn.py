@@ -37,8 +37,8 @@ def make_state(handler):
 @pytest.fixture
 def fake_store(monkeypatch):
     db = SimpleNamespace(quotes=[], ok=[], fail=[], alerts=["AK-47 | Redline (Field-Tested)"],
-                         inv=["AWP | Asiimov (Field-Tested)", "AK-47 | Redline (Field-Tested)"],
-                         top=["Glock-18 | Fade (Factory New)", "AWP | Asiimov (Field-Tested)", "M4A4 | Howl (Minimal Wear)"])
+                         inv=["AWP | Asiimov (Field-Tested)", "AK-47 | Redline (Field-Tested)",
+                              "Glock-18 | Fade (Factory New)"])
 
     async def insert_quotes(pool, quotes):
         db.quotes += quotes
@@ -56,16 +56,12 @@ def fake_store(monkeypatch):
     async def active_alert_names(sb):
         return db.alerts
 
-    async def top_turnover_names(sb, n):
-        return db.top[:n]
-
     async def push(*a, **k):
         return True
     for n, f in dict(insert_quotes=insert_quotes, source_ok=source_ok, source_fail=source_fail,
                      recent_inventory_names=recent_inventory_names).items():
         monkeypatch.setattr(st.market, n, f)
     monkeypatch.setattr(st.sb_store, "active_alert_names", active_alert_names)
-    monkeypatch.setattr(st.sb_store, "top_turnover_names", top_turnover_names)
     import worker.jobs.market_sync as ms
     monkeypatch.setattr(ms.health, "push", push)
     return db
@@ -97,13 +93,15 @@ def test_merge_names_prioridad_dedupe_y_tope():
 
 
 async def test_topn_job_escribe_la_lista_en_orden(fake_store):
+    """Alertas primero, inventarios después, sin repetir; ningún top por turnover (N pequeño)."""
     state = make_state(lambda req: httpx.Response(500))
     res = await st.run_topn(state)
-    assert res == {"ok": True, "names": 4}
+    assert res == {"ok": True, "names": 3}
     names = [n.decode() for n in await state.redis.lrange(st.TOPN_KEY, 0, -1)]
     assert names == ["AK-47 | Redline (Field-Tested)", "AWP | Asiimov (Field-Tested)",
-                     "Glock-18 | Fade (Factory New)", "M4A4 | Howl (Minimal Wear)"]
+                     "Glock-18 | Fade (Factory New)"]
     assert fake_store.ok == ["steam_topn"]
+    assert not hasattr(st.sb_store, "top_turnover_names")
 
 
 async def test_topn_respeta_el_tope(fake_store, monkeypatch):
@@ -186,9 +184,19 @@ async def test_429_abre_cooldown_y_el_tick_falla(fake_store, caplog):
     assert await state.gate.cooldown_left("steamcommunity.com") > 0
     assert await state.gate.cooldown_left("steamcommunity.com/inventory") == 0   # ámbito aparte
     assert fake_store.fail[0][0] == "steam_priceoverview"
-    # Siguiente tick: el cooldown lo para antes de salir a Steam.
+    # Siguiente tick: el cooldown lo para antes de salir a Steam, y antes de rotar o gastar.
+    spent_before = await state.gate.spent(st.BUDGET_KIND)
     res2 = await st.run_priceoverview(state)
     assert res2["ok"] is False and "cooldown" in res2["error"] and seen == ["a"]
+    assert [n.decode() for n in await state.redis.lrange(st.TOPN_KEY, 0, -1)] == ["b", "a"]   # sin LMOVE
+    assert await state.gate.spent(st.BUDGET_KIND) == spent_before                               # sin try_spend
+
+
+def test_cadencia_y_ritmo_por_defecto_caben_en_media_cuota():
+    """2 nombres cada 30 min = 96/día < 120 de presupuesto (cuota mínima vista: ~100–150 por cubo y ventana)."""
+    assert settings.STEAM_PRICEOVERVIEW_CRON == "*/30 * * * *"
+    assert settings.STEAM_PRICEOVERVIEW_PER_TICK * 48 <= settings.STEAM_BUDGET_PRICEOVERVIEW
+    assert st.steam_priceoverview.labels["schedule"] == [{"cron": settings.STEAM_PRICEOVERVIEW_CRON}]
 
 
 async def test_priceoverview_usa_el_ambito_del_host(make=None):

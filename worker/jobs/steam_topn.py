@@ -1,19 +1,18 @@
-"""Steam top-N (COST-04): priceoverview de los ítems que importan, al ritmo que Steam tolera.
+"""Steam N pequeño (COST-04): priceoverview solo de los ítems que importan, dentro de la cuota de Steam.
 
 Dos jobs, no un proceso continuo (el scheduler ya marca el ritmo y Kuma vigila cada job):
 
-  steam_topn            cada hora   recalcula la lista y la deja en Valkey (`steam:topn`, LIST)
-  steam_priceoverview   */5 min     saca los siguientes PER_TICK nombres por rotación (LMOVE),
-                                    pide priceoverview por el gate y escribe market_quotes(steam)
+  steam_topn            cada hora                      recalcula la lista → Valkey `steam:topn` (LIST)
+  steam_priceoverview   STEAM_PRICEOVERVIEW_CRON       saca los siguientes PER_TICK nombres por rotación
+                                                       (LMOVE), pide priceoverview por el gate y escribe
+                                                       market_quotes(steam)
 
-Lista = alertas activas ∪ inventarios recientes (≤ 7 d, ref ≥ 10 $) ∪ top-N por turnover de
-market_current, en ese orden y sin repetir, tope STEAM_TOPN. Un tick gasta como mucho PER_TICK
-del presupuesto diario `budget:priceoverview` (gate.try_spend). Un 429 abre cooldown en el gate y
-el tick termina en error: el monitor de Kuma lo enseña hasta que el cooldown expira.
-
-Ritmo por defecto: 20 cada 5 min = 4/min (5 760/día < 6 000 de presupuesto). El gate permite
-10/min (medido en COST-00), así que el cuello es el presupuesto, no Steam. Con N=300 un ciclo
-completo son 75 min.
+Lista = alertas activas ∪ inventarios recientes (≤ 7 d, Skinport ≥ 10 $), en ese orden y sin repetir,
+tope STEAM_TOPN. Sin top por turnover (2026-10-17): Steam agrupa priceoverview por IP + Accept-Encoding
+y da ~100–150 peticiones por cubo con bloqueos de horas; el volumen del resto del catálogo lo da Skinport.
+Un tick gasta como mucho PER_TICK del presupuesto diario `budget:priceoverview` (gate.try_spend). Un 429
+abre cooldown en el gate y el tick termina en error; con cooldown activo el tick no rota ni gasta: el
+monitor de Kuma lo enseña hasta que expira. Ritmo y presupuesto: fórmula en worker/settings.py.
 """
 import logging
 from typing import Any
@@ -25,6 +24,7 @@ from worker.models import Quote
 from worker.jobs.market_sync import Ctx, _run, now_utc
 from worker.net import retry
 from worker.net.breaker import RateLimited
+from worker.net.gate import HostCoolingDown
 from worker.sources import steam_market
 from worker.store import market
 from worker.store import supabase as sb_store
@@ -54,8 +54,7 @@ def merge_names(*groups: list[str], cap: int) -> list[str]:
 async def topn_names(state: Any) -> list[str]:
     alerts = await sb_store.active_alert_names(state.supabase) if state.supabase is not None else []
     inv = await market.recent_inventory_names(state.pg, settings.STEAM_TOPN_MIN_PRICE) if state.pg is not None else []
-    top = await sb_store.top_turnover_names(state.supabase, settings.STEAM_TOPN) if state.supabase is not None else []
-    return merge_names(alerts, inv, top, cap=settings.STEAM_TOPN)
+    return merge_names(alerts, inv, cap=settings.STEAM_TOPN)
 
 
 async def run_topn(state: Any) -> dict[str, Any]:
@@ -73,6 +72,11 @@ async def run_topn(state: Any) -> dict[str, Any]:
 async def run_priceoverview(state: Any) -> dict[str, Any]:
     async def go() -> dict[str, Any]:
         now = now_utc()
+        host = state.gate.scope(steam_market.URL)
+        # Con cooldown activo, salir antes de LMOVE/try_spend: si no, cada tick rotaba un nombre y
+        # gastaba 1 del presupuesto para que gate.acquire lo parase después.
+        if left := await state.gate.cooldown_left(host):
+            raise HostCoolingDown(host, left)
         quotes: list[Quote] = []
         misses, stop = 0, ""
         # Nunca más vueltas que nombres: con una lista corta, un tick no repite el mismo ítem.
@@ -112,6 +116,6 @@ async def steam_topn(context: Ctx) -> dict[str, Any]:
     return await run_topn(context.state)
 
 
-@broker.task(task_name="steam_priceoverview", schedule=[{"cron": "*/5 * * * *"}])
+@broker.task(task_name="steam_priceoverview", schedule=[{"cron": settings.STEAM_PRICEOVERVIEW_CRON}])
 async def steam_priceoverview(context: Ctx) -> dict[str, Any]:
     return await run_priceoverview(context.state)
