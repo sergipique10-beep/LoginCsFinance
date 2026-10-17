@@ -44,12 +44,15 @@ redis.call('SET', KEYS[1], new_tat, 'PX', new_tat - now + 1000)
 return 0
 """
 
-# 1.er 429: ARGV[1] s. Dentro de un cooldown vigente: el doble del vigente, con tope ARGV[2].
+# 1.er 429: ARGV[1] s. Si hubo otro 429 en las últimas 24 h (KEYS[2]): el doble del último, con tope
+# ARGV[2]. La memoria va en una clave aparte porque el 429 típico llega en la PRIMERA petición tras
+# expirar el cooldown (2026-10-17, ocho veces seguidas): con la memoria en la misma clave nunca doblaba.
 COOLDOWN = """
-local cur = tonumber(redis.call('GET', KEYS[1]))
+local last = tonumber(redis.call('GET', KEYS[2]))
 local dur = tonumber(ARGV[1])
-if cur and redis.call('TTL', KEYS[1]) > 0 then dur = math.min(cur * 2, tonumber(ARGV[2])) end
+if last then dur = math.min(last * 2, tonumber(ARGV[2])) end
 redis.call('SET', KEYS[1], dur, 'EX', dur)
+redis.call('SET', KEYS[2], dur, 'EX', 86400)
 return dur
 """
 
@@ -126,7 +129,7 @@ class Gate:
             await self._sleep(self._rand(lo, hi))
 
     async def open_cooldown(self, host: str) -> int:
-        dur = int(await self._cool(keys=[f"cool:{host}"],
+        dur = int(await self._cool(keys=[f"cool:{host}", f"cool:last:{host}"],
                                    args=[settings.COOLDOWN_FIRST_S, settings.COOLDOWN_MAX_S]))
         log.warning("[gate] cooldown host=%s dur_s=%s", host, dur)
         return dur
