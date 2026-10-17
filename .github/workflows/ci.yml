@@ -7,7 +7,9 @@ name: ci
 # el action escanea solo `--first-parent --no-merges` y con el flujo `merge --no-ff` + push
 # de la base escanea 0 commits y queda en verde (EL-10 en cs-finance-meta).
 on:
-  push: { branches: [master] }
+  # feat/migracion-steamwebapi: la rama de integración de la migración; cs-finance-api-next (Render)
+  # despliega «After CI Checks Pass» y sin este workflow en la rama nunca redesplegaba (COST-12).
+  push: { branches: [master, feat/migracion-steamwebapi] }
   pull_request:
   workflow_dispatch:
 
