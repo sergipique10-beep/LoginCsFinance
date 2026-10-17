@@ -79,7 +79,7 @@ async def test_acquire_respeta_max_wait():
 
 async def test_cooldown_dobla_con_tope():
     g = _gate(fakeredis.FakeServer())
-    assert [await g.open_cooldown(STEAM) for _ in range(5)] == [3600, 7200, 14400, 21600, 21600]
+    assert [await g.open_cooldown(STEAM) for _ in range(5)] == [7200, 14400, 21600, 21600, 21600]
     with pytest.raises(HostCoolingDown) as e:
         await g.acquire(STEAM)
     assert e.value.remaining_s > 21000
@@ -88,12 +88,12 @@ async def test_cooldown_dobla_con_tope():
 async def test_cooldown_dobla_aunque_el_anterior_haya_expirado():
     # El 429 real llega en la primera petición tras expirar el cooldown: la escalada tiene que sobrevivir.
     g = _gate(fakeredis.FakeServer())
-    assert await g.open_cooldown(STEAM) == 3600
+    assert await g.open_cooldown(STEAM) == 7200
     await g.redis.delete(f"cool:{STEAM}")          # expiró
     assert await g.cooldown_left(STEAM) == 0
-    assert await g.open_cooldown(STEAM) == 7200
+    assert await g.open_cooldown(STEAM) == 14400
     await g.redis.delete(f"cool:{STEAM}", f"cool:last:{STEAM}")   # 24 h sin 429: vuelve a empezar
-    assert await g.open_cooldown(STEAM) == 3600
+    assert await g.open_cooldown(STEAM) == 7200
 
 
 async def test_presupuesto_diario():

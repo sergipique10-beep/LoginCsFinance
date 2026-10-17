@@ -43,8 +43,10 @@ DEFAULT_LIMITS: dict[str, HostLimit] = {
     "api.frankfurter.app": HostLimit(rate=4, per_s=60, jitter=(0, 0)),
 }
 
-# Cooldown de un host tras un 429 de Steam: 1 h al primero, ×2 por cada 429 dentro, tope 6 h.
-COOLDOWN_FIRST_S = 3600
+# Cooldown de un host tras un 429 de Steam: 2 h al primero, ×2 por cada 429 dentro, tope 6 h.
+# Medido el 2026-10-17 (COST-04): el cubo de priceoverview vuelve a 200 tras ~2 h SIN peticiones; una sonda
+# cada 15 min lo mantuvo en 429 más de 7 h. Reintentar antes de las 2 h renueva el bloqueo.
+COOLDOWN_FIRST_S = 2 * 3600
 COOLDOWN_MAX_S = 6 * 3600
 
 BREAKER_FAIL_MAX = 5
@@ -76,13 +78,12 @@ KUMA_URL = os.environ.get("KUMA_URL", "http://uptime-kuma:3001")
 # Moneda de buff163.json de csgotrader: USD o CNY. La resuelve el spike COST-00; vacía = el job
 # de csgotrader no corre (no se supone una moneda).
 BUFF_CURRENCY = os.environ.get("BUFF_CURRENCY", "").strip().upper()
-# Steam N pequeño (COST-04, 2026-10-17). Steam agrupa `priceoverview` por IP + `Accept-Encoding` y da
-# ~100–150 peticiones por cubo con bloqueos de horas (medido: 113 en 50 min → 429 ≥ 10 h). La lista
-# son solo alertas activas ∪ inventarios ≤ 7 d (hoy ~20 nombres); el ritmo lo fija la cuota medida con
-# `tools/spikes/spike_priceoverview_quota.py`:
-#   cuota_día = B_peticiones_ok × 1440 / (B_min_hasta_429 + C_min_hasta_200)
-#   PER_TICK × ticks_día ≤ cuota_día / 2   y   STEAM_BUDGET_PRICEOVERVIEW = cuota_día / 2 (red de seguridad)
-# Defecto conservador hasta tener el RESUMEN: 2 nombres cada 30 min = 96/día, presupuesto 120.
+# Steam N pequeño (COST-04). Steam agrupa `priceoverview` por IP + `Accept-Encoding` en cubos con bloqueos
+# de horas. La lista son solo alertas activas ∪ inventarios ≤ 7 d (hoy ~20 nombres); el ritmo lo fija la
+# cuota medida con `tools/spikes/spike_priceoverview_quota.py` el 2026-10-17:
+#   B = 55 peticiones ok en 98 min (1 cada 2 min) hasta el 429; C = ~120 min de silencio hasta el 200
+#   cuota_día = B × 1440 / (B_min + C_min) = 55 × 1440 / 218 ≈ 363;  gasto ≤ cuota_día / 2 ≈ 181
+# Defectos: 2 nombres cada 30 min = 96/día (≈ 26 % de la cuota) y presupuesto 120 como red de seguridad.
 # `STEAM_PRICEOVERVIEW_PER_TICK=0` para el job sin tocar el scheduler (mientras corre el spike).
 STEAM_TOPN = int(os.environ.get("STEAM_TOPN", "300"))
 STEAM_TOPN_MIN_PRICE = float(os.environ.get("STEAM_TOPN_MIN_PRICE", "10"))

@@ -193,9 +193,11 @@ async def test_429_abre_cooldown_y_el_tick_falla(fake_store, caplog):
 
 
 def test_cadencia_y_ritmo_por_defecto_caben_en_media_cuota():
-    """2 nombres cada 30 min = 96/día < 120 de presupuesto (cuota mínima vista: ~100–150 por cubo y ventana)."""
+    """Cuota medida el 2026-10-17: 55 ok en 98 min y ~120 min de recuperación → 363/día; se gasta ≤ la mitad."""
+    cuota_dia = 55 * 1440 / (98 + 120)
     assert settings.STEAM_PRICEOVERVIEW_CRON == "*/30 * * * *"
-    assert settings.STEAM_PRICEOVERVIEW_PER_TICK * 48 <= settings.STEAM_BUDGET_PRICEOVERVIEW
+    assert settings.STEAM_PRICEOVERVIEW_PER_TICK * 48 <= settings.STEAM_BUDGET_PRICEOVERVIEW <= cuota_dia / 2
+    assert settings.COOLDOWN_FIRST_S >= 120 * 60          # reintentar antes renueva el bloqueo
     assert st.steam_priceoverview.labels["schedule"] == [{"cron": settings.STEAM_PRICEOVERVIEW_CRON}]
 
 
