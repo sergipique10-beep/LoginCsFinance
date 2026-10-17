@@ -15,8 +15,10 @@ Medido el 2026-10-17: ~113 peticiones a 2,3/min → 429, y bloqueo ≥ 10 h mien
 """
 import datetime as dt
 import json
+import os
 import pathlib
 import time
+from collections.abc import Callable
 
 import httpx
 
@@ -27,6 +29,22 @@ HEADERS = {"User-Agent": UA, "Accept-Encoding": "gzip, deflate", "Connection": "
 PROBE_S = 15 * 60      # fases A y C
 RATE_S = 120           # fase B
 MAX_B = 400            # tope de la fase B por si Steam nunca corta
+LOCK = pathlib.Path("logs/spikes/quota.pid")
+
+
+def _alive(pid: int) -> bool:
+    return pathlib.Path(f"/proc/{pid}").exists()   # el spike solo corre en el VPS (Linux)
+
+
+def single_instance(lock: pathlib.Path = LOCK, alive: Callable[[int], bool] = _alive) -> None:
+    """Dos spikes a la vez comparten cubo y la medida no vale (EL-23, 2026-10-17: se lanzó dos veces).
+    Si el pid del fichero sigue vivo, no se arranca; si murió, se pisa el fichero."""
+    if lock.exists():
+        pid = lock.read_text(encoding="utf-8").strip()
+        if pid.isdigit() and alive(int(pid)):
+            raise SystemExit(f"ya hay un spike corriendo (pid {pid}, {lock}): no se lanza otro")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(str(os.getpid()), encoding="utf-8")
 
 
 def now() -> str:
@@ -34,6 +52,7 @@ def now() -> str:
 
 
 def main() -> None:
+    single_instance()
     out_dir = pathlib.Path("logs/spikes")
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"priceoverview-quota-{dt.datetime.now(dt.UTC):%Y%m%dT%H%M%S}.jsonl"
