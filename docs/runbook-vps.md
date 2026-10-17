@@ -109,6 +109,10 @@ $C exec -T timescaledb psql -U postgres -d restaurada -c "select timescaledb_pos
   (IP + `Accept-Encoding`) y ventana de horas: el ritmo (`STEAM_PRICEOVERVIEW_PER_TICK`, cron, presupuesto)
   se fija con el RESUMEN de `tools/spikes/spike_priceoverview_quota.py` (fórmula en `worker/settings.py`);
   `STEAM_PRICEOVERVIEW_PER_TICK=0` en el `.env` para el job mientras corre el spike.
+  COST-05 añade tres push más: `compute_rankings` (cada 15 min → 2 250 s), `compute_index` (cada hora →
+  9 000 s) y `daily_close` (00:05 → 216 000 s). Escriben en las tablas sombra `*_own` de Supabase
+  (`docs/sql/market_rankings_own.sql`, aplicado con el conector); no hay esquema nuevo en la Timescale.
+  Comparación diaria con las tablas de steamwebapi: SQL al final de ese fichero.
 - Alertas (COST-08): una notificación de Kuma (Telegram o email, creada en la UI con «Default enabled» y
   «Apply on all existing monitors») enlazada a todos los monitores. Comprobar el enlace en la sqlite, no en la
   UI: `docker exec csfinance-uptime-kuma-1 sqlite3 /app/data/kuma.db 'select count(*) from monitor_notification'`

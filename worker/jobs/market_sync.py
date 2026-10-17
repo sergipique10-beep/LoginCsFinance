@@ -38,6 +38,7 @@ log = logging.getLogger(__name__)
 
 FX_KEY = "fx:usd_per_cny"
 HASH_KEY = "mc:hash"
+SALES_KEY = "mk:sales"
 REF_WINDOW = dt.timedelta(hours=24)
 
 Ctx = Annotated[Context, TaskiqDepends()]
@@ -79,7 +80,16 @@ async def run_skinport_items(state: Any) -> dict[str, Any]:
 
 async def run_skinport_sales(state: Any) -> dict[str, Any]:
     async def go() -> dict[str, Any]:
-        return await _store(state, skinport_adapter.adapt_sales(await skinport.sales_history(state), now_utc()))
+        raw = await skinport.sales_history(state)
+        res = await _store(state, skinport_adapter.adapt_sales(raw, now_utc()))
+        # Volúmenes y medianas por ventana para rankings e índice (COST-05): un hash, se renueva entero.
+        stats = skinport_adapter.sales_stats(raw)
+        if stats:
+            async with state.redis.pipeline(transaction=True) as p:
+                p.delete(SALES_KEY)
+                p.hset(SALES_KEY, mapping={n: json.dumps(v) for n, v in stats.items()})
+                await p.execute()
+        return {**res, "stats": len(stats)}
     return await _run(state, "skinport_sales", go)
 
 
@@ -149,12 +159,18 @@ async def changed_rows(redis: Any, rows: list[dict[str, Any]], chunk: int = 1000
     return out
 
 
+async def compute_references(state: Any, now: dt.datetime) -> list[reference.Reference]:
+    """La referencia de cada ítem a partir de la última cotización por fuente (lo que market_current
+    publica). La comparten compute_reference y los rankings/índice de COST-05: misma lectura, mismo cálculo."""
+    by_name = await market.latest_quotes(state.pg, now - REF_WINDOW)
+    k = reference.market_k()
+    return [reference.compute(name, qs, now, k) for name, qs in by_name.items()]
+
+
 async def run_compute_reference(state: Any) -> dict[str, Any]:
     async def go() -> dict[str, Any]:
         now = now_utc()
-        by_name = await market.latest_quotes(state.pg, now - REF_WINDOW)
-        k = reference.market_k()
-        refs = [reference.compute(name, qs, now, k) for name, qs in by_name.items()]
+        refs = await compute_references(state, now)
         rows = [current_row(r) for r in refs]
         changed = await changed_rows(state.redis, rows)
         # market_ref es una serie: solo entra lo que cambia (como market_current). Con todas las

@@ -11,6 +11,9 @@ files:
   - worker/adapters/steam_market.py
   - worker/models.py
   - worker/pricing/reference.py
+  - worker/pricing/index.py
+  - worker/adapters/own_card.py
+  - worker/jobs/rankings.py
   - worker/adapters/_common.py
   - worker/adapters/skinport.py
   - worker/adapters/csgotm.py
@@ -85,6 +88,31 @@ Fuentes gratuitas → `market_quotes` (Timescale) → precio de referencia → `
 - La moneda de Buff no se supone: sin `BUFF_CURRENCY` el job falla visible («cifra de COST-00»).
 - Skinport: pedir confirmación escrita de redistribución antes del corte; `market_current` no
   publica el feed crudo, solo la referencia y el resumen por fuente.
+
+## Rankings, índice y cierre diario (COST-05)
+
+Los ticks de Render (`trending-tick`, `movers-tick`, `cap-tick`, `price-tick`) pasan al worker, sin
+steamwebapi, escribiendo en **tablas sombra** de Supabase (`docs/sql/market_rankings_own.sql`) hasta el
+corte; las tablas se eligen por `MARKET_TRENDING_TABLE`, `MARKET_MOVERS_TABLE`, `MARKET_CAP_HISTORY_TABLE`
+y `PRECIOS_HISTORICOS_TABLE` (defecto `*_own`).
+
+| Job | Cron (UTC) | Hace |
+|---|---|---|
+| `compute_rankings` | `6,21,36,51` | referencia (la misma lectura que `compute_reference`: `market_sync.compute_references`) + `catalog_items` + ventas de Skinport (Valkey `mk:sales`) → tarjetas (`adapters/own_card.py`) → trending top-500 por turnover diversificado (upsert por `name` + purga a 7 d) y movers hot/cold (replace-all) |
+| `compute_index` | `:10` | `pricing/index.py`: cesta top-500 por facturación 30 d de Skinport, pesos fijos por mes, Laspeyres encadenado con `I_0` = último `priceindex` de `market_cap_history` (steamwebapi); estado en Valkey `index:state`. `realpriceindex` con la mediana de ventas 24 h; `buyorderpriceindex` null; `turnover24h`/`sold24h` = Σ Skinport 24 h, Steam en los nombres del N pequeño con lectura ≤ 2 h |
+| `daily_close` | `00:05` | cierre de ayer de `market_ref_daily` para las `tracked_skins` → `precios_historicos_own(source='own')` |
+
+- Las reglas (`steam/domain/rules.py`: `ranking_eligible`, `turnover`, `diversificar`, `is_sticker_slab`) y la
+  fila (`steam/mappers/row_mapper._to_row`) son las del backend: la imagen del worker copia el dominio puro
+  de `steam/` (sin HTTP ni settings; `tests/test_worker_rankings.py` lo vigila). Misma fila que hoy; el worker
+  no escribe `liquidity_breakdown`.
+- Deltas: 24 h / 7 d / 30 d desde la serie propia (`market_ref_daily`) cuando el cierre de hace N días
+  existe; mientras no, 7 d y 30 d salen de las medianas de Skinport (`(m24 − m7) / m7`, el
+  `skinport_proxy` del diseño). Los movers ordenan por el delta de 7 d.
+- `skinport_sales` deja en `mk:sales` (hash, se renueva entero) volúmenes y medianas 24 h / 7 d / 30 d y la
+  media de 30 d por nombre: es lo que leen rankings e índice. Sin él, `compute_index` falla visible.
+- Si `catalog_items` está vacío (el job semanal es el lunes), `compute_rankings` lo trae en el mismo tick.
+- Un monitor push de Kuma por job: `compute_rankings` (2 250 s), `compute_index` (9 000 s), `daily_close` (216 000 s).
 
 ## Inventario y perfil (COST-07)
 
