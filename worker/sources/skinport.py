@@ -1,4 +1,8 @@
-"""Skinport (COST-03): /v1/items cada 5 min y /v1/sales/history cada 15 min. Exige br."""
+"""Skinport (COST-03): /v1/items y /v1/sales/history cada 15 min. Exige br.
+
+Items iba cada 5 min (lo que documenta Skinport) y aun así baneaba /v1/items 1 h tras ~20 peticiones
+seguidas (12 baneos en 48 h, 2026-10-18): hay un presupuesto no documentado de ~20/2 h por endpoint.
+"""
 from typing import Any
 
 from worker.sources._fetch import get_json
