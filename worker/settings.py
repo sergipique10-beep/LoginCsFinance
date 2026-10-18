@@ -22,6 +22,7 @@ class HostLimit:
     jitter: tuple[float, float] = (0.5, 2.0)   # espera extra aleatoria tras pasar el gate
     reset_timeout: int = 300     # segundos que el breaker se queda abierto
     steam: bool = False          # un 429 abre cooldown y no se reintenta
+    cooldown_s: int | None = None   # primer cooldown tras un 429; None = COOLDOWN_FIRST_S (el de priceoverview)
 
     @property
     def emission_ms(self) -> int:
@@ -32,7 +33,9 @@ class HostLimit:
 DEFAULT_LIMITS: dict[str, HostLimit] = {
     "steamcommunity.com": HostLimit(rate=10, per_s=60, burst=2, reset_timeout=900, steam=True),
     # COST-00: ~10 páginas seguidas → 429 durante ≤ 10 min. 6 por 10 min deja margen.
-    "steamcommunity.com/inventory": HostLimit(rate=6, per_s=600, burst=2, reset_timeout=900, steam=True),
+    # El bloqueo del inventario dura ≤ 10 min (COST-00); el de priceoverview, 2 h. Con el cooldown global de 2 h un
+    # solo 429 dejaba sin inventario a todos los usuarios durante 2 h (2026-10-18, 13:37 UTC).
+    "steamcommunity.com/inventory": HostLimit(rate=6, per_s=600, burst=2, reset_timeout=900, steam=True, cooldown_s=600),
     "api.steampowered.com": HostLimit(rate=60, per_s=60, reset_timeout=900, steam=True),
     "api.skinport.com": HostLimit(rate=8, per_s=300),
     # Feeds de volcado (COST-03): una descarga cada 15–60 min. Tope conservador, no medido:
