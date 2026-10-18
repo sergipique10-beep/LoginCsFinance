@@ -25,9 +25,13 @@ log = logging.getLogger(__name__)
 
 MIN_PRICE = 10.0          # la desviación se mide en nombres ≥ 10 $ (spec § 6.3)
 TOP = 50
-# Objetivos para cortar (spec § 6.3). `pct` = máximo; el resto = mínimo.
-TARGETS = {"mediana_desv_pct": 8.0, "p90_desv_pct": 25.0, "overlap_trending_top50": 0.6,
-           "overlap_movers": 0.6, "corr_delta7d": 0.7}
+# Objetivos para cortar (spec § 6.3, redefinido el 2026-10-18). La referencia multi-mercado es un 20–30 % más baja
+# que Steam por construcción (comisión del 15 %, saldo no retirable): a la referencia se le pide CONSISTENCIA
+# (ratio mediano estable dentro de una banda y sin colas rotas), y EXACTITUD solo donde comparamos lo mismo: el
+# precio Steam propio del top-N (priceoverview) frente a `pricelatestsell` de steamwebapi. `_pct` = máximo; el resto = mínimo.
+TARGETS = {"steam_desv_pct": 8.0, "overlap_trending_top50": 0.6, "overlap_movers": 0.6, "corr_delta7d": 0.7}
+RATIO_BAND = (0.6, 1.0)   # ratio_mediana referencia / steamwebapi
+RATIO_P10_MIN = 0.4       # cola baja: una referencia rota (p10 0,002 el 16-10) la saca de la banda
 SOLD_RATIO = (0.8, 1.25)  # sold24h Steam propio / steamwebapi
 COOLDOWN_MAX_S = 3600     # «0 cooldowns de > 1 h»
 
@@ -76,7 +80,9 @@ def _day_sign(points: list[Row], day: dt.date) -> int | None:
 
 
 def report(day: dt.date, own: list[Row], sw: list[Row], own_mv: list[Row], sw_mv: list[Row],
-           own_idx: list[Row], sw_idx: list[Row], steam_vol: dict[str, int], cooldown_last_s: int) -> Row:
+           own_idx: list[Row], sw_idx: list[Row], steam: dict[str, tuple[float | None, int | None]],
+           cooldown_last_s: int) -> Row:
+    """`steam` = nombre → (precio Steam propio, ventas 24 h) del top-N (`market_latest`, source='steam')."""
     sw_by = {r["name"]: r for r in sw if (_f(r.get("price_latest")) or 0.0) >= MIN_PRICE}
     pairs = [(o_p, s_p) for o in own
              if o["name"] in sw_by and (o_p := _f(o.get("price_latest"))) and (s_p := _f(sw_by[o["name"]]["price_latest"]))]
@@ -84,14 +90,19 @@ def report(day: dt.date, own: list[Row], sw: list[Row], own_mv: list[Row], sw_mv
     ratios = sorted(a / b for a, b in pairs)
     d7 = [(o_d, s_d) for o in own if o["name"] in sw_by
           and (o_d := _f(o.get("price_delta_7d"))) is not None and (s_d := _f(sw_by[o["name"]].get("price_delta_7d"))) is not None]
-    sold = sorted(v / s for n, v in steam_vol.items()
+    sold = sorted(v / s for n, (_, v) in steam.items()
                   if n in sw_by and (s := _f(sw_by[n].get("sold_24h"))) and v)
+    steam_devs = sorted(abs(p / s - 1) * 100 for n, (p, _) in steam.items()
+                        if p and n in sw_by and (s := _f(sw_by[n]["price_latest"])))
     own_sign, sw_sign = _day_sign(own_idx, day), _day_sign(sw_idx, day)
     out: Row = {
         "date": day.isoformat(), "n": len(pairs),
         "mediana_desv_pct": round(statistics.median(devs), 2) if devs else None,
         "p90_desv_pct": round(statistics.quantiles(devs, n=10)[8], 2) if len(devs) >= 10 else None,
         "ratio_mediana": round(statistics.median(ratios), 4) if ratios else None,
+        "ratio_p10": round(statistics.quantiles(ratios, n=10)[0], 4) if len(ratios) >= 10 else None,
+        "ratio_p90": round(statistics.quantiles(ratios, n=10)[8], 4) if len(ratios) >= 10 else None,
+        "steam_desv_pct": round(statistics.median(steam_devs), 2) if steam_devs else None, "n_steam": len(steam_devs),
         "corr_delta7d": _corr(d7), "n_delta7d": len(d7),
         "overlap_trending_top50": _overlap(_top(sw), _top(own)),
         "overlap_movers": _overlap({(r["name"], r["bucket"]) for r in sw_mv}, {(r["name"], r["bucket"]) for r in own_mv}),
@@ -101,6 +112,11 @@ def report(day: dt.date, own: list[Row], sw: list[Row], own_mv: list[Row], sw_mv
     }
     fails = [k for k, lim in TARGETS.items()
              if out[k] is None or (out[k] > lim if k.endswith("_pct") else out[k] < lim)]
+    rm = out["ratio_mediana"]
+    if rm is None or not RATIO_BAND[0] <= rm <= RATIO_BAND[1]:
+        fails.append("ratio_mediana")
+    if out["ratio_p10"] is not None and out["ratio_p10"] < RATIO_P10_MIN:
+        fails.append("ratio_p10")
     r = out["ratio_sold24h_mediana"]
     if r is not None and not SOLD_RATIO[0] <= r <= SOLD_RATIO[1]:
         fails.append("ratio_sold24h")
@@ -131,11 +147,11 @@ async def run_shadow_compare(state: Any) -> dict[str, Any]:
         sw_idx = await sb_store.cap_points_since(sb, "market_cap_history", since)
         own_idx = await sb_store.cap_points_since(sb, settings.MARKET_CAP_HISTORY_TABLE, since)
         quotes = await market.latest_quotes(state.pg, now - dt.timedelta(days=1))
-        steam_vol = {n: q.volume for n, qs in quotes.items() for q in qs if q.source == "steam" and q.volume}
+        steam = {n: (q.price_usd, q.volume) for n, qs in quotes.items() for q in qs if q.source == "steam"}
         cooldown = int(await state.redis.get("cool:last:steamcommunity.com") or 0)
-        row = report(day, own, sw, own_mv, sw_mv, own_idx, sw_idx, steam_vol, cooldown)
+        row = report(day, own, sw, own_mv, sw_mv, own_idx, sw_idx, steam, cooldown)
         await sb_store.upsert(sb, settings.SHADOW_REPORT_TABLE, [row], "date")
-        return {k: row[k] for k in ("date", "n", "mediana_desv_pct", "p90_desv_pct", "overlap_trending_top50",
+        return {k: row[k] for k in ("date", "n", "ratio_mediana", "steam_desv_pct", "n_steam", "overlap_trending_top50",
                                      "overlap_movers", "corr_delta7d", "ok", "fails")}
     return await ms._run(state, "shadow_compare", go)
 
