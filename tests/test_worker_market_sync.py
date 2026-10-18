@@ -179,7 +179,7 @@ def test_tareas_registradas_con_su_cron():
     crons = {t.task_name: t.labels["schedule"][0]["cron"] for t in
              (ms.skinport_items, ms.skinport_sales, ms.csgotm_prices, ms.csgotrader_buff, ms.fx_daily,
               ms.catalog_weekly, ms.compute_reference)}
-    assert crons["skinport_items"] == "*/5 * * * *" and crons["compute_reference"] == "2,17,32,47 * * * *"
+    assert crons["skinport_items"] == "*/15 * * * *" and crons["compute_reference"] == "2,17,32,47 * * * *"
 
 
 async def test_las_tareas_delegan(monkeypatch):

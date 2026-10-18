@@ -70,7 +70,7 @@ Fuentes gratuitas → `market_quotes` (Timescale) → precio de referencia → `
 
 | Job | Cron (UTC) | Fuente | `source` en market_quotes |
 |---|---|---|---|
-| `skinport_items` | `*/5` | Skinport `/v1/items` (br) | `skinport` (min_price, quantity) |
+| `skinport_items` | `*/15` | Skinport `/v1/items` (br) | `skinport` (min_price, quantity) |
 | `skinport_sales` | `*/15` | Skinport `/v1/sales/history` (br) | `skinport_sales` (mediana 24 h o 7 d, ventas 24 h) |
 | `csgotm_prices` | `*/15` | market.csgo `prices/USD.json` | `marketcsgo` |
 | `csgotrader_buff` | `:07` | csgotrader `buff163.json`, If-None-Match | `buff` — **solo si `BUFF_CURRENCY` es USD o CNY** |

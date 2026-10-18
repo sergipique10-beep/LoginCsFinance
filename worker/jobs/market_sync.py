@@ -1,7 +1,7 @@
 """market-sync (COST-03): fuentes gratuitas → market_quotes → precio de referencia → market_current.
 
 Cadencias (cron UTC):
-  skinport_items      */5      Skinport /v1/items
+  skinport_items      */15     Skinport /v1/items
   skinport_sales      */15     Skinport /v1/sales/history
   csgotm_prices       */15     market.csgo prices/USD.json
   csgotrader_buff     :07      buff163.json con If-None-Match (necesita BUFF_CURRENCY)
@@ -188,7 +188,7 @@ async def run_compute_reference(state: Any) -> dict[str, Any]:
     return await _run(state, "compute_reference", go)
 
 
-@broker.task(task_name="skinport_items", schedule=[{"cron": "*/5 * * * *"}])
+@broker.task(task_name="skinport_items", schedule=[{"cron": "*/15 * * * *"}])
 async def skinport_items(context: Ctx) -> dict[str, Any]:
     return await run_skinport_items(context.state)
 
