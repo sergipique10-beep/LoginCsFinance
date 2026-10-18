@@ -16,7 +16,7 @@ from worker.settings import HostLimit
 
 STEAM = "steamcommunity.com"
 LIMITS = {STEAM: HostLimit(rate=10, per_s=60, burst=2, jitter=(0.5, 2.0), steam=True),
-          STEAM + "/inventory": HostLimit(rate=6, per_s=600, burst=2, jitter=(0, 0), steam=True),
+          STEAM + "/inventory": HostLimit(rate=6, per_s=600, burst=2, jitter=(0, 0), steam=True, cooldown_s=600),
           "api.skinport.com": HostLimit(rate=8, per_s=300, jitter=(0, 0))}
 
 
@@ -179,3 +179,12 @@ async def test_cooldown_a_punto_de_caducar_se_espera():
     await g.redis.set(f"cool:{STEAM}", 7200, ex=60)
     with pytest.raises(HostCoolingDown):
         await g.acquire(STEAM)
+
+
+async def test_cooldown_del_inventario_es_el_suyo_y_no_toca_al_de_priceoverview():
+    # COST-00: el inventario se recupera en ≤ 10 min; con el cooldown global de 2 h un 429 dejaba sin inventario 2 h.
+    g = _gate(fakeredis.FakeServer())
+    inv = STEAM + "/inventory"
+    assert [await g.open_cooldown(inv) for _ in range(3)] == [600, 1200, 2400]
+    assert await g.open_cooldown(STEAM) == 7200
+    assert await g.cooldown_left(STEAM) > 7000 and await g.cooldown_left(inv) < 2500
