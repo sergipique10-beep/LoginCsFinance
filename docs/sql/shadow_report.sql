@@ -7,6 +7,10 @@ create table if not exists public.shadow_report (
     mediana_desv_pct        numeric,            -- |propio/steamwebapi − 1| mediana, en %
     p90_desv_pct            numeric,
     ratio_mediana           numeric,            -- propio/steamwebapi mediana (para calibrar k_mercado)
+    ratio_p10               numeric,            -- banda [0.6, 1.0] y p10 ≥ 0.4: consistencia de la referencia (18-10)
+    ratio_p90               numeric,
+    steam_desv_pct          numeric,            -- |Steam propio / steamwebapi − 1| mediana en el top-N: exactitud, ≤ 8 %
+    n_steam                 integer,
     corr_delta7d            numeric,
     n_delta7d               integer,
     overlap_trending_top50  numeric,            -- fracción del top-50 de steamwebapi presente en el propio

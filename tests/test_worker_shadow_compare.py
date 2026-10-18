@@ -30,28 +30,30 @@ MV = [{"name": "S1", "bucket": "hot"}, {"name": "S2", "bucket": "cold"}]
 
 
 def test_identico_cumple_todo():
-    r = sc.report(DAY, SW, SW, MV, MV, IDX_UP, IDX_UP, {"S1": 10}, 0)
+    r = sc.report(DAY, SW, SW, MV, MV, IDX_UP, IDX_UP, {"S1": (21.0, 10)}, 0)
     assert r["ok"] and r["fails"] == ""
     assert r["n"] == 12 and r["mediana_desv_pct"] == 0 and r["p90_desv_pct"] == 0 and r["ratio_mediana"] == 1
     assert r["overlap_trending_top50"] == 1 and r["overlap_movers"] == 1
     assert r["ratio_sold24h_mediana"] == 1 and r["index_sign_match"] is True
+    assert r["steam_desv_pct"] == 0 and r["n_steam"] == 1
 
 
 def test_desviacion_solape_signo_y_cooldown_fallan_por_separado():
     own = rows({f"S{i}": (20.0 + i) * 0.8 for i in range(12)}, delta7d=-1.0)   # ratio 0,8 → 20 % de desviación
-    r = sc.report(DAY, own, SW, [MV[0]], MV, IDX_DOWN, IDX_UP, {"S1": 20}, 7200)
+    r = sc.report(DAY, own, SW, [MV[0]], MV, IDX_DOWN, IDX_UP, {"S1": (25.2, 20)}, 7200)   # Steam propio +20 %
     assert not r["ok"]
-    assert r["mediana_desv_pct"] == 20 and r["ratio_mediana"] == 0.8
+    assert r["mediana_desv_pct"] == 20 and r["ratio_mediana"] == 0.8 and r["steam_desv_pct"] == 20
     assert r["overlap_movers"] == 0.5 and r["index_sign_match"] is False
     assert r["ratio_sold24h_mediana"] == 2 and r["steam_cooldown_last_s"] == 7200
-    for k in ("mediana_desv_pct", "overlap_movers", "ratio_sold24h", "index_sign", "steam_cooldown", "corr_delta7d"):
+    for k in ("steam_desv_pct", "overlap_movers", "ratio_sold24h", "index_sign", "steam_cooldown", "corr_delta7d"):
         assert k in r["fails"].split(",")
+    assert "ratio_mediana" not in r["fails"]      # 0,8 está dentro de la banda: la referencia es consistente
 
 
 def test_sin_datos_no_certifica_pero_no_revienta():
     r = sc.report(DAY, [], [], [], [], [], [], {}, 0)
     assert r["n"] == 0 and r["mediana_desv_pct"] is None and r["index_sign_match"] is None and not r["ok"]
-    assert "mediana_desv_pct" in r["fails"] and "index_sign" not in r["fails"]
+    assert "ratio_mediana" in r["fails"] and "steam_desv_pct" in r["fails"] and "index_sign" not in r["fails"]
 
 
 def test_desviacion_solo_en_nombres_de_10_dolares_y_correlacion():
@@ -62,6 +64,7 @@ def test_desviacion_solo_en_nombres_de_10_dolares_y_correlacion():
         + [dict(r) for r in sw if r["name"] != "barato"]
     r = sc.report(DAY, own, sw, [], [], [], [], {}, 0)
     assert r["n"] == 6 and r["mediana_desv_pct"] == 0        # «barato» (5 $) no cuenta aunque se desvíe un 100 %
+    assert r["ratio_p10"] is None                             # < 10 pares: sin cuantiles
     assert r["corr_delta7d"] == 1.0 and r["n_delta7d"] == 6
 
 
@@ -112,4 +115,11 @@ async def test_job_escribe_la_fila_de_ayer(fake):
     (table, rows, key), = fake.upserts
     assert table == settings.SHADOW_REPORT_TABLE and key == "date" and rows[0]["date"] == "2026-10-18"
     assert rows[0]["ratio_sold24h_mediana"] == 1.2 and rows[0]["steam_cooldown_last_s"] == 3600
+    assert rows[0]["steam_desv_pct"] == 0 and rows[0]["n_steam"] == 1     # S1: Steam propio 21,0 = steamwebapi 21,0
     assert fake.ok == ["shadow_compare"]
+
+
+def test_referencia_rota_en_la_cola_baja_falla_por_p10():
+    own = rows({f"S{i}": (20.0 + i) * (0.001 if i < 2 else 0.8) for i in range(12)})
+    r = sc.report(DAY, own, SW, MV, MV, IDX_UP, IDX_UP, {}, 0)
+    assert r["ratio_mediana"] == 0.8 and r["ratio_p10"] < 0.4 and "ratio_p10" in r["fails"]
