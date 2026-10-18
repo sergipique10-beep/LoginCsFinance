@@ -48,6 +48,7 @@ DEFAULT_LIMITS: dict[str, HostLimit] = {
 # cada 15 min lo mantuvo en 429 más de 7 h. Reintentar antes de las 2 h renueva el bloqueo.
 COOLDOWN_FIRST_S = 2 * 3600
 COOLDOWN_MAX_S = 6 * 3600
+COOLDOWN_SLACK_S = 5          # resto de cooldown que se espera en vez de abortar (el cron llega ~1 s antes)
 
 BREAKER_FAIL_MAX = 5
 RETRY_ATTEMPTS = 3
