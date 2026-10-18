@@ -135,7 +135,8 @@ class Gate:
     async def open_cooldown(self, host: str) -> int:
         lim = self.limits.get(host)
         first = (lim.cooldown_s if lim else None) or settings.COOLDOWN_FIRST_S
-        dur = int(await self._cool(keys=[f"cool:{host}", f"cool:last:{host}"], args=[first, settings.COOLDOWN_MAX_S]))
+        cap = (lim.cooldown_max_s if lim else None) or settings.COOLDOWN_MAX_S
+        dur = int(await self._cool(keys=[f"cool:{host}", f"cool:last:{host}"], args=[first, cap]))
         log.warning("[gate] cooldown host=%s dur_s=%s", host, dur)
         return dur
 

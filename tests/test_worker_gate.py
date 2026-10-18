@@ -16,7 +16,8 @@ from worker.settings import HostLimit
 
 STEAM = "steamcommunity.com"
 LIMITS = {STEAM: HostLimit(rate=10, per_s=60, burst=2, jitter=(0.5, 2.0), steam=True),
-          STEAM + "/inventory": HostLimit(rate=6, per_s=600, burst=2, jitter=(0, 0), steam=True, cooldown_s=600),
+          STEAM + "/inventory": HostLimit(rate=6, per_s=600, burst=2, jitter=(0, 0), steam=True, cooldown_s=600,
+                                          cooldown_max_s=1800),
           "api.skinport.com": HostLimit(rate=8, per_s=300, jitter=(0, 0))}
 
 
@@ -185,6 +186,14 @@ async def test_cooldown_del_inventario_es_el_suyo_y_no_toca_al_de_priceoverview(
     # COST-00: el inventario se recupera en ≤ 10 min; con el cooldown global de 2 h un 429 dejaba sin inventario 2 h.
     g = _gate(fakeredis.FakeServer())
     inv = STEAM + "/inventory"
-    assert [await g.open_cooldown(inv) for _ in range(3)] == [600, 1200, 2400]
+    assert [await g.open_cooldown(inv) for _ in range(4)] == [600, 1200, 1800, 1800]   # tope del ámbito, no las 6 h
     assert await g.open_cooldown(STEAM) == 7200
-    assert await g.cooldown_left(STEAM) > 7000 and await g.cooldown_left(inv) < 2500
+    assert await g.cooldown_left(STEAM) > 7000 and await g.cooldown_left(inv) <= 1800
+
+
+async def test_memoria_de_un_cooldown_viejo_no_supera_el_tope_del_ambito():
+    # 18-10: cool:last guardaba 3600 (cooldown global anterior) y el siguiente 429 abrió 7200 en el inventario.
+    g = _gate(fakeredis.FakeServer())
+    inv = STEAM + "/inventory"
+    await g.redis.set(f"cool:last:{inv}", 3600)
+    assert await g.open_cooldown(inv) == 1800
