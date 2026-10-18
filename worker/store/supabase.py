@@ -95,6 +95,13 @@ async def last_cap_point(sb: Any, table: str = "market_cap_history") -> dict[str
     return rows[0] if rows else None
 
 
+async def cap_points_since(sb: Any, table: str, since_iso: str) -> list[dict[str, Any]]:
+    """Puntos horarios del índice desde `since_iso` (shadow_compare: signo diario de las dos series)."""
+    def _q() -> Any:
+        return sb.table(table).select("ts, priceindex").gte("ts", since_iso).order("ts").execute()
+    return list((await asyncio.to_thread(_q)).data or [])
+
+
 async def replace_all(sb: Any, table: str, rows: list[dict[str, Any]], key: str = "name") -> int:
     """DELETE de todo + INSERT (los movers de hoy: `RankingRepo.replace_snapshot`)."""
     def _q() -> Any:

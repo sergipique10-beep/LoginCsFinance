@@ -99,6 +99,7 @@ MARKET_TRENDING_TABLE = os.environ.get("MARKET_TRENDING_TABLE", "market_trending
 MARKET_MOVERS_TABLE = os.environ.get("MARKET_MOVERS_TABLE", "market_movers_own")
 MARKET_CAP_HISTORY_TABLE = os.environ.get("MARKET_CAP_HISTORY_TABLE", "market_cap_history_own")
 PRECIOS_HISTORICOS_TABLE = os.environ.get("PRECIOS_HISTORICOS_TABLE", "precios_historicos_own")
+SHADOW_REPORT_TABLE = os.environ.get("SHADOW_REPORT_TABLE", "shadow_report")   # § 6.3, una fila por día de convivencia
 # Valores que nunca pueden salir en un log (worker/logs.py los enmascara).
 SECRET_ENV = ("STEAM_WEB_API_KEY", "CSFLOAT_API_KEY", "WAXPEER_API_KEY", "SUPABASE_SERVICE_KEY",
               "VALKEY_PASSWORD", "PG_PASSWORD", "PG_WORKER_PASSWORD")
