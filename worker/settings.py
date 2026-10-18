@@ -23,6 +23,7 @@ class HostLimit:
     reset_timeout: int = 300     # segundos que el breaker se queda abierto
     steam: bool = False          # un 429 abre cooldown y no se reintenta
     cooldown_s: int | None = None   # primer cooldown tras un 429; None = COOLDOWN_FIRST_S (el de priceoverview)
+    cooldown_max_s: int | None = None   # tope de la escalada ×2; None = COOLDOWN_MAX_S
 
     @property
     def emission_ms(self) -> int:
@@ -35,7 +36,9 @@ DEFAULT_LIMITS: dict[str, HostLimit] = {
     # COST-00: ~10 páginas seguidas → 429 durante ≤ 10 min. 6 por 10 min deja margen.
     # El bloqueo del inventario dura ≤ 10 min (COST-00); el de priceoverview, 2 h. Con el cooldown global de 2 h un
     # solo 429 dejaba sin inventario a todos los usuarios durante 2 h (2026-10-18, 13:37 UTC).
-    "steamcommunity.com/inventory": HostLimit(rate=6, per_s=600, burst=2, reset_timeout=900, steam=True, cooldown_s=600),
+    # Tope propio: la escalada ×2 arrancaba de la memoria del ámbito y el 18-10 un 429 abrió 7 200 s en vez de 600.
+    "steamcommunity.com/inventory": HostLimit(rate=6, per_s=600, burst=2, reset_timeout=900, steam=True,
+                                              cooldown_s=600, cooldown_max_s=1800),
     "api.steampowered.com": HostLimit(rate=60, per_s=60, reset_timeout=900, steam=True),
     "api.skinport.com": HostLimit(rate=8, per_s=300),
     # Feeds de volcado (COST-03): una descarga cada 15–60 min. Tope conservador, no medido:
