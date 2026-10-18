@@ -163,3 +163,19 @@ async def test_inventario_y_priceoverview_no_comparten_cubo():
     assert await g.cooldown_left(host) == 0 and await g.cooldown_left(inv) == 0
     await g.open_cooldown(inv)
     assert await g.cooldown_left(inv) > 0 and await g.cooldown_left(host) == 0
+
+
+async def test_cooldown_a_punto_de_caducar_se_espera():
+    # El cron llega ~1 s antes de que caduque un cooldown múltiplo exacto del cron (11:00:00 con 1 s, 2026-10-18).
+    slept = []
+
+    async def sleep(s):
+        slept.append(s)
+
+    g = _gate(fakeredis.FakeServer(), sleep=sleep)
+    await g.redis.set(f"cool:{STEAM}", 7200, ex=2)
+    await g.acquire(STEAM)
+    assert slept[0] == 3
+    await g.redis.set(f"cool:{STEAM}", 7200, ex=60)
+    with pytest.raises(HostCoolingDown):
+        await g.acquire(STEAM)

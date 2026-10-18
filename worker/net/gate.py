@@ -115,11 +115,15 @@ class Gate:
         return max(0, int(ttl))
 
     async def acquire(self, host: str, max_wait_s: float = 600) -> None:
-        """Espera turno en el cubo del host (y el jitter). Un cooldown no se espera: se lanza."""
+        """Espera turno en el cubo del host (y el jitter). Un cooldown no se espera: se lanza,
+        salvo que le queden ≤ COOLDOWN_SLACK_S: el cron llega ~1 s antes de que caduque un cooldown
+        múltiplo exacto del cron (2026-10-18, 11:00:00 con 1 s) y el tick se perdía entero."""
         lim = self.limit(host)
         left = await self.cooldown_left(host)
-        if left:
+        if left > settings.COOLDOWN_SLACK_S:
             raise HostCoolingDown(host, left)
+        if left:
+            await self._sleep(left + 1)      # +1: el TTL es entero y redondea hacia abajo
         while (wait_ms := await self.try_acquire(host)) > 0:
             if wait_ms / 1000 > max_wait_s:
                 raise GateTimeout(host, wait_ms / 1000)
