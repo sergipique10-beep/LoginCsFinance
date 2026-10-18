@@ -13,6 +13,7 @@ files:
   - worker/pricing/reference.py
   - worker/pricing/index.py
   - worker/adapters/own_card.py
+  - worker/jobs/shadow_compare.py
   - worker/jobs/rankings.py
   - worker/adapters/_common.py
   - worker/adapters/skinport.py
@@ -77,6 +78,7 @@ Fuentes gratuitas → `market_quotes` (Timescale) → precio de referencia → `
 | `fx_daily` | `06:05` | frankfurter USD→CNY | Valkey `fx:usd_per_cny` |
 | `catalog_weekly` | lun `04:13` | ByMykel | `catalog_items` |
 | `compute_reference` | `2,17,32,47` | — | `market_ref` + upsert de filas cambiadas a `MARKET_CURRENT_TABLE` |
+| `shadow_compare` | `00:25` | Supabase (steamwebapi vs `_own`), `market_latest` steam, Valkey `cool:last` | `SHADOW_REPORT_TABLE`: una fila por día con las métricas de § 6.3 y `ok` (DDL `docs/sql/shadow_report.sql`) |
 
 - `pricing/reference.py` (puro): `w = log1p(qty) × 0.5^(edad_h/6) × k`, fuera lo que cae fuera de
   `[m/2, 2m]` (m = mediana simple), mediana ponderada. `ref_confidence` = fuentes que sobreviven
