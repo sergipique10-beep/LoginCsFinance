@@ -130,23 +130,24 @@ async def get_inventory(steam_id: str, *, force: bool = False) -> Fetched[Any]:
     return Fetched(_inventory([]), "error", "rate_limit" if not reason.startswith("http_") else reason)
 
 
-async def get_client_inventory(steam_id: str) -> Fetched[Any]:
+async def get_client_inventory(steam_id: str, *, force: bool = False) -> Fetched[Any]:
     """Modo `client` (COST-07b): solo lo que subió el móvil; nunca se pide nada a Steam.
 
     Fresco → `ok`; viejo → `stale` (el móvil lo renovará al abrir la app); sin snapshot →
     `error` con `needs_upload`, que la ruta sirve como `[]` + `X-Inventory-Needs-Upload`.
+    `force` (pull-to-refresh) pide la subida aunque el snapshot sea fresco: `ok` + `needs_upload`.
     """
     now = time.monotonic()
     hit = _inventory_cache.fresh(steam_id, now)
     if hit is not None:
-        return Fetched(_inventory(hit))
+        return Fetched(_inventory(hit), "ok", "needs_upload" if force else None)
     snap = await repo.load_snapshot(steam_id)
     if snap is None:
         return Fetched(_inventory([]), "error", "needs_upload")
     cards = await compose(snap[0])
     if _age_h(snap[1]) < OWN_FRESH_H:
         _inventory_cache.put(steam_id, cards, now)
-        return Fetched(_inventory(cards))
+        return Fetched(_inventory(cards), "ok", "needs_upload" if force else None)
     log_degraded("inventory", "needs_upload", "stale")
     return Fetched(_inventory(cards, snap[1]), "stale", "needs_upload")
 
