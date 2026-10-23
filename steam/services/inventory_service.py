@@ -209,6 +209,8 @@ async def get_inventory(client: httpx.AsyncClient, steam_id: str, *,
     """
     # COST-07: con INVENTORY_SOURCE=own lo sirve el worker del VPS; con `shadow` se sirve lo de
     # siempre y se pide al worker una descarga de fondo para compararla.
+    if settings.INVENTORY_SOURCE == "client":
+        return await own_inventory_service.get_client_inventory(steam_id)
     if settings.INVENTORY_SOURCE == "own":
         return await own_inventory_service.get_inventory(steam_id, force=force)
     if settings.INVENTORY_SOURCE == "shadow":

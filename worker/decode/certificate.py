@@ -43,6 +43,8 @@ def parse_proto(buf: bytes) -> dict[int, int]:
             ln, i = _varint(buf, i)
             i += ln
         elif wire == 5:
+            if i + 4 > len(buf):   # struct.error no es ValueError: el llamador solo captura ValueError
+                raise ValueError("fixed32 truncado")
             out[field] = struct.unpack("<I", buf[i:i + 4])[0]
             i += 4
         elif wire == 1:
@@ -70,6 +72,6 @@ def decode(hex_str: str) -> dict[str, int | float | bool]:
     fields = parse_proto(proto)
     out: dict[str, int | float | bool] = {name: fields[n] for n, name in FIELDS.items() if n in fields}
     if "paintwear" in out:
-        out["paintwear"] = struct.unpack("<f", struct.pack("<I", int(out["paintwear"])))[0]
+        out["paintwear"] = struct.unpack("<f", struct.pack("<I", int(out["paintwear"]) & 0xFFFFFFFF))[0]
     out["checksum_ok"] = tail == checksum(proto)
     return out

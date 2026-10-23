@@ -44,6 +44,14 @@ async def load_snapshot(steam_id: str) -> tuple[list, str] | None:
     return await storage_call(_do)
 
 
+async def save_snapshot(steam_id: str, items: list[dict[str, Any]], captured_at: str) -> None:
+    """COST-07b: el inventario que sube el móvil, en la misma tabla que escribía el worker."""
+    def _do() -> None:
+        get_supabase().table(OWN_INVENTORY_TABLE).upsert(
+            {"steam_id": steam_id, "items": items, "captured_at": captured_at}, on_conflict="steam_id").execute()
+    await storage_call(_do)
+
+
 async def load_profile(steam_id: str) -> dict[str, Any] | None:
     def _do() -> dict[str, Any] | None:
         resp = get_supabase().table("steam_profiles").select("*").eq("steam_id", steam_id).limit(1).execute()
