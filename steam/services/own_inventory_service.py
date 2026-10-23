@@ -1,5 +1,8 @@
 """Inventario y perfil servidos desde lo que descarga el worker del VPS (COST-07).
 
+Con `INVENTORY_SOURCE=client` (COST-07b) el inventario no lo descarga el worker sino el móvil:
+`ingest_upload` lo recibe ya validado y `get_client_inventory` lo sirve.
+
 Solo actúa con `INVENTORY_SOURCE` / `PROFILE_SOURCE` en `own` (y, para encolar en sombra,
 `shadow`). Mantiene la máquina de estados de `inventory_service.get_inventory`:
 
@@ -27,6 +30,7 @@ from steam.errors.handling import degraded, log_degraded
 from steam.mappers.item_mapper import _map_item
 from steam.mappers.profile_mapper import _map_profile
 from steam.utils.urls import steam_cdn_url
+from worker.decode import inventory as inv_decode
 
 logger = logging.getLogger("uvicorn.error")
 POLL_S = 1.0
@@ -124,6 +128,52 @@ async def get_inventory(steam_id: str, *, force: bool = False) -> Fetched[Any]:
     log_degraded("inventory", reason, "empty")
     # Sin nada que enseñar: «vuelve en un rato» es un 429 para el front (como hoy).
     return Fetched(_inventory([]), "error", "rate_limit" if not reason.startswith("http_") else reason)
+
+
+async def get_client_inventory(steam_id: str) -> Fetched[Any]:
+    """Modo `client` (COST-07b): solo lo que subió el móvil; nunca se pide nada a Steam.
+
+    Fresco → `ok`; viejo → `stale` (el móvil lo renovará al abrir la app); sin snapshot →
+    `error` con `needs_upload`, que la ruta sirve como `[]` + `X-Inventory-Needs-Upload`.
+    """
+    now = time.monotonic()
+    hit = _inventory_cache.fresh(steam_id, now)
+    if hit is not None:
+        return Fetched(_inventory(hit))
+    snap = await repo.load_snapshot(steam_id)
+    if snap is None:
+        return Fetched(_inventory([]), "error", "needs_upload")
+    cards = await compose(snap[0])
+    if _age_h(snap[1]) < OWN_FRESH_H:
+        _inventory_cache.put(steam_id, cards, now)
+        return Fetched(_inventory(cards))
+    log_degraded("inventory", "needs_upload", "stale")
+    return Fetched(_inventory(cards, snap[1]), "stale", "needs_upload")
+
+
+def _decode_upload(raw: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int]:
+    """CPU pura, fuera del bucle. Solo se decodifican certificados de assets que existen:
+    un `asset_properties` sin asset no cuesta trabajo."""
+    owned = {str(a["assetid"]) for a in raw.get("assets") or []}
+    certs = {aid: h for aid, h in inv_decode.certificates(raw).items() if aid in owned}
+    decoded, failed = inv_decode.decode_certs(certs, {})
+    return inv_decode.extract(raw, decoded), len(certs), failed
+
+
+async def ingest_upload(steam_id: str, raw: dict[str, Any]) -> Fetched[Any]:
+    """COST-07b: inventario crudo de Steam (ya validado por la ruta) → snapshot + tarjetas.
+
+    Mismo decodificador puro que el worker (`worker/decode/inventory.py`). El SteamID es el del
+    token: lo subido solo toca los datos de su dueño.
+    """
+    items, n_certs, failed = await asyncio.to_thread(_decode_upload, raw)
+    captured = dt.datetime.now(dt.UTC).isoformat()
+    await repo.save_snapshot(steam_id, items, captured)
+    cards = await compose(items)
+    _inventory_cache.put(steam_id, cards, time.monotonic())
+    logger.info("[inventory] upload steam_id=%s items=%s certs=%s certs_failed=%s decode_missing_ratio=%s",
+                steam_id, len(items), n_certs, failed, inv_decode.decode_missing_ratio(items))
+    return Fetched(_inventory(cards))
 
 
 async def enqueue_shadow(steam_id: str, kind: str = "inventory") -> None:

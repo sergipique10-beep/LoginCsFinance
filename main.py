@@ -138,7 +138,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],  # DELETE: /alerts/{id}
     allow_headers=["Authorization", "Content-Type"],
     # PERF-14: sin esto el WebView no deja leer las cabeceras del inventario degradado.
-    expose_headers=["X-Inventory-Stale", "X-Inventory-Captured-At"],
+    expose_headers=["X-Inventory-Stale", "X-Inventory-Captured-At", "X-Inventory-Needs-Upload"],
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_router)

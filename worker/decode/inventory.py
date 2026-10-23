@@ -7,6 +7,7 @@ Fuente primaria del float y del patrón: `asset_properties` (Wear Rating, Patter
 Nunca se usa `actions[].link`: lleva un placeholder, no un inspect válido. Un ítem recién
 tradeado puede venir sin Wear Rating: `float_value=None` y se reintenta en el siguiente refresco.
 """
+import math
 from typing import Any
 
 from worker.decode import certificate
@@ -44,9 +45,11 @@ def _tag(desc: dict[str, Any], category: str) -> dict[str, Any]:
 
 def _num(v: Any, cast: type) -> Any:
     try:
-        return cast(v) if v is not None else None
-    except (TypeError, ValueError):
+        out = cast(v) if v is not None else None
+    except (TypeError, ValueError, OverflowError):
         return None
+    # "1e400" → inf: ni JSON ni Postgres lo aceptan (el cuerpo de /inventory/upload es del cliente).
+    return out if not isinstance(out, float) or math.isfinite(out) else None
 
 
 def extract(inv: dict[str, Any], decoded: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:

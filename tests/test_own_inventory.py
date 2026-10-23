@@ -3,6 +3,7 @@
 Por defecto (INVENTORY_SOURCE=steamwebapi) nada de esto se ejecuta: el último test lo fija.
 """
 import datetime as dt
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -239,3 +240,119 @@ async def test_repo_contra_supabase_falso(monkeypatch):
 def test_por_defecto_steamwebapi():
     assert settings.INVENTORY_SOURCE == "steamwebapi" and settings.PROFILE_SOURCE == "steamwebapi"
     assert own._age_h("no-es-fecha") == float("inf") and own._age_h(NOW_ISO.replace("+00:00", "")) < 1
+
+
+# ── COST-07b: el móvil sube su propio inventario (INVENTORY_SOURCE=client) ────
+def _payload():
+    """El inventario crudo de los tests del worker, con ids numéricos como los de Steam."""
+    import json
+
+    from tests.test_worker_inventory import inventory_payload
+    raw = json.dumps(inventory_payload()).replace('"c1"', '"11"').replace('"c2"', '"22"').replace('"zz"', '"33"')
+    return json.loads(raw)
+
+
+class UploadRepo(FakeRepo):
+    def install(self, mp):
+        super().install(mp)
+        self.saved = []
+
+        async def save_snapshot(steam_id, items, captured_at):
+            self.saved.append((steam_id, items))
+            self.snap = (items, captured_at)
+        mp.setattr(repo, "save_snapshot", save_snapshot)
+        return self
+
+
+@pytest.fixture
+def client_mode(client, monkeypatch):
+    monkeypatch.setattr(settings, "INVENTORY_SOURCE", "client")
+    return UploadRepo().install(monkeypatch)
+
+
+def test_upload_decodifica_y_guarda_con_el_sub(client, client_mode):
+    body = {**_payload(), "steam_id": "76561190000000000"}   # un SteamID en el cuerpo se ignora
+    r = client.post("/inventory/upload", json=body)
+    assert r.status_code == 200, r.text
+    [(sid, items)] = client_mode.saved
+    assert sid == STEAM_ID and [i["assetid"] for i in items] == ["1", "2"]
+    knife = items[0]
+    assert (knife["paint_seed"], knife["paint_index"], knife["phase"]) == (661, 418, "Phase 1")
+    assert abs(knife["float_value"] - 0.07) < 1e-9
+    cards = r.json()
+    assert len(cards) == 2 and cards[0]["priceLatest"] == 1200.5
+    # Lo subido se sirve después sin pedir nada a nadie.
+    assert client.get("/inventory").json() == cards and client_mode.requests == []
+
+
+def test_upload_solo_en_modo_client(client, monkeypatch):
+    monkeypatch.setattr(settings, "INVENTORY_SOURCE", "own")
+    assert client.post("/inventory/upload", json=_payload()).status_code == 404
+
+
+def test_upload_rechaza_cuerpos_grandes_y_malformados(client, client_mode, monkeypatch):
+    monkeypatch.setattr(settings, "INVENTORY_UPLOAD_PER_MIN", 100)
+    monkeypatch.setattr(settings, "INVENTORY_UPLOAD_MAX_BYTES", 100)
+    assert client.post("/inventory/upload", json=_payload()).status_code == 413
+    monkeypatch.setattr(settings, "INVENTORY_UPLOAD_MAX_BYTES", 10**6)
+    bad_id = _payload()
+    bad_id["assets"][0]["assetid"] = "1; drop"
+    bad_icon = _payload()
+    bad_icon["descriptions"][0]["icon_url"] = "https://evil.example/x.png"
+    for body in (bad_id, bad_icon, {"assets": "x", "descriptions": []}):
+        assert client.post("/inventory/upload", json=body).status_code == 422
+    assert client.post("/inventory/upload", content=b"{no es json", headers={"content-type": "application/json"}
+                       ).status_code == 422
+    assert client_mode.saved == []
+
+
+def test_upload_cupo_por_usuario(client, client_mode, monkeypatch):
+    monkeypatch.setattr(settings, "INVENTORY_UPLOAD_PER_MIN", 2)
+    codes = [client.post("/inventory/upload", json=_payload()).status_code for _ in range(3)]
+    assert codes == [200, 200, 429]
+
+
+def test_get_en_modo_client_pide_la_subida(client, client_mode):
+    r = client.get("/inventory")
+    assert r.status_code == 200 and r.json() == [] and r.headers["X-Inventory-Needs-Upload"] == "1"
+    client_mode.snap = ([ASSET], OLD_ISO)
+    r = client.get("/inventory")
+    assert len(r.json()) == 1 and r.headers["X-Inventory-Stale"] == "1"
+    assert r.headers["X-Inventory-Needs-Upload"] == "1" and client_mode.requests == []
+
+
+def test_upload_entradas_hostiles_no_dan_500(client, client_mode, monkeypatch):
+    """Revisión de seguridad del 2026-10-23: cada caso daba 500 o pasaba la validación."""
+    monkeypatch.setattr(settings, "INVENTORY_UPLOAD_PER_MIN", 100)
+    # Certificado con un fixed32 truncado (struct.error) y paintwear ≥ 2³² en un varint.
+    truncated = "00" + bytes([(20 << 3) | 5, 1, 2]).hex() + "00000000"
+    body = _payload()
+    body["asset_properties"][0]["asset_properties"][2]["string_value"] = truncated
+    body["assets"][0]["amount"] = "1e400"
+    body["asset_properties"][0]["asset_properties"][0]["float_value"] = "1e400"
+    r = client.post("/inventory/upload", json=body)
+    assert r.status_code == 200, r.text
+    knife = client_mode.saved[-1][1][0]
+    assert knife["float_value"] is None and knife["amount"] == 1
+    # 1e400 como número JSON, dígitos Unicode y listas por encima de las cotas → 422.
+    over = _payload()
+    over["descriptions"][0]["tags"] *= 4
+    for body in (over, {**_payload(), "assets": [{"assetid": "٣", "classid": "1", "instanceid": "0"}]}):
+        assert client.post("/inventory/upload", json=body).status_code == 422
+    raw = json.dumps(_payload()).replace('"amount": "1"', '"amount": 1e400', 1)
+    assert client.post("/inventory/upload", content=raw, headers={"content-type": "application/json"}
+                       ).status_code == 422
+
+
+def test_upload_no_decodifica_certificados_sin_asset(monkeypatch):
+    raw = _payload()
+    raw["asset_properties"].append({"assetid": "999", "asset_properties": [
+        {"propertyid": 6, "string_value": raw["asset_properties"][0]["asset_properties"][2]["string_value"]}]})
+    items, n_certs, failed = own._decode_upload(raw)
+    assert n_certs == 1 and failed == 0 and len(items) == 2
+
+
+def test_certificado_struct_error_es_valueerror():
+    from worker.decode import certificate
+    with pytest.raises(ValueError):
+        certificate.parse_proto(bytes([(20 << 3) | 5, 1, 2]))

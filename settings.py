@@ -183,7 +183,7 @@ ALERTS_MAX_PER_USER = int(os.getenv("ALERTS_MAX_PER_USER", "20"))
 # ── COST-07: inventario y perfil desde el worker del VPS ─────────────────────
 # steamwebapi (por defecto, producción de hoy) | shadow (sirve steamwebapi y encola una
 # petición de fondo para que el worker rellene la tabla sombra y comparar) | own (sirve lo
-# del worker; solo tras el corte, COST-06).
+# del worker; solo tras el corte, COST-06) | client (COST-07b, solo inventario: lo sube el móvil).
 INVENTORY_SOURCE = os.getenv("INVENTORY_SOURCE", "steamwebapi").strip().lower()
 PROFILE_SOURCE = os.getenv("PROFILE_SOURCE", "steamwebapi").strip().lower()
 OWN_INVENTORY_TABLE = os.getenv("OWN_INVENTORY_TABLE", "inventory_snapshots_shadow")
@@ -191,3 +191,7 @@ MARKET_CURRENT_TABLE = os.getenv("MARKET_CURRENT_TABLE", "market_current")
 INVENTORY_WAIT_S = float(os.getenv("INVENTORY_WAIT_S", "25"))   # long-poll de GET /inventory
 PROFILE_WAIT_S = float(os.getenv("PROFILE_WAIT_S", "8"))         # long-poll de GET /me
 OWN_FRESH_H = float(os.getenv("OWN_FRESH_H", "23"))              # snapshot más nuevo que esto = fresco
+# COST-07b: `client` = el móvil descarga su propio inventario (Steam bloquea el rango de Hetzner,
+# COST-14) y lo sube a POST /inventory/upload; Render lo decodifica y lo sirve. Sin worker.
+INVENTORY_UPLOAD_MAX_BYTES = int(os.getenv("INVENTORY_UPLOAD_MAX_BYTES", str(4 * 1024 * 1024)))
+INVENTORY_UPLOAD_PER_MIN = int(os.getenv("INVENTORY_UPLOAD_PER_MIN", "3"))   # por usuario
