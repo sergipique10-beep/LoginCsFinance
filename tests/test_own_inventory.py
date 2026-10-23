@@ -356,3 +356,11 @@ def test_certificado_struct_error_es_valueerror():
     from worker.decode import certificate
     with pytest.raises(ValueError):
         certificate.parse_proto(bytes([(20 << 3) | 5, 1, 2]))
+
+
+def test_refresh_en_modo_client_siempre_pide_la_subida(client, client_mode):
+    client_mode.snap = ([ASSET], NOW_ISO)
+    assert "X-Inventory-Needs-Upload" not in client.get("/inventory").headers   # fresco: GET no pide nada
+    r = client.post("/inventory/refresh")
+    assert r.status_code == 200 and len(r.json()) == 1 and r.headers["X-Inventory-Needs-Upload"] == "1"
+    assert "X-Inventory-Stale" not in r.headers and client_mode.requests == []

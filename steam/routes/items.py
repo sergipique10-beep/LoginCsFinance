@@ -56,6 +56,8 @@ def _inventory_response(fetched: Fetched[Inventory]) -> JSONResponse | list:
         if fetched.reason == "needs_upload":
             headers["X-Inventory-Needs-Upload"] = "1"
         return JSONResponse(fetched.data.items, headers=headers)
+    if fetched.reason == "needs_upload":   # `ok` de un refresh en modo client (COST-07b)
+        return JSONResponse(fetched.data.items, headers={"X-Inventory-Needs-Upload": "1"})
     return fetched.data.items   # `ok`, o `error` por 410/411: `[]` (CAL-13)
 
 
