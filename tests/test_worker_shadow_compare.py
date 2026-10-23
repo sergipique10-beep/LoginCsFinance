@@ -19,49 +19,75 @@ def rows(prices: dict[str, float], delta7d: float | None = 1.0, sold: int = 10) 
             for n, p in prices.items()]
 
 
-def idx(values: dict[str, float]) -> list[dict]:
-    return [{"ts": ts, "priceindex": v} for ts, v in values.items()]
-
-
 SW = [dict(r, price_delta_7d=float(i)) for i, r in enumerate(rows({f"S{i}": 20.0 + i for i in range(12)}))]
-IDX_UP = idx({"2026-10-17T23:00:00+00:00": 100.0, "2026-10-18T10:00:00+00:00": 90.0, "2026-10-18T23:00:00+00:00": 101.0})
-IDX_DOWN = idx({"2026-10-17T23:00:00+00:00": 100.0, "2026-10-18T23:00:00+00:00": 99.0})
-MV = [{"name": "S1", "bucket": "hot"}, {"name": "S2", "bucket": "cold"}]
+# Gate del 2026-10-23: el trending propio tiene que estar lleno (≥ 450) y los movers completos (10 + 10).
+OWN = SW + rows({f"X{i}": 1.0 for i in range(sc.TRENDING_MIN)})
+MV = [{"name": f"M{i}", "bucket": b} for b in ("hot", "cold") for i in range(sc.MOVERS_FULL)]
+
+
+def week(changes: list[float], start: float = 100.0) -> list[dict]:
+    """Índice diario: una variación en % por día de la ventana (la última = DAY), más el cierre previo."""
+    pts, v = [], start
+    first = DAY - dt.timedelta(days=len(changes))
+    pts.append({"ts": f"{first.isoformat()}T23:00:00+00:00", "priceindex": v})
+    for i, c in enumerate(changes, 1):
+        v *= 1 + c / 100
+        pts.append({"ts": f"{(first + dt.timedelta(days=i)).isoformat()}T23:00:00+00:00", "priceindex": v})
+    return pts
+
+
+UP7 = week([0.5] * 7)
 
 
 def test_identico_cumple_todo():
-    r = sc.report(DAY, SW, SW, MV, MV, IDX_UP, IDX_UP, {"S1": (21.0, 10)}, 0)
+    r = sc.report(DAY, OWN, SW, MV, MV, UP7, UP7, {"S1": (21.0, 10)}, 0)
     assert r["ok"] and r["fails"] == ""
     assert r["n"] == 12 and r["mediana_desv_pct"] == 0 and r["p90_desv_pct"] == 0 and r["ratio_mediana"] == 1
-    assert r["overlap_trending_top50"] == 1 and r["overlap_movers"] == 1
-    assert r["ratio_sold24h_mediana"] == 1 and r["index_sign_match"] is True
+    assert r["overlap_movers"] == 1 and r["index_sign_match"] is True
     assert r["steam_desv_pct"] == 0 and r["n_steam"] == 1
 
 
-def test_desviacion_solape_signo_y_cooldown_fallan_por_separado():
-    own = rows({f"S{i}": (20.0 + i) * 0.8 for i in range(12)}, delta7d=-1.0)   # ratio 0,8 → 20 % de desviación
-    r = sc.report(DAY, own, SW, [MV[0]], MV, IDX_DOWN, IDX_UP, {"S1": (25.2, 20)}, 7200)   # Steam propio +20 %
+def test_mercados_distintos_no_bloquean_el_corte():
+    """Lo que falló del 18 al 22-10: solapes de 2–20 %, correlación baja, sin Steam y un día de signo distinto."""
+    own = [dict(r, price_latest=r["price_latest"] * 0.81, price_delta_7d=-r["price_delta_7d"]) for r in OWN]
+    other_mv = [dict(m, name="Z" + m["name"]) for m in MV]
+    sw_idx = week([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.1])     # el último día steamwebapi casi no se mueve
+    own_idx = week([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, -0.1])   # signo opuesto en ese día: zona muerta, no cuenta
+    r = sc.report(DAY, own, SW, other_mv, MV, own_idx, sw_idx, {}, 7200)
+    assert r["ok"], r["fails"]
+    assert r["overlap_movers"] == 0 and r["corr_delta7d"] == -1.0 and r["steam_desv_pct"] is None
+    assert r["index_sign_match"] is False           # el día suelto se sigue registrando como dato
+
+
+def test_gate_falla_por_separado():
+    own = rows({f"S{i}": (20.0 + i) * 0.5 for i in range(12)})                 # ratio 0,5: fuera de la banda
+    half_mv = [m for m in MV if m["bucket"] == "hot"] + MV[-3:]                 # 10 hot, 3 cold
+    r = sc.report(DAY, own, SW, half_mv, MV, week([-0.5, -0.5, 0.5, 0.5, 0.5, 0.5, -0.5]), UP7, {}, 0)
     assert not r["ok"]
-    assert r["mediana_desv_pct"] == 20 and r["ratio_mediana"] == 0.8 and r["steam_desv_pct"] == 20
-    assert r["overlap_movers"] == 0.5 and r["index_sign_match"] is False
-    assert r["ratio_sold24h_mediana"] == 2 and r["steam_cooldown_last_s"] == 7200
-    for k in ("steam_desv_pct", "overlap_movers", "ratio_sold24h", "index_sign", "steam_cooldown", "corr_delta7d"):
-        assert k in r["fails"].split(",")
-    assert "ratio_mediana" not in r["fails"]      # 0,8 está dentro de la banda: la referencia es consistente
+    assert set(r["fails"].split(",")) == {"ratio_mediana", "trending_n", "movers_full", "index_sign_7d", "index_drift_7d"}
+
+
+def test_deriva_del_indice_con_el_mismo_signo():
+    """El caso del 23-10: mismos signos casi siempre, pero el propio cae mucho más que steamwebapi."""
+    sw_idx = week([-0.3, -0.3, -0.3, 0.3, 0.3, -0.4, 0.3])
+    own_idx = week([-0.9, -0.9, -0.3, 0.3, 0.3, -0.9, 0.3])
+    match, drift = sc._index_check(own_idx, sw_idx, DAY)
+    assert match == 1.0 and abs(drift - 1.7) < 1e-6
+    r = sc.report(DAY, OWN, SW, MV, MV, own_idx, sw_idx, {}, 0)
+    assert r["fails"] == "index_drift_7d"
 
 
 def test_sin_datos_no_certifica_pero_no_revienta():
     r = sc.report(DAY, [], [], [], [], [], [], {}, 0)
     assert r["n"] == 0 and r["mediana_desv_pct"] is None and r["index_sign_match"] is None and not r["ok"]
-    assert "ratio_mediana" in r["fails"] and "steam_desv_pct" in r["fails"] and "index_sign" not in r["fails"]
+    assert set(r["fails"].split(",")) == {"ratio_mediana", "trending_n", "movers_full"}   # signo: pocos días, no se juzga
 
 
 def test_desviacion_solo_en_nombres_de_10_dolares_y_correlacion():
     sw = rows({"caro": 50.0, "barato": 5.0}) + rows({f"C{i}": 30.0 + i for i in range(5)}, delta7d=None)
     for i, r in enumerate(sw):
         r["price_delta_7d"] = float(i)
-    own = [dict(r, price_latest=r["price_latest"] * 2) for r in sw if r["name"] == "barato"] \
-        + [dict(r) for r in sw if r["name"] != "barato"]
+    own = [dict(r, price_latest=r["price_latest"] * 2) for r in sw if r["name"] == "barato"]         + [dict(r) for r in sw if r["name"] != "barato"]
     r = sc.report(DAY, own, sw, [], [], [], [], {}, 0)
     assert r["n"] == 6 and r["mediana_desv_pct"] == 0        # «barato» (5 $) no cuenta aunque se desvíe un 100 %
     assert r["ratio_p10"] is None                             # < 10 pares: sin cuantiles
@@ -74,9 +100,9 @@ def test_tarea_registrada_a_las_00_25():
 
 @pytest.fixture
 def fake(monkeypatch):
-    db = SimpleNamespace(tables={"market_trending": SW, settings.MARKET_TRENDING_TABLE: SW,
+    db = SimpleNamespace(tables={"market_trending": SW, settings.MARKET_TRENDING_TABLE: OWN,
                                  "market_movers": MV, settings.MARKET_MOVERS_TABLE: MV},
-                         idx={"market_cap_history": IDX_UP, settings.MARKET_CAP_HISTORY_TABLE: IDX_UP},
+                         idx={"market_cap_history": UP7, settings.MARKET_CAP_HISTORY_TABLE: UP7},
                          upserts=[], ok=[])
 
     async def select_all(sb, table, columns, page=1000, **eq):
@@ -112,6 +138,7 @@ async def test_job_escribe_la_fila_de_ayer(fake):
     await redis.set("cool:last:steamcommunity.com", 3600)
     res = await sc.run_shadow_compare(SimpleNamespace(redis=redis, pg=object(), supabase=object(), http=None))
     assert res["ok"] and res["date"] == "2026-10-18" and res["fails"] == ""
+    assert res["trending_n"] == len(OWN) and res["movers"] == (10, 10) and res["index_sign_drift_7d"] == (1.0, 0.0)
     (table, rows, key), = fake.upserts
     assert table == settings.SHADOW_REPORT_TABLE and key == "date" and rows[0]["date"] == "2026-10-18"
     assert rows[0]["ratio_sold24h_mediana"] == 1.2 and rows[0]["steam_cooldown_last_s"] == 3600
@@ -121,5 +148,5 @@ async def test_job_escribe_la_fila_de_ayer(fake):
 
 def test_referencia_rota_en_la_cola_baja_falla_por_p10():
     own = rows({f"S{i}": (20.0 + i) * (0.001 if i < 2 else 0.8) for i in range(12)})
-    r = sc.report(DAY, own, SW, MV, MV, IDX_UP, IDX_UP, {}, 0)
+    r = sc.report(DAY, own, SW, MV, MV, UP7, UP7, {}, 0)
     assert r["ratio_mediana"] == 0.8 and r["ratio_p10"] < 0.4 and "ratio_p10" in r["fails"]
