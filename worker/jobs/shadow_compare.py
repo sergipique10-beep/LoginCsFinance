@@ -5,7 +5,7 @@
                            top-N (`market_latest`, source='steam') y el último cooldown de Steam (Valkey)
                            → una fila por día con las métricas y si cumple los objetivos del corte.
 
-El corte (COST-06) solo se ejecuta con 7 filas seguidas con `ok = true`. Hasta hoy la comparación eran
+El corte (COST-06) solo se ejecuta con 7 filas seguidas con `ok = true` (gate del 2026-10-23, en las constantes de abajo). Hasta hoy la comparación eran
 SQL a mano (COST-03 16-10, COST-05 17-10): sin fila diaria no hay «7 días seguidos» medibles.
 
 Solo lee: no toca Steam, Skinport ni las tablas de producción. Puro salvo las lecturas: `report()`.
@@ -25,15 +25,27 @@ log = logging.getLogger(__name__)
 
 MIN_PRICE = 10.0          # la desviación se mide en nombres ≥ 10 $ (spec § 6.3)
 TOP = 50
-# Objetivos para cortar (spec § 6.3, redefinido el 2026-10-18). La referencia multi-mercado es un 20–30 % más baja
-# que Steam por construcción (comisión del 15 %, saldo no retirable): a la referencia se le pide CONSISTENCIA
-# (ratio mediano estable dentro de una banda y sin colas rotas), y EXACTITUD solo donde comparamos lo mismo: el
-# precio Steam propio del top-N (priceoverview) frente a `pricelatestsell` de steamwebapi. `_pct` = máximo; el resto = mínimo.
-TARGETS = {"steam_desv_pct": 8.0, "overlap_trending_top50": 0.6, "overlap_movers": 0.6, "corr_delta7d": 0.7}
+# Gate del corte (spec § 6.3, redefinido el 2026-10-23). Lo que se le exige a lo propio:
+#  - la referencia es CONSISTENTE con steamwebapi (ratio mediano en banda, sin colas rotas): un 20–30 % más baja
+#    que Steam por construcción (comisión del 15 %, saldo no retirable), no se le pide igualarla;
+#  - los rankings propios están COMPLETOS (trending y movers llenos);
+#  - el índice sigue el SIGNO del mercado ≥ 80 % de los días de la última semana en que steamwebapi se movió de
+#    verdad (zona muerta: un ±0,1 % no tiene signo), y no DERIVA: la variación acumulada en la ventana no se aparta
+#    más de 1 punto de la de steamwebapi. La deriva la destapó la primera ejecución en seco (23-10): −2,1 % propio
+#    frente a −0,4 % en 6 días. Zona muerta y deriva máxima son criterio, no medida.
+# Fuera del gate, como dato: los solapes con steamwebapi y `corr_delta7d` (5 días seguidos en 2–4 % y 0,1–0,4 del
+# 18 al 22-10): sus rankings ordenan por volumen de Steam y los nuestros por el de Skinport (un 4–17 % del de Steam),
+# así que miden lo distintos que son los mercados, no un fallo. Sin Steam (COST-14, COST-04 cancelado) salen
+# también `steam_desv_pct`, `ratio_sold24h` y el cooldown: sus columnas se siguen escribiendo y quedan a null/0.
 RATIO_BAND = (0.6, 1.0)   # ratio_mediana referencia / steamwebapi
 RATIO_P10_MIN = 0.4       # cola baja: una referencia rota (p10 0,002 el 16-10) la saca de la banda
-SOLD_RATIO = (0.8, 1.25)  # sold24h Steam propio / steamwebapi
-COOLDOWN_MAX_S = 3600     # «0 cooldowns de > 1 h»
+TRENDING_MIN = 450        # de 500 (rankings.TRENDING_LIMIT): el trending propio no puede quedarse a medias
+MOVERS_FULL = 10          # hot y cold, cada uno (= rankings.MOVERS_LIMIT)
+SIGN_WINDOW = 7           # días
+SIGN_MIN_DAYS = 5         # con menos días comparables no se juzga (aún no hay serie)
+SIGN_MIN_MATCH = 0.8
+SIGN_DEADBAND_PCT = 0.2   # |variación diaria de steamwebapi| por debajo de esto: el signo es ruido, no se juzga
+DRIFT_MAX_PP = 1.0        # |Σ propio − Σ steamwebapi| en la ventana, en puntos porcentuales
 
 Row = dict[str, Any]
 
@@ -65,18 +77,38 @@ def _corr(pairs: list[tuple[float, float]]) -> float | None:
     return round(statistics.correlation(xs, ys), 3)
 
 
-def _day_sign(points: list[Row], day: dt.date) -> int | None:
-    """Signo de la variación del índice en `day`: último punto de `day` frente al último del día anterior."""
+def _closes(points: list[Row]) -> dict[dt.date, float]:
+    """Último `priceindex` de cada día."""
     last: dict[dt.date, float] = {}
     for p in sorted(points, key=lambda p: str(p["ts"])):
         v = _f(p.get("priceindex"))
         if v is not None:
             last[dt.datetime.fromisoformat(str(p["ts"]).replace("Z", "+00:00")).date()] = v
-    prev = day - dt.timedelta(days=1)
-    if day not in last or prev not in last:
-        return None
-    d = last[day] - last[prev]
-    return (d > 0) - (d < 0)
+    return last
+
+
+def _day_change(closes: dict[dt.date, float], day: dt.date) -> float | None:
+    """Variación de `day` frente al cierre del día anterior, en %."""
+    prev = closes.get(day - dt.timedelta(days=1))
+    return None if day not in closes or not prev else (closes[day] / prev - 1) * 100
+
+
+def _day_sign(points: list[Row], day: dt.date) -> int | None:
+    d = _day_change(_closes(points), day)
+    return None if d is None else (d > 0) - (d < 0)
+
+
+def _index_check(own_idx: list[Row], sw_idx: list[Row], day: dt.date) -> tuple[float | None, float | None]:
+    """(fracción de días con el mismo signo, deriva acumulada en puntos) en la ventana; None con pocos días."""
+    own_c, sw_c = _closes(own_idx), _closes(sw_idx)
+    days = [day - dt.timedelta(days=i) for i in range(SIGN_WINDOW)]
+    pairs = [(o, w) for d in days if (o := _day_change(own_c, d)) is not None and (w := _day_change(sw_c, d)) is not None]
+    if len(pairs) < SIGN_MIN_DAYS:
+        return None, None
+    drift = round(abs(sum(o for o, _ in pairs) - sum(w for _, w in pairs)), 3)
+    judged = [(o > 0) == (w > 0) for o, w in pairs if abs(w) >= SIGN_DEADBAND_PCT]
+    match = round(sum(judged) / len(judged), 3) if len(judged) >= SIGN_MIN_DAYS else None
+    return match, drift
 
 
 def report(day: dt.date, own: list[Row], sw: list[Row], own_mv: list[Row], sw_mv: list[Row],
@@ -110,20 +142,22 @@ def report(day: dt.date, own: list[Row], sw: list[Row], own_mv: list[Row], sw_mv
         "index_sign_match": None if own_sign is None or sw_sign is None else own_sign == sw_sign,
         "steam_cooldown_last_s": int(cooldown_last_s),
     }
-    fails = [k for k, lim in TARGETS.items()
-             if out[k] is None or (out[k] > lim if k.endswith("_pct") else out[k] < lim)]
+    fails = []
     rm = out["ratio_mediana"]
     if rm is None or not RATIO_BAND[0] <= rm <= RATIO_BAND[1]:
         fails.append("ratio_mediana")
     if out["ratio_p10"] is not None and out["ratio_p10"] < RATIO_P10_MIN:
         fails.append("ratio_p10")
-    r = out["ratio_sold24h_mediana"]
-    if r is not None and not SOLD_RATIO[0] <= r <= SOLD_RATIO[1]:
-        fails.append("ratio_sold24h")
-    if out["index_sign_match"] is False:
-        fails.append("index_sign")
-    if cooldown_last_s > COOLDOWN_MAX_S:
-        fails.append("steam_cooldown")
+    if len(own) < TRENDING_MIN:
+        fails.append("trending_n")
+    buckets = [r["bucket"] for r in own_mv]
+    if min(buckets.count("hot"), buckets.count("cold")) < MOVERS_FULL:
+        fails.append("movers_full")
+    match, drift = _index_check(own_idx, sw_idx, day)
+    if match is not None and match < SIGN_MIN_MATCH:
+        fails.append("index_sign_7d")
+    if drift is not None and drift > DRIFT_MAX_PP:
+        fails.append("index_drift_7d")
     out["ok"] = not fails
     out["fails"] = ",".join(fails)
     return out
@@ -143,7 +177,7 @@ async def run_shadow_compare(state: Any) -> dict[str, Any]:
         own = await sb_store.select_all(sb, settings.MARKET_TRENDING_TABLE, COLS)
         sw_mv = await sb_store.select_all(sb, "market_movers", "name, bucket")
         own_mv = await sb_store.select_all(sb, settings.MARKET_MOVERS_TABLE, "name, bucket")
-        since = (now - dt.timedelta(days=3)).isoformat()
+        since = (now - dt.timedelta(days=SIGN_WINDOW + 2)).isoformat()
         sw_idx = await sb_store.cap_points_since(sb, "market_cap_history", since)
         own_idx = await sb_store.cap_points_since(sb, settings.MARKET_CAP_HISTORY_TABLE, since)
         quotes = await market.latest_quotes(state.pg, now - dt.timedelta(days=1))
@@ -151,8 +185,12 @@ async def run_shadow_compare(state: Any) -> dict[str, Any]:
         cooldown = int(await state.redis.get("cool:last:steamcommunity.com") or 0)
         row = report(day, own, sw, own_mv, sw_mv, own_idx, sw_idx, steam, cooldown)
         await sb_store.upsert(sb, settings.SHADOW_REPORT_TABLE, [row], "date")
-        return {k: row[k] for k in ("date", "n", "ratio_mediana", "steam_desv_pct", "n_steam", "overlap_trending_top50",
-                                     "overlap_movers", "corr_delta7d", "ok", "fails")}
+        # trending_n, movers e index_sign_7d van al log, no a la tabla (sin DDL nuevo): se recalculan al vuelo.
+        mv = [r["bucket"] for r in own_mv]
+        return {**{k: row[k] for k in ("date", "n", "ratio_mediana", "ratio_p10", "overlap_trending_top50",
+                                        "overlap_movers", "corr_delta7d", "ok", "fails")},
+                "trending_n": len(own), "movers": (mv.count("hot"), mv.count("cold")),
+                "index_sign_drift_7d": _index_check(own_idx, sw_idx, day)}
     return await ms._run(state, "shadow_compare", go)
 
 
