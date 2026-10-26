@@ -8,3 +8,8 @@ pip-audit==2.10.1
 # Worker del VPS (COST-02): CI importa y testea worker/ con las mismas versiones que la imagen.
 -r deploy/worker/requirements-worker.in
 fakeredis[lua]==2.39.0
+# Suite de tests: fuera de requirements.txt desde SEC-14 (Render no la necesita).
+pytest==9.0.3
+pytest-asyncio==1.4.1
+iniconfig==2.3.0
+pluggy==1.6.0

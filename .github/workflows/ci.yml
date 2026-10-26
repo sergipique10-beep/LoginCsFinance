@@ -72,16 +72,17 @@ jobs:
             gitleaks.json
 
   audit:
-    # SCA (EDS-3 §3.17). Informativo hasta cerrar SEC-14 (EDS-4 §4.7, secuenciacion sin
-    # riesgo): el continue-on-error va en el PASO de pip-audit, no en el job, para que el
-    # check-run quede en success (Render «After CI Checks Pass» lo mira) y un fallo de
-    # instalacion siga siendo rojo (revision 2026-10-04, I-5).
+    # SCA (EDS-3 §3.17). Bloqueante desde SEC-14 (2026-10-26): una dependencia de produccion
+    # con un aviso conocido pone el check en rojo y Render («After CI Checks Pass») no despliega.
+    # Excepciones solo con --ignore-vuln, justificadas aqui y con fecha de revision:
+    #  - PYSEC-2026-4146 (PyJWT, sin version con arreglo): decode() muta el dict `options` si
+    #    verify_signature es falso. No aplica: nunca pasamos `options` ni desactivamos la firma
+    #    (auth/router.py, auth/service.py). Revisar al salir una version de PyJWT que lo arregle.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install pip-audit==2.10.1
-      - name: pip-audit (informativo hasta SEC-14)
-        continue-on-error: true
-        run: pip-audit -r requirements.txt --strict --desc
+      - name: pip-audit
+        run: pip-audit -r requirements.txt --strict --desc --ignore-vuln PYSEC-2026-4146
