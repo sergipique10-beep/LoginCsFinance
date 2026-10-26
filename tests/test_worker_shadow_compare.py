@@ -64,17 +64,16 @@ def test_gate_falla_por_separado():
     half_mv = [m for m in MV if m["bucket"] == "hot"] + MV[-3:]                 # 10 hot, 3 cold
     r = sc.report(DAY, own, SW, half_mv, MV, week([-0.5, -0.5, 0.5, 0.5, 0.5, 0.5, -0.5]), UP7, {}, 0)
     assert not r["ok"]
-    assert set(r["fails"].split(",")) == {"ratio_mediana", "trending_n", "movers_full", "index_sign_7d", "index_drift_7d"}
+    assert set(r["fails"].split(",")) == {"ratio_mediana", "trending_n", "movers_full"}
 
 
-def test_deriva_del_indice_con_el_mismo_signo():
-    """El caso del 23-10: mismos signos casi siempre, pero el propio cae mucho más que steamwebapi."""
+def test_la_deriva_del_indice_es_dato_no_gate():
+    """El caso del 23-10: el propio cae mucho más que steamwebapi, y es real (los mercados de referencia bajaron)."""
     sw_idx = week([-0.3, -0.3, -0.3, 0.3, 0.3, -0.4, 0.3])
     own_idx = week([-0.9, -0.9, -0.3, 0.3, 0.3, -0.9, 0.3])
     match, drift = sc._index_check(own_idx, sw_idx, DAY)
     assert match == 1.0 and abs(drift - 1.7) < 1e-6
-    r = sc.report(DAY, OWN, SW, MV, MV, own_idx, sw_idx, {}, 0)
-    assert r["fails"] == "index_drift_7d"
+    assert sc.report(DAY, OWN, SW, MV, MV, own_idx, sw_idx, {}, 0)["ok"]
 
 
 def test_sin_datos_no_certifica_pero_no_revienta():
