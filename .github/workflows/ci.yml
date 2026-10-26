@@ -86,3 +86,5 @@ jobs:
       - run: pip install pip-audit==2.10.1
       - name: pip-audit
         run: pip-audit -r requirements.txt --strict --desc --ignore-vuln PYSEC-2026-4146
+      - name: pip-audit (worker del VPS, lock con hashes)
+        run: pip-audit -r deploy/worker/requirements-worker.txt --strict --desc --require-hashes --disable-pip
