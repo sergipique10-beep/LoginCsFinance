@@ -9,4 +9,4 @@ stamina==26.1.0
 asyncpg==0.32.0
 httpx==0.28.1
 supabase==2.31.0
-brotli==1.2.0  # Skinport exige Accept-Encoding: br; httpx solo lo descomprime con esto
+brotli==1.2.1  # Skinport exige Accept-Encoding: br; httpx solo lo descomprime con esto
