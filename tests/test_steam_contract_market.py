@@ -129,13 +129,15 @@ def test_index(api):
 
 
 def test_movers_y_trending_sirven_snapshots(api, monkeypatch):
-    rows = [_to_row(SAMPLE, 0, "hot"), _to_row(SAMPLE, 0, "cold")]
+    # Rankings de Home: cajas, suben, bajan. Suben/bajan añaden el cambio a 30 días en $.
+    rows = [_to_row(SAMPLE, 0, bucket) for bucket in ("cases", "up", "down")]
     monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=rows))
     monkeypatch.setattr(trending_repo, "fetch_ranked", AsyncMock(return_value=rows[:1]))
 
     movers = api.get("/market/movers").json()
-    assert set(movers) == {"hot", "cold"}
-    assert set(movers["hot"][0]) == ROW_ITEM_KEYS
+    assert set(movers) == {"cases", "up", "down"}
+    assert set(movers["cases"][0]) == ROW_ITEM_KEYS
+    assert set(movers["up"][0]) == set(movers["down"][0]) == ROW_ITEM_KEYS | {"priceChange30d"}
 
     trending = api.get("/market/trending").json()
     assert set(trending[0]) == ROW_ITEM_KEYS

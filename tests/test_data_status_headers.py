@@ -153,7 +153,7 @@ def test_inventario_ok_sin_cabeceras(steam_api, client):
 # ── Movers y trending: edad del snapshot (opción A) ───────────────────────────
 
 def _movers(updated_at: str | None) -> list[dict]:
-    row = {"name": NAME, "bucket": "hot", "rank": 0, "price_latest": 1.0}
+    row = {"name": NAME, "bucket": "cases", "rank": 0, "price_latest": 1.0}
     return [row | ({"updated_at": updated_at} if updated_at else {})]
 
 
@@ -165,7 +165,7 @@ def test_movers_por_edad(client, monkeypatch, age, expected):
     ts = _ago(**age)
     monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=_movers(ts)))
     resp = client.get("/market/movers")
-    assert [i["name"] for i in resp.json()["hot"]] == [NAME]
+    assert [i["name"] for i in resp.json()["cases"]] == [NAME]
     assert _status(resp) == expected
     if expected[0]:
         assert resp.headers["X-Data-Captured-At"] == ts
@@ -174,7 +174,7 @@ def test_movers_por_edad(client, monkeypatch, age, expected):
 def test_movers_vacio_es_error(client, monkeypatch):
     monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=[]))
     resp = client.get("/market/movers")
-    assert resp.json() == {"hot": [], "cold": []}
+    assert resp.json() == {"cases": [], "up": [], "down": []}
     assert _status(resp) == ("error", "empty_snapshot")
 
 

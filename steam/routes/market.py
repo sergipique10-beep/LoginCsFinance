@@ -22,7 +22,7 @@ def _require_cap_token(x_cap_token: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing cap-tick token")
 
 
-@router.get("/market/movers", dependencies=[Depends(market_rate_limit)], summary="Top movers del mercado CS2 (hot & cold 24 h)")
+@router.get("/market/movers", dependencies=[Depends(market_rate_limit)], summary="Rankings de Home: cajas más vendidas y skins que más suben/bajan en $ a 30 días")
 async def get_market_movers(request: Request, user: dict = Depends(require_jwt)):
     snapshot = await rankings_service.get_movers()
     return respond(snapshot.fetched, captured_at=snapshot.captured_at)

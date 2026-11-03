@@ -282,12 +282,22 @@ def _snapshot(flow: str, rows: list[dict], column: str, max_age: timedelta,
     return RankingSnapshot(Fetched(data), captured_at)
 
 
+def _bucket(rows: list[dict], bucket: str) -> list[RankedCard]:
+    return [_row_to_item(r) for r in rows if r.get("bucket") == bucket]
+
+
 async def get_movers() -> RankingSnapshot:
+    """Rankings de Home. Suben/bajan llevan el cambio a 30 días en $, derivado del % que
+    se guarda sin redondear. Filas de otro `bucket` (el HOT/COLD de antes del deploy) no
+    entran: hasta el primer movers-tick las listas salen vacías."""
     rows = await movers_repo.fetch_snapshot()
-    hot: list[RankedCard] = [_row_to_item(r) for r in rows if r.get("bucket") == "hot"]
-    cold: list[RankedCard] = [_row_to_item(r) for r in rows if r.get("bucket") == "cold"]
-    return _snapshot("movers_snapshot", rows, "updated_at", _MOVERS_STALE_AFTER,
-                     {"hot": hot, "cold": cold})
+    data: dict[str, list[Any]] = {"cases": _bucket(rows, "cases")}
+    for bucket in ("up", "down"):
+        data[bucket] = [
+            {**card, "priceChange30d": home_rankings.usd_from_pct(card["priceReal"], card["priceDelta30d"])}
+            for card in _bucket(rows, bucket)
+        ]
+    return _snapshot("movers_snapshot", rows, "updated_at", _MOVERS_STALE_AFTER, data)
 
 
 async def get_trending() -> RankingSnapshot:

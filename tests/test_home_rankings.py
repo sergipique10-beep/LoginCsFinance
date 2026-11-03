@@ -124,3 +124,29 @@ async def test_compute_baratas_fallan_es_error(steam_api, http):
     _items_route(steam_api, cheap=500, expensive=[FALLER])
     fetched = await rankings_service.compute_home_rankings(http)
     assert fetched == Fetched({"cases": [], "up": [], "down": []}, "error", "http_500")
+
+
+# ── lectura: GET /market/movers ───────────────────────────────────────────────
+
+from unittest.mock import AsyncMock  # noqa: E402
+
+from steam.mappers.row_mapper import _to_row  # noqa: E402
+from steam.rankings_repo import movers_repo  # noqa: E402
+
+
+def test_movers_ignora_buckets_viejos(client, monkeypatch):
+    # Justo tras el deploy, el snapshot aún es HOT/COLD hasta el primer movers-tick.
+    rows = [{"name": "X", "bucket": "hot", "rank": 0, "price_latest": 1.0},
+            {"name": "Y", "bucket": "cold", "rank": 0, "price_latest": 1.0}]
+    monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=rows))
+    resp = client.get("/market/movers")
+    assert resp.status_code == 200
+    assert resp.json() == {"cases": [], "up": [], "down": []}
+
+
+def test_movers_cambio_en_dolares(client, monkeypatch):
+    _, pct = change_30d(_item("G", real=96.80, real30=62.64))
+    card = {"name": "G", "priceReal": 96.80, "priceDelta30d": pct, "priceLatest": 120.0}
+    monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=[_to_row(card, 0, "up")]))
+    up = client.get("/market/movers").json()["up"]
+    assert round(up[0]["priceChange30d"], 2) == 34.16
