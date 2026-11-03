@@ -34,7 +34,7 @@ logger = logging.getLogger("uvicorn.error")
 # desde sus propios endpoints, no salen de aquí.
 _CAMPOS_LLM = (
     "name", "priceLatest", "priceDelta24h", "priceDelta7d", "priceDelta30d",
-    "sold24h", "liquidityScore", "rarity", "itemType",
+    "sold24h", "liquidityScore", "rarity", "itemType", "priceChange30d",
 )
 
 # Tope de items por tool de listado. El payload se acumula en `contents` vuelta
@@ -90,10 +90,14 @@ def _para_llm(items: Sequence[Mapping[str, Any]], limite: int = _TOP_ITEMS_LLM) 
     con_senal = [it for it in items if _tiene_senal(it)]
     # Si el filtro deja la lista vacía, es mejor devolver los items crudos que
     # hacer creer al modelo que no hay mercado: que lo explique él con los datos.
-    elegidos = con_senal or items
+    return _proyectar(con_senal or items, limite)
+
+
+def _proyectar(items: Sequence[Mapping[str, Any]], limite: int = _TOP_ITEMS_LLM) -> list[dict]:
+    """Solo la proyección y el recorte de `_para_llm`, sin el filtro de señal."""
     return [
         {k: it[k] for k in _CAMPOS_LLM if it.get(k) is not None}
-        for it in elegidos[:limite]
+        for it in items[:limite]
     ]
 
 
@@ -221,14 +225,13 @@ async def _ver_trending(*, client: httpx.AsyncClient) -> list[dict]:
 # ── ver_movers ────────────────────────────────────────────────────────────────
 
 async def _ver_movers(*, client: httpx.AsyncClient) -> dict:
-    """Top movers (hot & cold) del mercado CS2 24h."""
-    from steam.rankings_repo import movers_repo
-    from steam.mappers.row_mapper import _row_to_item
+    """Rankings de Home: cajas más vendidas y skins que más suben/bajan en $ a 30 días.
+    Sin el filtro de señal de `_para_llm`: estas listas ya salen filtradas por sus reglas
+    (steam/domain/home_rankings.py) y una caja de 0,12 $ no es ruido."""
+    from steam.services import rankings_service
 
-    rows = await movers_repo.fetch_snapshot()
-    hot = _para_llm([_row_to_item(r) for r in rows if r.get("bucket") == "hot"])
-    cold = _para_llm([_row_to_item(r) for r in rows if r.get("bucket") == "cold"])
-    return {"hot": hot, "cold": cold}
+    data = (await rankings_service.get_movers()).fetched.data
+    return {bucket: _proyectar(cards) for bucket, cards in data.items()}
 
 
 # ── historial_precio ──────────────────────────────────────────────────────────
@@ -299,8 +302,8 @@ def register_market_tools() -> None:
     register_tool(
         name="ver_movers",
         description=(
-            "Muestra los top movers del mercado CS2: los items que más suben (hot) "
-            "y los que más bajan (cold) en las últimas 24 horas."
+            "Rankings del mercado CS2: cajas más vendidas (24h) y skins que más suben "
+            "y más bajan en dólares en los últimos 30 días."
         ),
         parameters={"type": "object", "properties": {}},
         fn=_ver_movers,

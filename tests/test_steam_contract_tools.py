@@ -87,7 +87,7 @@ async def test_buscar_skin_no_contamina_la_busqueda_de_market(steam_api, api, cl
 # ── ver_trending, ver_movers, historial_precio ────────────────────────────────
 
 async def test_ver_trending_y_movers(api, monkeypatch):
-    rows = [_to_row(SAMPLE, 0, "hot"), _to_row(SAMPLE, 0, "cold")]
+    rows = [_to_row(SAMPLE, 0, bucket) for bucket in ("cases", "up", "down")]
     monkeypatch.setattr(trending_repo, "fetch_snapshot", AsyncMock(return_value=rows[:1]))
     monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=rows))
     campos = {"name", "priceLatest", "priceDelta24h", "priceDelta7d", "priceDelta30d", "sold24h",
@@ -96,8 +96,20 @@ async def test_ver_trending_y_movers(api, monkeypatch):
     (trending,) = await _ver_trending(client=api)
     assert set(trending) == campos
     movers = await _ver_movers(client=api)
-    assert set(movers) == {"hot", "cold"}
-    assert [set(movers["hot"][0]), set(movers["cold"][0])] == [campos, campos]
+    assert set(movers) == {"cases", "up", "down"}
+    assert set(movers["cases"][0]) == campos
+    assert set(movers["up"][0]) == set(movers["down"][0]) == campos | {"priceChange30d"}
+
+
+async def test_ver_movers_no_aplica_el_filtro_de_senal(api, monkeypatch):
+    # Las listas de Home ya vienen filtradas: una caja de 0,12 $ o una skin que se mueve
+    # a 30 días pero no hoy son datos reales, no ruido de céntimos.
+    cara = {**SAMPLE, "name": "Glove Case", "priceLatest": 12.0, "priceDelta24h": None}
+    barata = {**SAMPLE, "name": "Kilowatt Case", "priceLatest": 0.12, "priceDelta24h": 0.5}
+    rows = [_to_row(cara, 0, "cases"), _to_row(barata, 1, "cases")]
+    monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=rows))
+    movers = await _ver_movers(client=api)
+    assert [c["name"] for c in movers["cases"]] == ["Glove Case", "Kilowatt Case"]
 
 
 async def test_historial_precio(steam_api, api):
