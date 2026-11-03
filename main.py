@@ -19,6 +19,7 @@ from settings import (
 from middleware import SecurityHeadersMiddleware
 from auth.router import router as auth_router
 from steam.routes import router as steam_router
+from steam.routes._response import DATA_HEADERS
 from steam.services.catalog_service import fetch_static_images
 from notifications.router import router as notifications_router
 from alerts.router import router as alerts_router
@@ -131,8 +132,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE"],  # DELETE: /alerts/{id}
     allow_headers=["Authorization", "Content-Type"],
-    # PERF-14: sin esto el WebView no deja leer las cabeceras del inventario degradado.
-    expose_headers=["X-Inventory-Stale", "X-Inventory-Captured-At"],
+    # PERF-14 y UX-46: sin esto el WebView no deja leer las cabeceras del dato degradado.
+    expose_headers=["X-Inventory-Stale", "X-Inventory-Captured-At", *DATA_HEADERS],
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_router)

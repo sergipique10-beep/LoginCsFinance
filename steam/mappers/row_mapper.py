@@ -20,6 +20,9 @@ def _row_to_item(row: dict) -> RankedCard:
     día se añade la columna `liquidity_breakdown` y se devuelve aquí, esa
     heurística deja de dispararse EN SILENCIO y el bloque de liquidez se queda
     vacío para siempre. Lo protege tests/test_steam_contract_rows.py.
+
+    Lo que la fila no guarda (priceSafe/Min/Max, soldTotal) o guarda a null sale como
+    `None`, no como `0` (UX-46): «no hay datos» es «N/A» en el front, no «no se vende».
     """
     return {
         "id": row["name"],
@@ -42,24 +45,28 @@ def _row_to_item(row: dict) -> RankedCard:
         "floatMax": row.get("float_max"),
         "paintIndex": row.get("paint_index"),
         "phase": row.get("phase"),
-        "priceLatest": row.get("price_latest", 0),
+        "priceLatest": row.get("price_latest"),
         "csfloatPrice": row.get("csfloat_price"),
         "buffPrice": row.get("buff_price"),
-        "priceSafe": 0,
-        "priceMin": 0,
-        "priceMax": 0,
+        "priceSafe": None,
+        "priceMin": None,
+        "priceMax": None,
         "priceDelta24h": row.get("price_delta_24h"),
         "priceDelta7d": row.get("price_delta_7d"),
         "priceDelta30d": row.get("price_delta_30d"),
         "priceReal": row.get("price_real"),
-        "sold24h": row.get("sold_24h") or 0,
-        "sold7d": row.get("sold_7d") or 0,
-        "sold30d": row.get("sold_30d") or 0,
-        "soldTotal": 0,
-        "offerVolume": row.get("offer_volume") or 0,
-        "hoursToSold": row.get("hours_to_sold") or 0,
+        "sold24h": row.get("sold_24h"),
+        "sold7d": row.get("sold_7d"),
+        "sold30d": row.get("sold_30d"),
+        "soldTotal": None,
+        "offerVolume": row.get("offer_volume"),
+        "hoursToSold": row.get("hours_to_sold"),
         "steamUrl": row.get("steam_url"),
     }
+
+
+def _int_or_none(value: Any) -> int | None:
+    return None if value is None else int(value)
 
 
 def _to_row(item: Mapping[str, Any], rank: int, bucket: str | None = None) -> RankingRow:
@@ -88,17 +95,20 @@ def _to_row(item: Mapping[str, Any], rank: int, bucket: str | None = None) -> Ra
         "float_max": item.get("floatMax"),
         "paint_index": item.get("paintIndex"),
         "phase": item.get("phase"),
-        "price_latest": item.get("priceLatest", 0),
+        # `not null default 0` en el DDL: aquí el `None` de la tarjeta no cabe.
+        "price_latest": item.get("priceLatest") or 0,
         "csfloat_price": item.get("csfloatPrice"),
         "buff_price": item.get("buffPrice"),
         "price_delta_24h": item.get("priceDelta24h"),
         "price_delta_7d": item.get("priceDelta7d"),
         "price_delta_30d": item.get("priceDelta30d"),
         "price_real": item.get("priceReal"),
-        "sold_24h": int(item.get("sold24h") or 0),
-        "sold_7d": int(item.get("sold7d") or 0),
-        "sold_30d": int(item.get("sold30d") or 0),
-        "offer_volume": int(item.get("offerVolume") or 0),
+        # Columnas nullable (docs/sql/market_rankings.sql): el `None` se guarda tal cual
+        # para que `_row_to_item` lo devuelva como «N/A» (UX-46).
+        "sold_24h": _int_or_none(item.get("sold24h")),
+        "sold_7d": _int_or_none(item.get("sold7d")),
+        "sold_30d": _int_or_none(item.get("sold30d")),
+        "offer_volume": _int_or_none(item.get("offerVolume")),
         "hours_to_sold": item.get("hoursToSold"),
         "steam_url": item.get("steamUrl"),
         # Precalculado para poder ordenar en SQL sin recomputar. Es el mismo

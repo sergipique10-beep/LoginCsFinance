@@ -12,6 +12,7 @@ from ..services import fx_service
 from ..services import cap_history_service, market_service, rankings_service
 from ..services import providers_service
 from ..services.price_capture_service import capture as price_capture_run
+from ._response import respond
 
 router = APIRouter()
 
@@ -23,7 +24,8 @@ def _require_cap_token(x_cap_token: str | None) -> None:
 
 @router.get("/market/movers", dependencies=[Depends(market_rate_limit)], summary="Top movers del mercado CS2 (hot & cold 24 h)")
 async def get_market_movers(request: Request, user: dict = Depends(require_jwt)):
-    return await rankings_service.get_movers()
+    snapshot = await rankings_service.get_movers()
+    return respond(snapshot.fetched, captured_at=snapshot.captured_at)
 
 
 @router.get("/market/items", dependencies=[Depends(market_rate_limit)], summary="Busca items en el mercado CS2 por nombre")
@@ -36,7 +38,7 @@ async def get_market_items(
     if not query:
         raise HTTPException(status_code=400, detail="q is required")
     try:
-        return (await market_service.search_market(request.app.state.http_client, query)).data
+        return respond(await market_service.search_market(request.app.state.http_client, query))
     except SOURCE_ERRORS as exc:
         # Un timeout da 502, no 504, como siempre en las dos rutas de búsqueda.
         raise http_error_for(exc, timeout_status=502) from exc
@@ -59,17 +61,18 @@ async def get_market_price(
     if not query:
         raise HTTPException(status_code=400, detail="name is required")
     try:
-        item = (await market_service.get_item_full(request.app.state.http_client, query)).data
+        fetched = await market_service.get_item_full(request.app.state.http_client, query)
     except SOURCE_ERRORS as exc:
         raise http_error_for(exc, timeout_status=502) from exc
-    if item is None:
+    if fetched.data is None:
         raise HTTPException(status_code=404, detail=f"Item '{query}' not found")
-    return item
+    return respond(fetched)
 
 
 @router.get("/market/trending", dependencies=[Depends(market_rate_limit)], summary="Items trending del mercado CS2 (por volumen 24h)")
 async def get_market_trending(request: Request, user: dict = Depends(require_jwt)):
-    return await rankings_service.get_trending()
+    snapshot = await rankings_service.get_trending()
+    return respond(snapshot.fetched, captured_at=snapshot.captured_at)
 
 
 @router.get("/market/index", dependencies=[Depends(market_rate_limit)], summary="Índice de mercado global CS2")
@@ -79,7 +82,7 @@ async def get_market_index(
     user: dict = Depends(require_jwt),
 ):
     try:
-        return (await market_service.get_market_index(request.app.state.http_client, tf)).data
+        return respond(await market_service.get_market_index(request.app.state.http_client, tf))
     except SOURCE_ERRORS as exc:
         raise http_error_for(exc, timeout_status=504) from exc
 
@@ -144,17 +147,18 @@ async def price_tick(
 async def get_fx_rate(request: Request, user: dict = Depends(require_jwt)):
     """Sirve el USD/EUR. El backend NO convierte precios: la conversion es
     presentacion y vive en el cliente (UX-08). `stale=true` significa que la fuente
-    no respondio y se esta reutilizando el ultimo valor conocido."""
+    no respondio y se esta reutilizando el ultimo valor conocido. Las cabeceras de
+    UX-46 van ademas del `stale` del cuerpo, que es contrato de UX-08."""
     fx = await fx_service.fetch_fx_rate(request.app.state.http_client)
     if fx.data is None:
         # Sin tasa el cliente se queda en USD; no es un error del servidor.
-        return {"base": "USD", "rates": {}, "stale": True}
-    return {"base": "USD", "rates": {"EUR": fx.data}, "stale": fx.status != "ok"}
+        return respond(fx, {"base": "USD", "rates": {}, "stale": True})
+    return respond(fx, {"base": "USD", "rates": {"EUR": fx.data}, "stale": fx.status != "ok"})
 
 
 @router.get("/market/providers", dependencies=[Depends(market_rate_limit)], summary="Lista de markets soportados como price providers")
 async def get_market_providers(request: Request, user: dict = Depends(require_jwt)):
-    return (await providers_service.fetch_market_providers(request.app.state.http_client)).data
+    return respond(await providers_service.fetch_market_providers(request.app.state.http_client))
 
 
 @router.get("/market/prices", dependencies=[Depends(market_rate_limit)], summary="Precios en tiempo real de un item por mercado")
@@ -172,8 +176,8 @@ async def get_market_prices(
             detail=f"Unknown market '{market}'. Valid: {', '.join(sorted(VALID_MARKETS))}",
         )
     try:
-        return (await market_service.get_market_prices(
-            request.app.state.http_client, market, name, currency)).data
+        return respond(await market_service.get_market_prices(
+            request.app.state.http_client, market, name, currency))
     except SOURCE_ERRORS as exc:
         if isinstance(exc, UpstreamError) and exc.status == 404:
             raise HTTPException(status_code=404, detail=f"Market '{market}' not found or no prices available") from exc

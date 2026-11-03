@@ -14,9 +14,10 @@ def _map_topmovers_item(mover: TopMover) -> MoverItem:
 
     El payload de topmovers trae poco más que {markethashname, price, change24h}.
     change24h es la variación 24 h en PORCENTAJE (UX-35, comprobado contra una
-    respuesta real el 2026-10-02). Los deltas de la tarjeta siguen en 0.0 (nadie los
-    lee de aquí); `_change24h` es la clave de orden interna de
-    `_build_movers_from_topmovers`.
+    respuesta real el 2026-10-02), así que es el `priceDelta24h` de la tarjeta. Lo que
+    el payload no trae sale como `None` y no como `0` (UX-46): con `0.0` las tarjetas
+    del respaldo pintaban «0 %» en vez de «N/A». `_change24h` es la clave de orden
+    interna de `_build_movers_from_topmovers`.
     """
     item = mover.item
     return {
@@ -40,25 +41,25 @@ def _map_topmovers_item(mover: TopMover) -> MoverItem:
         "floatMax":       item.float_max,
         "paintIndex":     item.paint_index,
         "phase":          None,
-        "priceLatest":    item.price or 0.0,
+        "priceLatest":    item.price,
         "csfloatPrice":   None,
         "buffPrice":      None,
-        "priceSafe":      0,
-        "priceMin":       0,
-        "priceMax":       0,
-        "priceDelta24h":  0.0,
-        "priceDelta7d":   0.0,
-        "priceDelta30d":  0.0,
+        "priceSafe":      None,
+        "priceMin":       None,
+        "priceMax":       None,
+        "priceDelta24h":  mover.change_24h,
+        "priceDelta7d":   None,
+        "priceDelta30d":  None,
         "priceReal":      None,
         "externalPrices": [],
-        "sold24h":        item.sold_24h or 0,
-        "sold7d":         item.sold_7d or 0,
-        "sold30d":        item.sold_30d or 0,
-        "soldTotal":      item.sold_total or 0,
-        "offerVolume":    0,
-        "buyOrderVolume": 0,
-        "buyOrderPrice":  0,
-        "hoursToSold":    0,
+        "sold24h":        item.sold_24h,
+        "sold7d":         item.sold_7d,
+        "sold30d":        item.sold_30d,
+        "soldTotal":      item.sold_total,
+        "offerVolume":    None,
+        "buyOrderVolume": None,
+        "buyOrderPrice":  None,
+        "hoursToSold":    None,
         # El payload de topmovers no trae offervolume/buyordervolume/hourstosold.
         # Un score calculado sobre ceros diría "ilíquido" en vez de "no hay datos".
         "liquidityScore":     None,

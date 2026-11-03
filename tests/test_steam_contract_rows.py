@@ -73,9 +73,12 @@ def test_conjunto_exacto_de_claves():
     assert set(_row_to_item({"name": "x"})) == ITEM_KEYS
 
 
-def test_volumen_ausente_es_cero_no_none():
-    # La tarjeta concatena sin guarda ('Vol: ' + item.sold24h): None pintaría "Vol: None/24h".
-    assert _row_to_item({"name": "x"})["sold24h"] == 0
+def test_volumen_ausente_es_none_no_cero():
+    # UX-46: «sin datos» es None («N/A» en el front) y el 0 queda para «no se vende». El
+    # front formatea el null (antes concatenaba 'Vol: ' + sold24h sin guarda).
+    item = _row_to_item({"name": "x"})
+    assert (item["sold24h"], item["soldTotal"], item["priceSafe"]) == (None, None, None)
+    assert _row_to_item({"name": "x", "sold_24h": 0})["sold24h"] == 0
 
 
 def test_no_emite_liquidity_breakdown():
