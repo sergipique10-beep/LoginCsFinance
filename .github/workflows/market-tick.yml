@@ -10,10 +10,10 @@ name: market-tick
 #   enrich + movers     — csfloat/history es 1 petición POR ITEM: es el único
 #   (cada 15 min)         coste que escala. enrich-tick avanza una rueda sobre
 #                         market_trending (los 18 con enriched_at más antiguo);
-#                         movers recalcula sus 20 enteros.
+#                         movers (rankings de Home) hace 2 peticiones a /items y
+#                         no usa csfloat/history.
 #
-# Consumo de csfloat/history: (18 + 20) × 4/h = 152 req/h — el mismo que cuando
-# trending enriquecía sus 18 en cada tick.
+# Consumo de csfloat/history: 18 × 4/h = 72 req/h (solo enrich-tick).
 #
 # trending-tick hace upsert por `name` (no replace-all), así que reintentos no
 # duplican; movers-tick sigue reemplazando su tabla entera.

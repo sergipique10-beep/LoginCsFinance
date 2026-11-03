@@ -87,6 +87,14 @@ de Plane del mismo nombre) necesita tener por escrito:
   `.py` nuevo de `steam/` se añade aquí en el mismo commit**, o el DoD se pone en rojo.
 - El mapa de degradaciones de abajo es el inventario de fallbacks con su decisión.
 
+## Rankings de Home
+
+`/market/movers` ya no es HOT/COLD: sirve cajas más vendidas y skins que más suben/bajan
+en dólares a 30 días (`steam/domain/home_rankings.py`, spec
+`docs/superpowers/specs/2026-11-03-home-rankings-design.md`). El movers-tick pide `/items`
+dos veces (por ventas y `price_real_min=50`) y nunca usa `pricelatestsell`, que es una
+sola venta: el precio de la tarjeta es la mediana de Steam y el cambio sale de `pricereal`.
+
 ## Tests de contrato
 
 `tests/test_steam_contract_*.py` fijan el status y el **conjunto exacto de claves** que
@@ -166,6 +174,7 @@ tick (`[catalog]`, `[item-history]`, `[market-items]`, `[market-prices]`, `[mark
 | Movers / trending | `/items` caído o ilegible | fallback a topmovers: `priceDelta24h` = `change24h`, 7d/30d `null` | deltas «N/A» en vez de «0 %»; el tick escribe, así que la ruta no lo marca | resuelto (UX-46, opción A; el JSON ilegible daba 500: resuelto, CLEAN-15) | `movers`/`trending` · motivo de `/items` (`invalid_json` si ilegible); `served=fallback`, o `error` sin fuentes |
 | Movers / trending | topmovers cacheado caducado (`TOPMOVERS_RAW_TTL`) | no se usa: se pide market-index; si también falla, `error` | `kept_previous` en el tick | resuelto (CLEAN-15) | `topmovers` · motivo del respaldo (`served=empty`); `movers`/`trending` · `topmovers_stale` |
 | `movers-tick` | ninguna fuente | conserva el snapshot anterior | `kept_previous` | conservar (CAL-10) | — |
+| `movers-tick` | solo falla `/items` de las caras | cajas y skins baratas/medias | `partial` (no se persiste el estado) | aceptar | `movers` · motivo · `fallback` |
 | `/market/movers`, `/market/trending` | snapshot sin escribir en 45 min / 3 h, o vacío | el snapshot tal cual | `X-Data-Status: stale` · `snapshot_age` / `error` · `empty_snapshot` | resuelto (UX-46, opción A) | `movers_snapshot`/`trending_snapshot` · `snapshot_age` o `empty_snapshot` |
 | `trending-tick` | ninguna fuente | no inserta pero **sí purga** (`purged`) | `count: 0` | lo fija el contrato (`test_trending_tick_sin_fuentes_no_inserta_pero_purga`); el plan de CLEAN-15 proponía no purgar con `status="error"`: decisión pendiente del dueño del contrato | — |
 | Trending | sticker slabs | se filtran, como en movers y búsqueda (`rules.is_sticker_slab(item)`: por `item_type` y, si no lo dice, por el nombre) | — | resuelto (CLEAN-17; CAL-14) | — |

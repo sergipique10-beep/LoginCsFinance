@@ -3,10 +3,10 @@ los rankings que calculan, con steamwebapi simulado por HTTP (fixture `steam_api
 los repos de Supabase sustituidos.
 
 Se congela la respuesta de cada tick y QUÉ items acaban en cada tabla y en qué orden
-(filtros de precio, ventas y slab, orden por turnover, hot/cold por delta 7d, fallback
-de topmovers). Durante STEAM-REFACTOR estos tests no se tocan.
+(filtros de precio, ventas y slab, orden por turnover, fallback de topmovers en trending;
+rankings de Home en movers). Durante STEAM-REFACTOR estos tests no se tocan; los de movers
+cambiaron a propósito con los rankings de Home (docs/superpowers/specs/2026-11-03-home-rankings-design.md).
 """
-import time
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -124,56 +124,49 @@ def test_cap_tick_errores_son_502(steam_api, repos, client, route):
 
 # ── movers-tick ───────────────────────────────────────────────────────────────
 
+def _home(name, *, real=None, real30=None, sold7=None, sold24=None, median=None):
+    return {"markethashname": name, "pricereal": real, "pricereal30d": real30, "sold7d": sold7,
+            "sold24h": sold24, "pricemedian": median, "pricelatestsell": 999.0}
+
+
 def test_movers_tick_desde_items(steam_api, repos, client):
-    steam_api.on("api/items", json=[BARATO, AK, POCAS_VENTAS, AWP, SLAB, GLOCK, KNIFE])
+    """Rankings de Home: cajas por ventas 24 h; suben/bajan en $ a 30 días, sin relleno."""
+    dn = _home("Dreams & Nightmares Case", sold24=1000, median=1.4)
+    kw = _home("Kilowatt Case", sold24=900, median=0.12)
+    ak = _home("AK-47 | Redline (Field-Tested)", real=30, real30=20, sold7=50, median=33)      # +10 $
+    knife = _home("★ Karambit | Doppler (Factory New)", real=300, real30=250, sold7=6, median=320)  # +50 $
+    awp = _home("AWP | Asiimov (Field-Tested)", real=50, real30=60, sold7=10, median=55)        # -10 $
+    flat = _home("Glock-18 | Fade (Factory New)", real=15, real30=15, sold7=20)                # 0 → fuera
+    thin = _home("M4A4 | Howl (Field-Tested)", real=100, real30=50, sold7=4)                   # < 5 ventas
+    slab = _home("Sticker Slab | Crown (Foil)", real=40, real30=20, sold7=50)                  # slab
+    steam_api.on("api/items", json=[dn, kw, ak, knife, awp, flat, thin, slab])
+
     resp = client.post("/internal/movers-tick", headers=TOKEN)
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "count": 8}
+    assert resp.json() == {"ok": True, "count": 5}
 
     rows = _rows(repos["replace_snapshot"])
-    por_bucket = {b: [(r["name"], r["rank"]) for r in rows if r["bucket"] == b] for b in ("hot", "cold")}
-    ak, awp, glock, knife = (x["markethashname"] for x in (AK, AWP, GLOCK, KNIFE))
-    # Fuera: < $10.80, < 5 ventas y slabs. Hot: delta 7d desc; cold: asc; sin delta al final.
-    assert por_bucket["hot"] == [(ak, 0), (glock, 1), (awp, 2), (knife, 3)]
-    assert por_bucket["cold"] == [(awp, 0), (glock, 1), (ak, 2), (knife, 3)]
-    deltas = {r["name"]: r["price_delta_7d"] for r in rows if r["bucket"] == "hot"}
-    assert deltas == {ak: 10.0, glock: 2.0, awp: -5.0, knife: None}
+    por_bucket = {b: [(r["name"], r["rank"]) for r in rows if r["bucket"] == b] for b in ("cases", "up", "down")}
+    assert por_bucket == {
+        "cases": [(dn["markethashname"], 0), (kw["markethashname"], 1)],
+        "up": [(knife["markethashname"], 0), (ak["markethashname"], 1)],
+        "down": [(awp["markethashname"], 0)],
+    }
+    # Precio = mediana de Steam, nunca la última venta (999 en el payload).
+    assert {r["name"]: r["price_latest"] for r in rows}[knife["markethashname"]] == 320
+    # Dos peticiones a /items (la segunda, las caras) y ninguna a csfloat/history.
+    assert [r.url.params.get("price_real_min") for r in steam_api.hits("api/items")] == [None, "50"]
+    assert len(steam_api.hits("csfloat/history")) == 0
 
 
 @pytest.mark.parametrize("items_route", [{"status": 500}, {"exc": TIMEOUT}, {"json": {"error": "x"}}])
-def test_movers_tick_fallback_topmovers(steam_api, repos, client, items_route):
+def test_movers_tick_sin_items_conserva_el_snapshot(steam_api, repos, client, items_route):
+    # Sin respaldo de topmovers (da % en 24 h, no encaja con estas listas): CAL-10.
     steam_api.on("api/items", **items_route)
     steam_api.on("market-index/cs2", json=TOPMOVERS)
     resp = client.post("/internal/movers-tick", headers=TOKEN)
-    assert resp.json() == {"ok": True, "count": 4}
-
-    rows = _rows(repos["replace_snapshot"])
-    assert [r["name"] for r in rows if r["bucket"] == "hot"] == ["Gainer A", "Gainer B"]
-    assert [r["name"] for r in rows if r["bucket"] == "cold"] == ["Loser B", "Loser A"]
-    # UX-46: el 24 h es el change24h de topmovers; 7d/30d no vienen en el payload y van
-    # a null («N/A»), no a 0.0 («0 %»).
-    assert {r["name"]: r["price_delta_24h"] for r in rows} == {
-        "Gainer A": 50, "Gainer B": 20, "Loser B": -40, "Loser A": -10}
-    assert {r["price_delta_7d"] for r in rows} == {r["price_delta_30d"] for r in rows} == {None}
-
-
-def test_movers_tick_fallback_reutiliza_topmovers_de_market_index(steam_api, repos, client):
-    steam_api.on("market-index/cs2", json={**TOPMOVERS, "history": []})
-    assert client.get("/market/index").status_code == 200
-    steam_api.on("api/items", status=500)
-    steam_api.on("market-index/cs2", status=500)
-    assert client.post("/internal/movers-tick", headers=TOKEN).json() == {"ok": True, "count": 4}
-
-
-def test_movers_tick_no_usa_un_topmovers_de_hace_dias(steam_api, repos, client, monkeypatch):
-    steam_api.on("market-index/cs2", json={**TOPMOVERS, "history": []})
-    real = time.monotonic
-    with monkeypatch.context() as m:
-        m.setattr(time, "monotonic", lambda: real() - 3 * 86400)
-        client.get("/market/index")   # cachea el topmovers "hace 3 días"
-    steam_api.on("api/items", status=500)
-    steam_api.on("market-index/cs2", status=500)
-    assert client.post("/internal/movers-tick", headers=TOKEN).json()["ok"] is False
+    assert resp.json() == {"ok": False, "count": 0, "kept_previous": True}
+    repos["replace_snapshot"].assert_not_awaited()
+    assert steam_api.hits("market-index/cs2") == []
 
 
 def test_movers_tick_items_con_json_invalido_no_es_500(steam_api, repos, client):

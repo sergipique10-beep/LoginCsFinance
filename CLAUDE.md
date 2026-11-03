@@ -172,7 +172,7 @@ LoginCsFinance/
     mappers/        # Mappers puros: modelo interno → TypedDict de salida (sin HTTP, caché, fallback):
       item_mapper.py  #   _map_item(SteamItem), _inline_delta, _safe_delta, _delta_from_history,
                     #   _resolve_phase (la imagen la normaliza domain/normalizers)
-      movers_mapper.py #  _map_topmovers_item(TopMover), _MOVERS_LIMIT (el respaldo hot/cold está en rankings_service)
+      movers_mapper.py #  _map_topmovers_item(TopMover), _MOVERS_LIMIT (respaldo topmovers de trending)
       market_index_mapper.py # _map_market_index_point(IndexPoint)
       news_mapper.py  #   _map_news_item(NewsEntry) (color vía rules.news_category); reexporta
                     #   _clean_news_content = utils.strings.clean_news_content para rag/ y notifications/
@@ -308,7 +308,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | GET | `/me` | Bearer | Steam profile: `userName`, `avatarUrl`, `avatarThumbUrl`, `profileUrl`, `isOnline` |
 | GET | `/inventory` | Bearer | Normalized CS2 inventory (see `steam/mappers/item_mapper.py:_map_item` + enrichment below). **Ante un 429 de steamwebapi (PERF-14)** devuelve el último snapshot con las cabeceras `X-Inventory-Stale: 1` y `X-Inventory-Captured-At` (ISO-8601); el cuerpo sigue siendo la lista. Ver «Degradación ante 429» |
 | POST | `/inventory/refresh` | Bearer | Fuerza recarga del inventario saltándose la caché de 23 h (con cooldown propio, `_inventory_refresh_cooldown` en `steam/cache/user_cache.py`). |
-| GET | `/market/movers` | Bearer | Top gainers/losers 24 h (hot & cold), servido del snapshot de `market_movers`. `X-Data-Status: stale` si el snapshot lleva más de 45 min sin escribirse (UX-46). |
+| GET | `/market/movers` | Bearer | Rankings de Home `{cases, up, down}`: cajas más vendidas (24 h) y skins que más suben/bajan en **$ a 30 días** (`priceChange30d`, con el % en `priceDelta30d`), servidos del snapshot de `market_movers`. Reglas en `steam/domain/home_rankings.py` (spec `docs/superpowers/specs/2026-11-03-home-rankings-design.md`). `X-Data-Status: stale` si el snapshot lleva más de 45 min sin escribirse (UX-46). |
 | GET | `/market/items` | Bearer | **Búsqueda** por nombre — `?q=` es obligatorio (400 si falta). No es un listado. |
 | GET | `/market/price` | Bearer | Datos completos de un item (incluye `liquidityBreakdown`). |
 | GET | `/market/prices` | Bearer | Precios en tiempo real de un item por mercado. |
@@ -318,7 +318,7 @@ main.py                 ← middleware, auth/router, steam/routes, settings
 | POST | `/internal/cap-tick` | `X-Cap-Token` | Hourly capture (called by external cron). Fetches `market-index/cs2`, upserts an hour-floored snapshot of the 4 fields into Supabase. Token compared via `secrets.compare_digest`; bad/missing → 401. |
 | POST | `/internal/trending-tick` | `X-Cap-Token` | Cron **horario** (`market-tick.yml`). Captura ~`_TRENDING_CAPTURE_LIMIT` items con 1 request a `/items` y hace **upsert por `name`** (no replace-all: borraría el enriquecimiento acumulado). Marca `seen_at` y purga las filas con >`_TRENDING_STALE_DAYS` sin aparecer. Devuelve `{ok, count, purged}`. |
 | POST | `/internal/enrich-tick` | `X-Cap-Token` | Cron **cada 15 min** (`market-tick.yml`). Rueda progresiva: coge los `_ENRICH_BATCH` items con `enriched_at` más antiguo (nulls primero) y les recalcula los deltas desde `csfloat/history`. Escribe `enriched_at` **siempre**, con datos o sin ellos — si no, un item sin histórico acapararía la rueda para siempre. Devuelve `{ok, count, with_deltas}`. |
-| POST | `/internal/movers-tick` | `X-Cap-Token` | Cron **cada 15 min** (`market-tick.yml`). Captura el ranking hot/cold en `market_movers` — replace-all (DELETE+INSERT): son 20 items que se recalculan enteros, no acumulan nada. **Sin datos de ninguna fuente no reemplaza** (CAL-10): conserva el snapshot anterior y responde `{ok: false, count: 0, kept_previous: true}`; el workflow deja un `::warning::`. |
+| POST | `/internal/movers-tick` | `X-Cap-Token` | Cron **cada 15 min** (`market-tick.yml`). Captura los rankings de Home en `market_movers` (`bucket` = `cases`|`up`|`down`, hasta 10 cada uno) — replace-all (DELETE+INSERT). Dos peticiones a `/items` (por ventas y `price_real_min=50` para las caras), **sin CSFloat history ni respaldo de topmovers**; si solo falla la de las caras, guarda lo demás (`partial`). **Sin datos de ninguna fuente no reemplaza** (CAL-10): conserva el snapshot anterior y responde `{ok: false, count: 0, kept_previous: true}`; el workflow deja un `::warning::`. |
 | POST | `/notifications/register-token` | Bearer | Registra un token FCM (`{ token, platform }`) para recibir push notifications. El dueño (`steam_id`) sale del `sub` del JWT. |
 | POST | `/notifications/delete-token` | Bearer | Borra un token FCM. Lo llama el frontend en logout, **antes** de invalidar el access token (si no, el POST saldría sin Bearer y fallaría en silencio). |
 | POST | `/internal/news-tick` | `X-News-Tick-Token` | Cron horario (GitHub Actions). Detecta noticias CS2 nuevas y envía push broadcast vía FCM. Idempotente (dedup por `gid` en `notified_news`). |

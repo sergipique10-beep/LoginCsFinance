@@ -119,5 +119,5 @@ def test_change24h_es_un_porcentaje_no_un_importe():
     assert any(abs(l["change24h"]) > l["price"] for l in TOPMOVERS["losers"])
 
     mi = adapt_market_index({"history": [], "topmovers": TOPMOVERS})
-    assert [m.change_24h for m in mi.losers] == [l["change24h"] for l in TOPMOVERS["losers"]]
+    assert [m.change_24h for m in mi.losers] == [loser["change24h"] for loser in TOPMOVERS["losers"]]
     assert _map_topmovers_item(mi.losers[0])["priceDelta24h"] == TOPMOVERS["losers"][0]["change24h"]
