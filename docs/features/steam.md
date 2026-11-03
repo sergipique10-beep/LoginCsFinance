@@ -29,6 +29,7 @@ files:
   - steam/domain/__init__.py
   - steam/domain/catalog.py
   - steam/domain/enums.py
+  - steam/domain/home_rankings.py
   - steam/domain/liquidity.py
   - steam/domain/models.py
   - steam/domain/normalizers.py
