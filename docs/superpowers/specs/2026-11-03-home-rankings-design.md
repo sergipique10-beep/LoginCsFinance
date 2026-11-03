@@ -1,6 +1,6 @@
 # Rankings de Home: cajas más vendidas, skins que suben y que bajan — diseño (BORRADOR)
 
-> Estado: **borrador**, en conversación. Hay dos puntos abiertos (al final). No hay código.
+> Estado: **aprobado** (2026-11-03). Plan: `docs/superpowers/plans/2026-11-03-home-rankings.md`.
 > Sustituye a HOT/COLD (`/market/movers`) en Home.
 
 ## Por qué
@@ -76,12 +76,28 @@ de steamwebapi). No está comprobado sobre qué periodo calcula `winner/loser`.
 - Bajan 30d: ★ Sport Gloves | Vice MW (−208,33 $), ★ Butterfly Knife | Gamma Doppler FN
   (−132,27 $), ★ Butterfly Knife | Lore MW (−112,11 $), ★ Karambit | Doppler FN (−102,18 $).
 
-## Abierto
+## Decisiones cerradas (antes «Abierto»)
 
-1. **Variedad**: "bajan" sale casi todo cuchillos y guantes. ¿Se deja así o se pone un tope
-   por tipo (reutilizando `rules.diversificar`)?
-2. **Encaje en la app**: sustituir HOT/COLD en Home; qué pasa con `/market/movers`, el ticker
-   de la barra superior (usa movers) y el trending de Market.
+1. **Variedad: sin tope por tipo** (usuario). Se ordena solo por dólares; cuchillos y guantes
+   caros copan las listas y es lo que la gente mira.
+2. **Encaje en la app** (usuario): las tres listas sustituyen a HOT/COLD en Home; el **ticker**
+   de la barra superior pasa a usar suben/bajan; el trending de Market no se toca.
+   `/market/movers` conserva la ruta y la tabla `market_movers`, pero su contenido cambia.
+3. **Ramas** (usuario): `feat/home-rankings` en los dos repos, encima de `feat/ux46-data-status`.
+
+Decisiones del constructor (no las pidió el usuario; revisables):
+
+- **Sin respaldo de topmovers** para estas listas: topmovers da % en 24h, no encaja. Si
+  `/items` falla, el tick conserva el snapshot anterior (CAL-10) y la API avisa con UX-46.
+  Si solo falla la petición de las caras, se guarda lo demás como `partial`.
+- **Sin CSFloat history**: los deltas salen de `pricereal`/`pricereal30d` del propio payload.
+  El movers-tick deja de gastar ~20 llamadas cada 15 min.
+- **Precio mostrado** (`priceLatest`) = mediana de Steam (`pricemedian`), no la última venta.
+  Lo leen también las alertas (`alerts/service._cached_prices`), que ignoran el 0.
+- **Dólares sin columna nueva**: `priceChange30d` se deriva al leer de `price_real` y
+  `price_delta_30d` (el % se guarda sin redondear). Sin migración de Supabase.
+- **10 skins por lista**; Home enseña 5 y un «Ver más» despliega el resto.
+- **Caja** = nombre que termina en « Case» (39 en el payload medido).
 
 ## Fuera de alcance
 
