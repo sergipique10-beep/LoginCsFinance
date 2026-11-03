@@ -14,7 +14,7 @@ from steam.cache.image_cache import catalog_cache
 from steam.cache.policy import IMAGE_CATALOG
 from steam.services import catalog_service
 
-N_SOURCES = 7
+N_SOURCES = 6   # skins, stickers, keychains, crates, agents, patches (knives.json ya no existe, CLEAN-13)
 
 
 class _FakeClient:
@@ -108,7 +108,7 @@ async def test_concurrent_reload_downloads_once():
 
     await asyncio.gather(*[catalog_service.fetch_static_images(client) for _ in range(5)])
 
-    assert client.calls == N_SOURCES          # 7, no 35
+    assert client.calls == N_SOURCES          # 6, no 30
     assert "catalog" in catalog_cache.meta
 
 

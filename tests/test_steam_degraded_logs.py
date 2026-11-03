@@ -128,8 +128,8 @@ async def test_catalogo_todas_las_fuentes_caidas(steam_api, http, lines, monkeyp
     monkeypatch.setattr(catalog_service, "_image_cache_lock", asyncio.Lock())
     steam_api.on(".json", status=500)
     await catalog_service.fetch_static_images(http)
-    # Una línea por fuente caída (7) y la del fallo total, que es la que dispara el backoff.
-    assert lines("catalog") == [("http_500", "empty")] * 7 + [("all_sources_failed", "empty")]
+    # Una línea por fuente caída (6, sin knives desde CLEAN-13) y la del fallo total, que dispara el backoff.
+    assert lines("catalog") == [("http_500", "empty")] * 6 + [("all_sources_failed", "empty")]
 
 
 async def test_catalogo_una_fuente_caida_carga_las_demas(steam_api, http, lines, monkeypatch):

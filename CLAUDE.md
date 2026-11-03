@@ -33,7 +33,9 @@ venv\Scripts\python -m pytest tests/ -q
 
 - `tools/dod.py` encadena los gates de más barato a más caro y para en el primer rojo.
   Un prerrequisito ausente (ruff, pytest-cov) es **rojo**, nunca verde por omisión.
-  Deps de desarrollo: `pip install -r requirements-dev.txt` (no van a Render).
+  Deps de desarrollo: `pip install -r requirements-dev.txt` (no van a Render). Desde SEC-14
+  incluyen pytest y pytest-asyncio: sin ellas no hay suite. El job `audit` de CI es
+  bloqueante (pip-audit sobre `requirements.txt`); las excepciones van en `ci.yml`, justificadas.
 - `tools/ratchet.py` mide la deuda y la compara con `tools/ratchet-baseline.json`
   (ruff, mypy, ficheros sin test, ficheros sin feature doc, binds a `0.0.0.0`). **Falla en las
   dos direcciones**: si una métrica sube, y si baja sin actualizar la baseline. Cuando pagas

@@ -15,6 +15,7 @@
 git clone <repo-url>
 cd LoginCsFinance
 pip install -r requirements.txt
+pip install -r requirements-dev.txt   # pytest y herramientas: solo para desarrollo
 ```
 
 ---
