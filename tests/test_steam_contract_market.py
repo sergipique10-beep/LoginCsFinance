@@ -135,7 +135,7 @@ def test_movers_y_trending_sirven_snapshots(api, monkeypatch):
     monkeypatch.setattr(trending_repo, "fetch_ranked", AsyncMock(return_value=rows[:1]))
 
     movers = api.get("/market/movers").json()
-    assert set(movers) == {"cases", "up", "down"}
+    assert set(movers) == {"cases", "up", "down", "hot", "cold"}   # hot/cold: alias de transición
     assert set(movers["cases"][0]) == ROW_ITEM_KEYS
     assert set(movers["up"][0]) == set(movers["down"][0]) == ROW_ITEM_KEYS | {"priceChange30d"}
 

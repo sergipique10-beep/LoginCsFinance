@@ -231,7 +231,8 @@ async def _ver_movers(*, client: httpx.AsyncClient) -> dict:
     from steam.services import rankings_service
 
     data = (await rankings_service.get_movers()).fetched.data
-    return {bucket: _proyectar(cards) for bucket, cards in data.items()}
+    # Sin el alias `hot`/`cold` de transición: duplicaría las listas en el contexto.
+    return {bucket: _proyectar(data[bucket]) for bucket in ("cases", "up", "down")}
 
 
 # ── historial_precio ──────────────────────────────────────────────────────────

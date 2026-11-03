@@ -297,6 +297,9 @@ async def get_movers() -> RankingSnapshot:
             {**card, "priceChange30d": home_rankings.usd_from_pct(card["priceReal"], card["priceDelta30d"])}
             for card in _bucket(rows, bucket)
         ]
+    # Transición: las apps ya instaladas leen `hot`/`cold`; sin alias su Home quedaría vacía.
+    # Quitar cuando no queden builds anteriores a los rankings de Home en uso.
+    data["hot"], data["cold"] = data["up"], data["down"]
     return _snapshot("movers_snapshot", rows, "updated_at", _MOVERS_STALE_AFTER, data)
 
 
@@ -397,10 +400,18 @@ async def enrich_trending(client: httpx.AsyncClient) -> dict:
 async def capture_movers(client: httpx.AsyncClient) -> dict:
     """/internal/movers-tick: captura los rankings de Home en `market_movers`
     (`bucket` = cases | up | down)."""
-    result = (await compute_home_rankings(client)).data
+    fetched = await compute_home_rankings(client)
+    result = fetched.data
     # list[Any]: los repos de Supabase tipan dict y RankingRow es un TypedDict.
     rows: list[Any] = [_to_row(item, rank, bucket)
                        for bucket, cards in result.items() for rank, item in enumerate(cards)]
+    if fetched.status == "partial":
+        # Falló solo la petición de las caras: suben/bajan saldrían sin cuchillos ni guantes
+        # y sin aviso (GET solo ve la edad del snapshot). Se renuevan las cajas y se conservan
+        # las listas anteriores, que sí tenían las caras.
+        previous = [r for r in await movers_repo.fetch_snapshot() if r.get("bucket") in ("up", "down")]
+        if previous:
+            rows = [r for r in rows if r["bucket"] == "cases"] + previous
     # CAL-10: sin filas es que no respondió ninguna fuente. Un replace-all vaciaría la
     # tabla y la Home se quedaría sin rankings: se conserva el snapshot anterior.
     if not rows:
@@ -408,4 +419,7 @@ async def capture_movers(client: httpx.AsyncClient) -> dict:
         return {"ok": False, "count": 0, "kept_previous": True}
     await movers_repo.replace_snapshot(rows)
     logger.info("[movers-tick] snapshot saved: %d items", len(rows))
+    if fetched.status == "partial":
+        # Que el cron y los logs lo vean: el workflow solo mira `ok`.
+        return {"ok": True, "count": len(rows), "status": fetched.status, "reason": fetched.reason}
     return {"ok": True, "count": len(rows)}

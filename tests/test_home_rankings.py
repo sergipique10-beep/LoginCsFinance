@@ -141,7 +141,7 @@ def test_movers_ignora_buckets_viejos(client, monkeypatch):
     monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=rows))
     resp = client.get("/market/movers")
     assert resp.status_code == 200
-    assert resp.json() == {"cases": [], "up": [], "down": []}
+    assert resp.json() == {"cases": [], "up": [], "down": [], "hot": [], "cold": []}
 
 
 def test_movers_cambio_en_dolares(client, monkeypatch):
@@ -150,3 +150,40 @@ def test_movers_cambio_en_dolares(client, monkeypatch):
     monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=[_to_row(card, 0, "up")]))
     up = client.get("/market/movers").json()["up"]
     assert round(up[0]["priceChange30d"], 2) == 34.16
+
+
+# ── revisión final: falla solo la petición de las caras ───────────────────────
+
+from steam.routes import market as market_routes  # noqa: E402
+
+
+def test_tick_partial_conserva_suben_y_bajan_anteriores(client, monkeypatch):
+    """Sin las caras, suben/bajan se quedarían sin cuchillos ni guantes y sin aviso: el tick
+    renueva solo las cajas y conserva las listas anteriores, y lo dice en su respuesta."""
+    monkeypatch.setattr(market_routes, "CAP_TICK_TOKEN", "secret123")
+    previo = [_to_row({"name": "Karambit", "priceLatest": 1300}, 0, "down"),
+              _to_row({"name": "Moto Gloves", "priceLatest": 120}, 0, "up"),
+              _to_row({"name": "Old Case", "priceLatest": 1}, 0, "cases")]
+    monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=previo))
+    replace = AsyncMock()
+    monkeypatch.setattr(movers_repo, "replace_snapshot", replace)
+    nuevo = {"cases": [{"name": "Dreams & Nightmares Case", "priceLatest": 1.4}],
+             "up": [{"name": "Cheap Riser", "priceLatest": 2}], "down": []}
+    monkeypatch.setattr(rankings_service, "compute_home_rankings",
+                        AsyncMock(return_value=Fetched(nuevo, "partial", "http_500")))
+
+    resp = client.post("/internal/movers-tick", headers={"X-Cap-Token": "secret123"})
+
+    assert resp.json() == {"ok": True, "count": 3, "status": "partial", "reason": "http_500"}
+    rows = replace.await_args.args[0]
+    assert sorted((r["bucket"], r["name"]) for r in rows) == [
+        ("cases", "Dreams & Nightmares Case"), ("down", "Karambit"), ("up", "Moto Gloves")]
+
+
+def test_movers_alias_hot_cold_para_apps_ya_instaladas(client, monkeypatch):
+    """Transición: la app publicada lee `hot`/`cold`; sin alias su Home quedaría vacía."""
+    rows = [_to_row({"name": "U", "priceLatest": 1}, 0, "up"), _to_row({"name": "D", "priceLatest": 1}, 0, "down")]
+    monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=rows))
+    body = client.get("/market/movers").json()
+    assert body["hot"] == body["up"] and [c["name"] for c in body["hot"]] == ["U"]
+    assert body["cold"] == body["down"] and [c["name"] for c in body["cold"]] == ["D"]

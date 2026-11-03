@@ -174,7 +174,7 @@ def test_movers_por_edad(client, monkeypatch, age, expected):
 def test_movers_vacio_es_error(client, monkeypatch):
     monkeypatch.setattr(movers_repo, "fetch_snapshot", AsyncMock(return_value=[]))
     resp = client.get("/market/movers")
-    assert resp.json() == {"cases": [], "up": [], "down": []}
+    assert resp.json() == {"cases": [], "up": [], "down": [], "hot": [], "cold": []}
     assert _status(resp) == ("error", "empty_snapshot")
 
 
