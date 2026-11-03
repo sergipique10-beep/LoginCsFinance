@@ -16,8 +16,7 @@ def _map_topmovers_item(mover: TopMover) -> MoverItem:
     change24h es la variación 24 h en PORCENTAJE (UX-35, comprobado contra una
     respuesta real el 2026-10-02), así que es el `priceDelta24h` de la tarjeta. Lo que
     el payload no trae sale como `None` y no como `0` (UX-46): con `0.0` las tarjetas
-    del respaldo pintaban «0 %» en vez de «N/A». `_change24h` es la clave de orden
-    interna de `_build_movers_from_topmovers`.
+    del respaldo pintaban «0 %» en vez de «N/A». `_change24h` repite esa variación.
     """
     item = mover.item
     return {

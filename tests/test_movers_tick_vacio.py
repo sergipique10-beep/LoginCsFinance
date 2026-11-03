@@ -1,5 +1,5 @@
-"""CAL-10: si compute_movers no saca nada (fuentes caídas), el movers-tick NO puede
-reemplazar la tabla: un replace-all con cero filas dejaba la Home sin hot/cold
+"""CAL-10: si compute_home_rankings no saca nada (fuentes caídas), el movers-tick NO puede
+reemplazar la tabla: un replace-all con cero filas dejaba la Home sin rankings
 hasta el siguiente tick bueno, y el workflow seguía en verde."""
 from unittest.mock import AsyncMock
 
@@ -18,7 +18,7 @@ def tick(client, monkeypatch):
     monkeypatch.setattr(movers_repo, "replace_snapshot", replace)
 
     def _run(result):
-        monkeypatch.setattr(market_service, "compute_movers", AsyncMock(return_value=Fetched(result)))
+        monkeypatch.setattr(market_service, "compute_home_rankings", AsyncMock(return_value=Fetched(result)))
         return client.post("/internal/movers-tick", headers={"X-Cap-Token": "secret123"})
 
     return _run, replace
@@ -27,7 +27,7 @@ def tick(client, monkeypatch):
 def test_sin_fuentes_conserva_el_snapshot_anterior(tick):
     run, replace = tick
 
-    resp = run({"hot": [], "cold": []})
+    resp = run({"cases": [], "up": [], "down": []})
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": False, "count": 0, "kept_previous": True}
@@ -38,7 +38,7 @@ def test_con_datos_reemplaza_como_siempre(tick):
     run, replace = tick
     item = {"name": "AK-47 | Redline (Field-Tested)", "priceLatest": 20.0}
 
-    resp = run({"hot": [item], "cold": []})
+    resp = run({"cases": [], "up": [item], "down": []})
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "count": 1}

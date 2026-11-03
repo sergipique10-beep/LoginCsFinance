@@ -129,3 +129,12 @@ async def test_item_sigue_redirecciones():
 ])
 def test_parse_retry_after(value, expected):
     assert parse_retry_after(value) == expected
+
+
+async def test_items_price_real_min_solo_si_se_pide():
+    """Rankings de Home: la segunda petición trae las skins caras (precio real ≥ 50 $)."""
+    seen: list[httpx.Request] = []
+    async with _client(json=[], seen=seen) as c:
+        await steam_client.items(c, select="id", max=10, sort_by="soldZa", price_real_min=50)
+        await steam_client.items(c, select="id", max=10, sort_by="soldZa")
+    assert [r.url.params.get("price_real_min") for r in seen] == ["50", None]

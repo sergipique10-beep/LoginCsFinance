@@ -1,10 +1,10 @@
-"""Rankings de mercado: hot/cold (movers) y trending desde
-/items con respaldo de topmovers, su lectura desde los snapshots de Supabase y los ticks
-que los persisten (capture_trending, enrich_trending, capture_movers). Sin FastAPI.
+"""Rankings de mercado: los de Home (cajas más vendidas y skins que suben/bajan, en
+`market_movers`) y trending (desde /items con respaldo de topmovers), su lectura desde los
+snapshots de Supabase y los ticks que los persisten (capture_trending, enrich_trending,
+capture_movers). Sin FastAPI.
 """
 import logging
 import time
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -16,15 +16,16 @@ from steam.cache.history_cache import _topmovers_raw_cache
 from steam.adapters.steam_adapter import adapt_items, adapt_market_index
 from steam.api import steam_client
 from steam.errors.handling import degraded, log_degraded, reason_of
-from steam.domain.models import Fetched, MoverItem, RankedCard, SkinCard, SteamItem, TopMover
+from steam.domain import home_rankings
+from steam.domain.models import Fetched, MoverCard, RankedCard, SkinCard, SteamItem, TopMover
 from steam.domain.rules import (
-    MIN_SOLD_MOVERS, MIN_SOLD_TRENDING, diversificar, is_sticker_slab, ranking_eligible, turnover,
+    MIN_SOLD_TRENDING, diversificar, is_sticker_slab, ranking_eligible, turnover,
 )
 from steam.errors import (
     InvalidPayload, SourceTimeout, SourceUnavailable, StorageError, UnexpectedPayload, UpstreamError,
 )
 from steam.mappers.item_mapper import _map_item
-from steam.mappers.movers_mapper import _MOVERS_LIMIT, _map_topmovers_item
+from steam.mappers.movers_mapper import _map_topmovers_item
 from steam.mappers.row_mapper import _row_to_item, _to_row
 from steam.rankings_repo import movers_repo, trending_repo
 from steam.services import catalog_service, pricing_service
@@ -34,6 +35,8 @@ logger = logging.getLogger("uvicorn.error")
 _MOVERS_SELECT = ",".join([
     "id", "marketname", "markethashname", "slug", "image",
     "pricelatestsell",
+    # Mediana de Steam: el precio de las tarjetas de Home (una venta suelta no es un precio).
+    "pricemedian",
     # Familia pricereal: la única con históricos reales por timeframe, de donde
     # _map_item calcula los deltas. Sin estos campos en el select, la API no los
     # devuelve y todos los resultados salen con badge "N/A".
@@ -91,14 +94,15 @@ _ITEMS_FETCH_MAX = 5000
 # relevancia (`rules.turnover` = precio × unidades): viven en domain/rules.py.
 
 
-async def _ranking_items(client: httpx.AsyncClient, tag: str,
-                         fallback_label: str) -> tuple[list[SteamItem] | None, str | None]:
+async def _ranking_items(client: httpx.AsyncClient, tag: str, fallback_label: str,
+                         price_real_min: float | None = None) -> tuple[list[SteamItem] | None, str | None]:
     """Fuente principal de movers y trending: /items por unidades vendidas. Devuelve
     (items, None), o (None, motivo) si no responde, no es JSON o no es una lista (un 200
     ilegible es una degradación, no un 500: CAL-14); entonces se cae a topmovers."""
     try:
         data = await steam_client.items(
             client, sort_by="soldZa", max=_ITEMS_FETCH_MAX, select=_MOVERS_SELECT,
+            price_real_min=price_real_min,
         )
     except (SourceTimeout, SourceUnavailable, InvalidPayload) as exc:
         logger.warning("[%s] /items failed (%s) — falling back to %s", tag, reason_of(exc), fallback_label)
@@ -135,83 +139,59 @@ async def _topmovers(client: httpx.AsyncClient, tag: str,
     return (mi.gainers, mi.losers), None
 
 
-async def compute_movers(client: httpx.AsyncClient) -> Fetched[dict]:
-    """Calcula el ranking hot/cold actual (sin cache, sin persistencia).
+def _empty_home() -> dict[str, list[MoverCard]]:
+    return {"cases": [], "up": [], "down": []}
 
-    Llamado por POST /internal/movers-tick. GET /market/movers ahora lee
-    el snapshot ya persistido en Supabase. `partial` = respaldo de topmovers;
-    `error` = ninguna fuente (listas vacías).
+
+def _home_card(item: SteamItem, change: tuple[float, float] | None) -> MoverCard:
+    """Tarjeta de Home: precio = mediana de Steam, y en suben/bajan el % sin redondear
+    (de él se deriva el cambio en $ al leer el snapshot) y el cambio en $."""
+    card: Any = {**_map_item(item), "priceLatest": item.price_median, "priceChange30d": None}
+    if change is not None:
+        card["priceChange30d"], card["priceDelta30d"] = change
+    return card
+
+
+async def compute_home_rankings(client: httpx.AsyncClient) -> Fetched[dict[str, list[MoverCard]]]:
+    """Cajas más vendidas y skins que más suben/bajan en $ a 30 días (sin cache ni persistencia).
+
+    Llamado por POST /internal/movers-tick; GET /market/movers lee el snapshot. Dos peticiones a
+    /items: la de siempre (por unidades) y la de las caras (precio real ≥ 50 $), que la primera
+    no trae. Sin respaldo de topmovers (da % en 24 h, no encaja): si falla la primera, `error`
+    y el tick conserva el snapshot anterior; si falla solo la de las caras, `partial`.
     """
-    now = time.monotonic()
-
-    # ── Primary source: /items (paid plan) ───────────────────────────────────
-    data, reason = await _ranking_items(client, "market-movers", "market-index topmovers")
-    if data is not None:
-        catalog_service.cache_images(data)
-        mapped = []
-        for item in data:
-            if ranking_eligible(item, MIN_SOLD_MOVERS) and not is_sticker_slab(item):
-                mapped.append(_map_item(item))
-        # Ordenar por turnover (precio × unidades), no por precio suelto: mide
-        # qué mueve dinero de verdad. Cap at 20 (= _MOVERS_LIMIT * 2): exactly
-        # the number of items displayed, and safe within the Starter plan's
-        # 20 req/min rate limit.
-        mapped.sort(key=turnover, reverse=True)
-        # Diversificar ANTES de enriquecer: enrich_prices gasta una llamada
-        # por item (limiter 18/60s), así que descartar después sería tirar
-        # cuota en items que no se van a mostrar.
-        # list[Any]: enrich_prices devuelve dicts nuevos sin tipar.
-        candidates: list[Any] = diversificar(mapped, _MOVERS_LIMIT * 2)
-        logger.info("[market-movers] candidates: %d (capped from %d)", len(candidates), len(mapped))
-        candidates = await pricing_service.enrich_prices(client, candidates)
-        with_delta = sorted(
-            [x for x in candidates if x["priceDelta7d"] is not None],
-            key=lambda x: x["priceDelta7d"],
-        )
-        no_delta = [x for x in candidates if x["priceDelta7d"] is None]
-        logger.info("[market-movers] enriched=%d with_delta=%d no_delta=%d",
-                    len(candidates), len(with_delta), len(no_delta))
-        # hot = highest positive deltas; cold = lowest/most-negative deltas.
-        # Fill remaining slots with no-delta items only if needed.
-        hot  = list(reversed(with_delta[-_MOVERS_LIMIT:])) + no_delta
-        cold = with_delta[:_MOVERS_LIMIT] + no_delta
-        result = {
-            "hot":  hot[:_MOVERS_LIMIT],
-            "cold": cold[:_MOVERS_LIMIT],
-        }
-        # steamwebapi /items no devuelve `image` en este plan → el cache estático
-        # (ByMykel) es la única fuente. Igual que en /market/items y /market/trending.
-        await catalog_service.fetch_static_images(client)
-        catalog_service.enrich_images_from_cache(result["hot"])
-        catalog_service.enrich_images_from_cache(result["cold"])
-        await pricing_service.enrich_market_prices(client, result["hot"])
-        await pricing_service.enrich_market_prices(client, result["cold"])
-        return Fetched(result)
-
-    # ── Fallback: market-index topmovers (free plan) ─────────────────────────
-    raw_topmovers, topmovers_reason = await _topmovers(client, "market-movers", now)
-    reason = topmovers_reason or reason
-    if raw_topmovers:
-        gainers, losers = raw_topmovers
-        fallback = _build_movers_from_topmovers(gainers, losers)
-        if fallback:
-            await catalog_service.fetch_static_images(client)
-            catalog_service.enrich_images_from_cache(fallback["hot"])
-            catalog_service.enrich_images_from_cache(fallback["cold"])
-            await pricing_service.enrich_market_prices(client, fallback["hot"])
-            await pricing_service.enrich_market_prices(client, fallback["cold"])
-            logger.info("[market-movers] serving from market-index topmovers (%d hot, %d cold)", len(fallback["hot"]), len(fallback["cold"]))
-            return degraded("movers", reason or "unknown", "fallback", fallback)
-
-    logger.warning("[market-movers] no data available from any source")
-    return degraded("movers", reason or "unknown", "error", {"hot": [], "cold": []})
+    cheap, reason = await _ranking_items(client, "market-movers", "keeping previous snapshot")
+    if cheap is None:
+        return degraded("movers", reason or "unknown", "error", _empty_home())
+    expensive, expensive_reason = await _ranking_items(
+        client, "market-movers", "cheap items only",
+        price_real_min=home_rankings.PRICE_REAL_MIN_EXPENSIVE,
+    )
+    universe = [i for i in home_rankings.merge_universe(cheap, expensive or [])
+                if not is_sticker_slab(i)]
+    catalog_service.cache_images(universe)
+    result: dict[str, list[MoverCard]] = {
+        "cases": [_home_card(i, None) for i in home_rankings.top_cases(universe)],
+        "up":    [_home_card(i, (usd, pct)) for i, usd, pct in home_rankings.top_movers(universe, "up")],
+        "down":  [_home_card(i, (usd, pct)) for i, usd, pct in home_rankings.top_movers(universe, "down")],
+    }
+    # steamwebapi /items no devuelve `image` en este plan → el cache estático (ByMykel).
+    await catalog_service.fetch_static_images(client)
+    for cards in result.values():
+        catalog_service.enrich_images_from_cache(cards)
+        await pricing_service.enrich_market_prices(client, cards)
+    logger.info("[market-movers] cases=%d up=%d down=%d (universe=%d)",
+                len(result["cases"]), len(result["up"]), len(result["down"]), len(universe))
+    if expensive is None:
+        return degraded("movers", expensive_reason or "unknown", "fallback", result)
+    return Fetched(result)
 
 
 async def compute_trending(client: httpx.AsyncClient) -> Fetched[list[SkinCard]]:
     """Calcula el ranking trending actual (sin cache, sin persistencia).
 
     Llamado por POST /internal/trending-tick; GET /market/trending lee el snapshot.
-    Mismos estados que `compute_movers`.
+    `partial` = respaldo de topmovers; `error` = ninguna fuente (lista vacía).
     """
     now = time.monotonic()
 
@@ -319,23 +299,6 @@ async def get_trending() -> RankingSnapshot:
     return _snapshot("trending_snapshot", rows, "seen_at", _TRENDING_STALE_AFTER, items)
 
 
-# ── Respaldo: ranking hot/cold desde los topmovers de market-index ─────────────
-
-def _build_movers_from_topmovers(gainers: Sequence[TopMover],
-                                 losers: Sequence[TopMover]) -> dict[str, list[MoverItem]] | None:
-    if not gainers and not losers:
-        return None
-    hot  = [_map_topmovers_item(g) for g in gainers if not is_sticker_slab(g.item)][:_MOVERS_LIMIT]
-    cold = [_map_topmovers_item(m) for m in losers  if not is_sticker_slab(m.item)][:_MOVERS_LIMIT]
-    logger.info("[market-movers] topmovers raw: gainers=%d losers=%d | after_filter: hot=%d cold=%d",
-                len(gainers), len(losers), len(hot), len(cold))
-    hot  = sorted(hot,  key=lambda x: x["_change24h"], reverse=True)
-    cold = sorted(cold, key=lambda x: x["_change24h"])
-    for item in hot + cold:
-        del item["_change24h"]
-    return {"hot": hot, "cold": cold}
-
-
 async def capture_trending(client: httpx.AsyncClient) -> dict:
     """/internal/trending-tick: captura el ranking trending en `market_trending`."""
     items = (await compute_trending(client)).data
@@ -422,13 +385,14 @@ async def enrich_trending(client: httpx.AsyncClient) -> dict:
 
 
 async def capture_movers(client: httpx.AsyncClient) -> dict:
-    """/internal/movers-tick: captura el ranking hot/cold en `market_movers`."""
-    result = (await compute_movers(client)).data
+    """/internal/movers-tick: captura los rankings de Home en `market_movers`
+    (`bucket` = cases | up | down)."""
+    result = (await compute_home_rankings(client)).data
     # list[Any]: los repos de Supabase tipan dict y RankingRow es un TypedDict.
-    rows: list[Any] = [_to_row(item, rank, "hot")  for rank, item in enumerate(result["hot"])] \
-         + [_to_row(item, rank, "cold") for rank, item in enumerate(result["cold"])]
+    rows: list[Any] = [_to_row(item, rank, bucket)
+                       for bucket, cards in result.items() for rank, item in enumerate(cards)]
     # CAL-10: sin filas es que no respondió ninguna fuente. Un replace-all vaciaría la
-    # tabla y la Home se quedaría sin hot/cold: se conserva el snapshot anterior.
+    # tabla y la Home se quedaría sin rankings: se conserva el snapshot anterior.
     if not rows:
         logger.warning("[movers-tick] sin datos de ninguna fuente; se conserva el snapshot anterior")
         return {"ok": False, "count": 0, "kept_previous": True}

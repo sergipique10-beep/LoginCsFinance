@@ -168,9 +168,7 @@ async def test_price_tick_lookup_caido_deja_linea(http, lines, monkeypatch):
 
 # ── Rankings ──────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("compute, flow", [
-    (rankings_service.compute_movers, "movers"), (rankings_service.compute_trending, "trending"),
-])
+@pytest.mark.parametrize("compute, flow", [(rankings_service.compute_trending, "trending")])
 async def test_rankings_caen_a_topmovers(steam_api, http, lines, compute, flow):
     steam_api.on("api/items", status=500)
     steam_api.on("market-index/cs2", json=TOPMOVERS)
@@ -178,9 +176,7 @@ async def test_rankings_caen_a_topmovers(steam_api, http, lines, compute, flow):
     assert lines(flow) == [("http_500", "fallback")]
 
 
-@pytest.mark.parametrize("compute, flow", [
-    (rankings_service.compute_movers, "movers"), (rankings_service.compute_trending, "trending"),
-])
+@pytest.mark.parametrize("compute, flow", [(rankings_service.compute_trending, "trending")])
 async def test_rankings_sin_ninguna_fuente(steam_api, http, lines, compute, flow):
     steam_api.on("api/items", exc=httpx.ReadTimeout("t"))
     steam_api.on("market-index/cs2", status=500)
@@ -195,10 +191,10 @@ async def test_topmovers_caducado_no_se_sirve(steam_api, http, lines):
     _topmovers_raw_cache.put("latest", ((), ()), now=-1e9)
     steam_api.on("api/items", status=500)
     steam_api.on("market-index/cs2", exc=httpx.ConnectError("x"))
-    fetched = await rankings_service.compute_movers(http)
+    fetched = await rankings_service.compute_trending(http)
     assert (fetched.status, fetched.reason) == ("error", "topmovers_stale")
     assert lines("topmovers") == [("unavailable", "empty")]
-    assert lines("movers") == [("topmovers_stale", "error")]
+    assert lines("trending") == [("topmovers_stale", "error")]
 
 
 # ── Stale ante 402 (el cliente recibe un 200 normal) ──────────────────────────

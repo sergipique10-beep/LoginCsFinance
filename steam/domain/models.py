@@ -71,9 +71,14 @@ class SkinCard(RankedCard):
     tradeLockDays: Any
 
 
+class MoverCard(SkinCard):
+    """Tarjeta de «suben/bajan» de Home: el cambio a 30 días en dólares (`None` en cajas)."""
+    priceChange30d: float | None
+
+
 class MoverItem(SkinCard):
-    """Tarjeta de topmovers (`_map_topmovers_item`). `_change24h` es solo la clave de
-    orden de `_build_movers_from_topmovers`, que la borra antes de devolver."""
+    """Tarjeta de topmovers (`_map_topmovers_item`, respaldo de trending). `_change24h` es la
+    variación 24 h en % que trae topmovers."""
     _change24h: NotRequired[float]
 
 

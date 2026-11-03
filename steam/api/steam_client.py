@@ -83,14 +83,17 @@ async def _get(client: httpx.AsyncClient, url: str, params: dict | None = None, 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 async def items(client: httpx.AsyncClient, *, select: str, max: int, search: str | None = None,
-                sort_by: str | None = None, timeout: Timeout = 15.0) -> Any:
+                sort_by: str | None = None, price_real_min: float | None = None,
+                timeout: Timeout = 15.0) -> Any:
     """GET /items: búsqueda (`search`) o ranking (`sort_by`). UNA petición sea cual
-    sea `max`."""
+    sea `max`. `price_real_min` filtra por precio de terceros (skins caras de Home)."""
     params: dict = {"game": "cs2"}
     if search is not None:
         params["search"] = search
     if sort_by is not None:
         params["sort_by"] = sort_by
+    if price_real_min is not None:
+        params["price_real_min"] = price_real_min
     params |= {"max": max, "select": select, "format": "json", "production": "1"}
     return await _get(client, f"{STEAM_WEB_API}/items", params, timeout=timeout)
 

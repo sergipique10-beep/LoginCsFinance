@@ -21,7 +21,7 @@ def http(steam_api):
 
 # ── rankings ──────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("compute", [rankings_service.compute_movers, rankings_service.compute_trending])
+@pytest.mark.parametrize("compute", [rankings_service.compute_trending])
 @pytest.mark.parametrize("route, reason", [
     ({"status": 500}, "http_500"), ({"status": 402}, "quota"), ({"status": 429}, "rate_limit"),
     ({"exc": httpx.ReadTimeout("t")}, "timeout"), ({"content": b"<html>"}, "invalid_json"),
@@ -36,7 +36,8 @@ async def test_rankings_caen_a_topmovers_con_el_motivo(steam_api, http, compute,
 
 
 @pytest.mark.parametrize("compute, vacio", [
-    (rankings_service.compute_movers, {"hot": [], "cold": []}), (rankings_service.compute_trending, []),
+    (rankings_service.compute_home_rankings, {"cases": [], "up": [], "down": []}),
+    (rankings_service.compute_trending, []),
 ])
 async def test_rankings_sin_fuentes(steam_api, http, compute, vacio):
     steam_api.on("api/items", status=500)
@@ -50,9 +51,9 @@ async def test_topmovers_fresco_se_reutiliza_y_caducado_no(steam_api, http):
     assert (await market_service.get_market_index(http, "24h")).status == "ok"
     steam_api.on("api/items", status=500)
     steam_api.on("market-index/cs2", status=500)
-    assert (await rankings_service.compute_movers(http)).status == "partial"   # cache fresca
+    assert (await rankings_service.compute_trending(http)).status == "partial"   # cache fresca
     _topmovers_raw_cache.put("latest", _topmovers_raw_cache.stale("latest"), now=-1e9)
-    fetched = await rankings_service.compute_movers(http)
+    fetched = await rankings_service.compute_trending(http)
     assert (fetched.status, fetched.reason) == ("error", "topmovers_stale")   # CAL-12
 
 
